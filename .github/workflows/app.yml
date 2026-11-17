@@ -28,13 +28,24 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libwayland-dev libx11-dev libx11-xcb-dev \
-            libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libvulkan-dev
+            libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libvulkan-dev \
+            libegl-mesa0 libgl1-mesa-dri
       - name: gofmt
         run: |
           unformatted=$(gofmt -l .)
           if [ -n "$unformatted" ]; then echo "$unformatted"; exit 1; fi
       - run: go vet -tags novulkan ./...
       - run: go test -race -tags novulkan ./...
+        env:
+          EGL_PLATFORM: surfaceless
+      - name: Render the mockups
+        env:
+          EGL_PLATFORM: surfaceless
+        run: go run -tags novulkan ./cmd/mockup -out "$RUNNER_TEMP/mockups"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mockups
+          path: ${{ runner.temp }}/mockups
 
   windows:
     runs-on: windows-2022

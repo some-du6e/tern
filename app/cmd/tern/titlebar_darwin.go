@@ -75,6 +75,10 @@ const titleInset = 84
 
 var windowOptions = []app.Option{app.Decorated(false)}
 
+// titleDark has nothing to do on a Mac: there is no title bar, and the
+// traffic lights follow the system.
+func titleDark(bool) {}
+
 var view uintptr
 
 // platformEvent puts the traffic lights back once the window has a view,

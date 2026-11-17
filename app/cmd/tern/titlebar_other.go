@@ -1,4 +1,4 @@
-//go:build !darwin
+//go:build !darwin && !windows
 
 package main
 
@@ -11,5 +11,8 @@ import (
 const titleInset = 0
 
 var windowOptions []app.Option
+
+// titleDark has no native title bar to match here.
+func titleDark(bool) {}
 
 func platformEvent(event.Event) {}

@@ -5,6 +5,7 @@ import (
 	"image"
 	"log"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"gioui.org/app"
@@ -37,6 +38,13 @@ func run(w *app.Window) error {
 	th := ui.NewTheme()
 	th.CanRun, th.Run = shell.Runnable, shell.Run
 	th.TitleInset = titleInset
+	// T3 follows the system's light or dark setting; so does tern.
+	var dark atomic.Bool
+	dark.Store(watchDark(func(d bool) {
+		dark.Store(d)
+		w.Invalidate()
+	}))
+	shownDark := !dark.Load()
 	c, err := core.New(w.Invalidate)
 	if err != nil {
 		return err
@@ -52,6 +60,10 @@ func run(w *app.Window) error {
 		case app.DestroyEvent:
 			return e.Err
 		case app.FrameEvent:
+			if d := dark.Load(); d != shownDark {
+				shownDark = d
+				titleDark(d)
+			}
 			gtx := app.NewContext(&ops, e)
 			c.RunUI(th)
 			s := c.Scene()
