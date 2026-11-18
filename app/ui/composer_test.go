@@ -129,15 +129,16 @@ func TestComposerTriggers(t *testing.T) {
 	s.Access = &Traits{}
 	img = drawComposer(t, th, s, 200, 0)
 	wantPixel(t, img, image.Pt(685, 87), accent, "open chip")
-	// Along a row above its label, the chip's fill runs back to its start.
-	left := 685
-	for left > 45 && near(img.RGBAAt(left-1, 77), accent) {
+	// Along a row under its label, clear of the open menu's shadow, the
+	// chip's fill runs back to its start.
+	left := 682
+	for left > 45 && near(img.RGBAAt(left-1, 97), accent) {
 		left--
 	}
 	if w := 687 - left; w < 60 || w > 200 {
 		t.Errorf("open chip: %d wide, want its icon and label", w)
 	}
-	if n := count(img, 77, 45, left-2, accent); n != 0 {
+	if n := count(img, 97, 45, left-2, accent); n != 0 {
 		t.Errorf("the trigger is filled too: %d pixels", n)
 	}
 	if l, r := ink(img, 80, 95, 45, left-2); l < left-170 || r < left-20 {
