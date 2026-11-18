@@ -47,6 +47,7 @@ const (
 // the list and the footer. sidebarFrame paints the surface under it.
 func (th *Theme) sidebar(gtx C, s *Scene) D {
 	size := gtx.Constraints.Max
+	th.in.undoClaim = s.Live && s.Sidebar.UndoClaim
 	at := func(y, h int, draw func(gtx C)) {
 		defer op.Offset(image.Pt(0, y)).Push(gtx.Ops).Pop()
 		g := gtx
@@ -585,6 +586,11 @@ func (th *Theme) sideItems(gtx C, s *Scene) []sideItem {
 				h = cardFlatH + 4
 			}
 			add(h, "thread:"+r.ID, shelfParent(r.Shelf), -1, func(gtx C, top int) D { return th.cardRow(gtx, s, r, top) })
+		case it.Draft != nil:
+			d := it.Draft
+			add(cardH+4, "draft:"+d.ID, "", -1, func(gtx C, top int) D { return th.draftRow(gtx, s, d, top) })
+		case it.Divider:
+			add(1+2*6, "", "", -1, th.draftDivider)
 		case it.Shelf != nil:
 			sh := it.Shelf
 			open := 0
@@ -755,7 +761,7 @@ func (th *Theme) rowKey1(nav string, name key.Name, rect image.Rectangle) {
 			th.push(Action{ID: "rename:" + ref, Kind: "click"})
 		}
 	case key.NameF10:
-		if strings.HasPrefix(nav, "thread:") {
+		if strings.HasPrefix(nav, "thread:") || strings.HasPrefix(nav, "draft:") {
 			th.in.ctxAt = image.Pt(rect.Min.X, rect.Max.Y)
 			th.in.menu.open = false
 			th.push(Action{ID: nav, Kind: "context", Text: "keyboard"})
@@ -915,6 +921,86 @@ func (th *Theme) cardRow(gtx C, s *Scene, r *ThreadRow, top int) D {
 	}
 	th.hoverCard(gtx, s, r, rect, hot && !menuOpen)
 	return D{Size: image.Pt(w, h+dp(gtx, 4))}
+}
+
+// draftRow is the new thread's unsent draft (§2.7, §3.12): 78dp in 2dp of
+// padding, radius 6, warning at 4% (8% hovered) or, while it's open, the
+// open row's fill without its ring; padded 8 by 10. Line 1 is the pen, the
+// project's icon, its name in 12/16 500 and the discard button; line 2,
+// 2dp under it, the first line written in 14/20 500, the foreground at 90%.
+func (th *Theme) draftRow(gtx C, s *Scene, d *DraftRow, top int) D {
+	w := gtx.Constraints.Max.X
+	h := dp(gtx, cardH)
+	size := image.Pt(w, h)
+	defer op.Offset(image.Pt(0, dp(gtx, 2))).Push(gtx.Ops).Pop()
+	x0 := dp(gtx, sideInset)
+	rect := image.Rectangle{Min: image.Pt(x0, top+dp(gtx, 2)), Max: image.Pt(x0+w, top+dp(gtx, 2)+h)}
+	hovered, focused, pop := th.rowTarget(gtx, s, "draft:"+d.ID, size, rect)
+	defer pop()
+	hot := hovered || d.Hover
+	bg := over(alpha(SP.Warning, 0x0a), SP.Sidebar)
+	switch {
+	case d.Active:
+		bg = over(SP.SidebarRowActive, SP.Sidebar)
+	case hot:
+		bg = over(alpha(SP.Warning, 0x14), SP.Sidebar)
+	}
+	in := rowInk{bg: bg, k: 1}
+	paintRow(gtx, size, in, color.NRGBA{}, focused)
+	at := func(y, lh int, draw func(gtx C) D) {
+		defer op.Offset(image.Pt(dp(gtx, 10), y)).Push(gtx.Ops).Pop()
+		g := gtx
+		g.Constraints = layout.Exact(image.Pt(w-2*dp(gtx, 10), lh))
+		draw(g)
+	}
+	at(dp(gtx, 8), dp(gtx, 20), func(gtx C) D {
+		return RowGap(gtx, 6,
+			rigid(LucideW("square-pen", in.of(SP.WarningForeground), 12)),
+			rigid(func(gtx C) D { return th.projectIcon(gtx, d.Icon, 16, in.bg, 0) }),
+			flexed(func(gtx C) D {
+				return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Font: UI(font.Medium), Color: in.of(SP.SecondaryLabel), MaxLines: 1}, d.Project)
+			}),
+			rigid(func(gtx C) D { return th.discardButton(gtx, s, d, in, hot) }),
+		)
+	})
+	at(dp(gtx, 8+20+2), dp(gtx, 20), func(gtx C) D {
+		return Row(gtx, flexed(func(gtx C) D {
+			return th.Text(gtx, Txt{Size: 14, LineH: 20.0 / 14, Font: UI(font.Medium), Color: in.of(faded(SP.Foreground, 0.9)), MaxLines: 1}, d.Preview)
+		}))
+	})
+	return D{Size: image.Pt(w, h+dp(gtx, 4))}
+}
+
+// discardButton is the draft row's Discard draft: a 12dp x padded 0 by 4
+// in the muted foreground, the foreground hovered, which fades in over
+// 150ms while the row is hovered.
+func (th *Theme) discardButton(gtx C, s *Scene, d *DraftRow, in rowInk, hot bool) D {
+	size := image.Pt(dp(gtx, 12+2*4), gtx.Constraints.Max.Y)
+	k := th.transition(gtx, "discard:"+d.ID, hot, 150*time.Millisecond)
+	id := liveID(s, "discard:"+d.ID)
+	col := SP.MutedForeground
+	if id != "" {
+		if c, _ := th.events(gtx, id); c.Hovered() {
+			col = SP.Foreground
+		}
+	}
+	func() {
+		defer op.Offset(image.Pt(dp(gtx, 4), (size.Y-dp(gtx, 12))/2)).Push(gtx.Ops).Pop()
+		LucideW("x", over(faded(in.of(col), k), in.bg), 12)(gtx)
+	}()
+	if id != "" && k > 0 {
+		th.hit(gtx, id, size)
+		th.listTip(gtx, id, "Discard draft", size)
+	}
+	return D{Size: size}
+}
+
+// draftDivider is the rule under the drafts: 1dp of the sidebar border at
+// 60%, 10dp in from the sides and 6 clear above and below.
+func (th *Theme) draftDivider(gtx C, _ int) D {
+	w := gtx.Constraints.Max.X
+	hline(gtx, over(faded(SP.SidebarBorder, 0.6), SP.Sidebar), dp(gtx, 6), dp(gtx, 10), w-dp(gtx, 10))
+	return D{Size: image.Pt(w, dp(gtx, 1+2*6))}
 }
 
 // faded is c at k of its own opacity, as Tailwind's color/NN is: a
@@ -2066,9 +2152,9 @@ func (th *Theme) snoozeChoiceWidth(gtx C, c MenuItem) int {
 // ---------- the footer ----------
 
 // sidebarFooter is T3's footer (SidebarChrome.tsx): padded 4 8 8, a row
-// of 32dp icon buttons 4dp apart. T3's are Settings, Pull requests and
-// Usage; tern's are the machines and the account, which open their menus
-// above.
+// of 32dp icon buttons 4dp apart, then the undo notice in what's left. T3's
+// buttons are Settings, Pull requests and Usage; tern's are the machines
+// and the account, which open their menus above.
 func (th *Theme) sidebarFooter(gtx C, s *Scene) {
 	x := dp(gtx, sideInset)
 	button := func(id, icon, tip string, menu *Traits) {
@@ -2086,6 +2172,90 @@ func (th *Theme) sidebarFooter(gtx C, s *Scene) {
 	}
 	button("machines", "server", "Machines", s.Machines)
 	button("account", "circle-user", "Account", s.Account)
+	// The row's 32dp centre the notice's 24.
+	defer op.Offset(image.Pt(x, dp(gtx, 4+4))).Push(gtx.Ops).Pop()
+	th.undoNotice(gtx, s, gtx.Constraints.Max.X-dp(gtx, sideInset)-x)
+}
+
+// undoNotice is the footer's undo notice (SidebarThreadUndoNotice.tsx), w
+// wide: 24dp of 11/24 in the sidebar's muted foreground, right-aligned,
+// "Settled," and then T3's InlineButton "<shortcut> to undo", 500 in the
+// foreground and underlined while hovered. It fades in over 200ms on
+// Tailwind's ease-out, and out with its last text when the notice ends.
+// Short of room the summary goes, then the button's label for its icon.
+func (th *Theme) undoNotice(gtx C, s *Scene, w int) {
+	on := s.Sidebar.Undo != ""
+	if on {
+		th.in.undoText = s.Sidebar.Undo
+	}
+	f := th.in.undoFade
+	if f == nil {
+		f = &fade{on: on, from: level(on)}
+		th.in.undoFade = f
+	}
+	shown := func() float32 {
+		to := level(f.on)
+		if f.from == to {
+			return to
+		}
+		return f.from + (to-f.from)*easeOutCSS(since(gtx.Now, f.at, 200*time.Millisecond))
+	}
+	if f.on != on {
+		f.from, f.on, f.at = shown(), on, gtx.Now
+	}
+	k := shown()
+	switch {
+	case !s.Live:
+		// A mockup is one frame: it shows the notice settled.
+		k = level(on)
+	case k != level(on):
+		gtx.Execute(op.InvalidateCmd{})
+	}
+	if k == 0 {
+		return
+	}
+	defer paint.PushOpacity(gtx.Ops, k).Pop()
+	id := liveID(s, "undo")
+	hovered := false
+	if id != "" && on {
+		c, _ := th.events(gtx, id)
+		hovered = c.Hovered()
+	}
+	h := dp(gtx, 24)
+	summary := Txt{Size: 11, LineH: 24.0 / 11, Color: SP.SidebarMutedForeground, MaxLines: 1}
+	label := Txt{Size: 11, LineH: 24.0 / 11, Font: UI(font.Medium), Color: SP.Foreground, MaxLines: 1}
+	text, undo := th.in.undoText+",", Shortcut("Z")+" to undo"
+	sw, lw, gap := th.textWidth(gtx, summary, text), th.textWidth(gtx, label, undo), dp(gtx, 4)
+	// Right to left: the button, then the summary before it.
+	at := func(x int, draw func(gtx C) D) D {
+		defer op.Offset(image.Pt(x, 0)).Push(gtx.Ops).Pop()
+		g := gtx
+		g.Constraints = layout.Exact(image.Pt(w-x, h))
+		return Row(g, rigid(draw))
+	}
+	bx := w - lw
+	if bx < 0 {
+		// Only the undo icon fits.
+		bx = w - dp(gtx, 16)
+		at(bx, LucideW("undo-2", SP.Foreground, 16))
+	} else {
+		at(bx, func(gtx C) D {
+			d := th.Text(gtx, label, undo)
+			if hovered {
+				hline(gtx, label.Color, d.Size.Y-d.Baseline+dp(gtx, 2), 0, d.Size.X)
+			}
+			return d
+		})
+		if bx-gap-sw >= 0 {
+			at(bx-gap-sw, func(gtx C) D { return th.Text(gtx, summary, text) })
+		}
+	}
+	if id != "" && on {
+		func() {
+			defer op.Offset(image.Pt(bx, 0)).Push(gtx.Ops).Pop()
+			th.hit(gtx, id, image.Pt(w-bx, h))
+		}()
+	}
 }
 
 // footerButton is a footer icon button (SidebarMenuButton size=icon):

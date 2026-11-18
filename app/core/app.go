@@ -111,6 +111,14 @@ type App struct {
 	openRow     string          // the open thread's row: its nearest listed ancestor's for a subagent or side chat
 	parked      map[string]bool // the Snoozed and Settled rows, which advancing skips
 	timer       *time.Timer     // a scene due when a Working shelf hold runs out
+	draftHome   string          // the new thread's draft, "<env>/<project>", kept while it isn't open
+	ctxDraft    bool            // the open menu is the draft row's
+	// The footer's undo notice: the parks and discards it can still undo,
+	// oldest first; the timer that ends it 5s after the last one; and
+	// whether mod+Z undoes it even in a text field, until another key.
+	undos     []undoEntry
+	undoTimer *time.Timer
+	undoClaim bool
 
 	picker       *pickerState
 	traitsOpen   bool

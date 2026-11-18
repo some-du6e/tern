@@ -408,6 +408,18 @@ func sidebarSearchScene() *ui.Scene {
 	return s
 }
 
+// sidebarDraftScene has the new thread's unsent draft atop the list,
+// hovered, and the footer's undo notice after two settles.
+func sidebarDraftScene() *ui.Scene {
+	s := runningScene()
+	s.Sidebar.Items = append([]ui.SidebarItem{
+		{Draft: &ui.DraftRow{ID: "draft", Project: "notes", Icon: notesIcon, Preview: "Sketch the onboarding copy", Hover: true}},
+		{Divider: true},
+	}, s.Sidebar.Items...)
+	s.Sidebar.Undo = "Settled 2"
+	return s
+}
+
 // sidebarEmptyScene is the list scoped to a project with nothing in it.
 func sidebarEmptyScene() *ui.Scene {
 	s := runningScene()

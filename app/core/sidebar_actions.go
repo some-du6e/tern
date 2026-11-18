@@ -549,6 +549,8 @@ func (a *App) bulkMenu(now time.Time) []ui.MenuItem {
 // menuScene is the open context menu. Call with the lock held.
 func (a *App) menuScene(s *ui.Scene, now time.Time) {
 	switch {
+	case a.ctxDraft:
+		s.Menu = &ui.ContextMenu{Items: draftMenu(), Keyboard: a.ctxKeyboard}
 	case a.ctxBulk && len(a.selection()) > 0:
 		s.Menu = &ui.ContextMenu{Items: a.bulkMenu(now), Keyboard: a.ctxKeyboard}
 	case a.ctxRef != "":
@@ -578,6 +580,22 @@ func (a *App) openMenu(r string, keyboard bool) {
 // menuPick runs the context menu's item id.
 func (a *App) menuPick(th *ui.Theme, id string) {
 	a.mu.Lock()
+	if a.ctxDraft {
+		envID, project := splitRef(a.draftHome)
+		root := ""
+		if e := a.env(envID); e != nil {
+			root = e.projects[project].WorkspaceRoot
+		}
+		a.closeMenusLocked()
+		a.mu.Unlock()
+		switch id {
+		case "copy-path":
+			th.WriteClipboard(root)
+		case "discard":
+			a.discardDraft(th, "draft")
+		}
+		return
+	}
 	if a.ctxBulk {
 		a.mu.Unlock()
 		a.bulkPick(th, id)
@@ -764,10 +782,20 @@ func (a *App) dispatch(e *envState, cmd map[string]any, done ...func()) {
 	}()
 }
 
-// threadAction sends one of the simple thread commands for ref.
+// threadAction sends one of the simple thread commands for ref. Unpinning
+// and archiving, once the server has taken them, join the footer's undo
+// notice.
 func (a *App) threadAction(th *ui.Theme, r, verb string) {
 	a.mu.Lock()
 	e, t := a.thread(r)
+	var undo []map[string]any
+	switch {
+	case t == nil:
+	case verb == "unpin":
+		undo = append([]map[string]any{pinStep(t)}, snoozeStep(t)...)
+	case verb == "archive":
+		undo = []map[string]any{{"type": "thread.unarchive", "threadId": t.ID}}
+	}
 	a.mu.Unlock()
 	if t == nil {
 		return
@@ -787,7 +815,12 @@ func (a *App) threadAction(th *ui.Theme, r, verb string) {
 		// It's leaving the list, so close its tab too.
 		a.closeTab(th, r)
 	}
-	a.dispatch(e, cmd)
+	if undo == nil {
+		a.dispatch(e, cmd)
+		return
+	}
+	word := map[string]string{"unpin": "Unpinned", "archive": "Archived"}[verb]
+	a.dispatch(e, cmd, func() { a.noteUndo(word, func(*ui.Theme) { a.chain(e, undo) }) })
 }
 
 // advance plans where to go when the open thread is parked
@@ -820,34 +853,57 @@ func (a *App) advance(parking []string) func(th *ui.Theme) {
 }
 
 // park settles or snoozes threads with cmd; if the open one is among
-// them, the next thread opens once the server has parked it (§5.15).
+// them, the next thread opens once the server has parked it (§5.15). Each
+// park the server takes joins the footer's undo notice, and settling a
+// woke thread records the visit it was waiting for (settleThread).
 func (a *App) park(refs []string, cmd map[string]any) {
 	a.mu.Lock()
 	next := a.advance(refs)
 	open := a.openID
+	settling, now := cmd["type"] == "thread.settle", time.Now()
 	type target struct {
-		e  *envState
-		id string
-		r  string
+		e    *envState
+		id   string
+		r    string
+		undo []map[string]any // what puts it back where it was
+		woke string           // when it woke, while that's unseen
 	}
 	var ts []target
 	for _, r := range refs {
-		if e, t := a.thread(r); t != nil {
-			ts = append(ts, target{e, t.ID, r})
+		e, t := a.thread(r)
+		if t == nil {
+			continue
 		}
+		tg := target{e: e, id: t.ID, r: r, undo: undoPark(t, settling)}
+		if child := childRequests(e.threads)[t.ID]; settling && woke(t, child, now) {
+			tg.woke = wokeAt(t, child, now)
+		}
+		ts = append(ts, tg)
 	}
 	a.mu.Unlock()
+	word := "Snoozed"
+	if settling {
+		word = "Settled"
+	}
 	for _, t := range ts {
 		c := map[string]any{"threadId": t.id}
 		for k, v := range cmd {
 			c[k] = v
 		}
-		var done []func()
+		done := []func(){func() { a.noteUndo(word, func(*ui.Theme) { a.chain(t.e, t.undo) }) }}
+		if t.woke != "" {
+			done = append(done, func() { a.dispatch(t.e, visit(t.id, t.woke)) })
+		}
 		if t.r == open && next != nil {
 			done = append(done, func() { a.onUI(next) })
 		}
 		a.dispatch(t.e, c, done...)
 	}
+}
+
+// visit is the command recording that thread id was seen at the time at.
+func visit(id, at string) map[string]any {
+	return map[string]any{"type": "thread.visit", "threadId": id, "visitedAt": parseTime(at).UTC().Format(time.RFC3339Nano)}
 }
 
 func (a *App) settle(refs []string) { a.park(refs, map[string]any{"type": "thread.settle"}) }
@@ -869,7 +925,181 @@ func (a *App) acknowledgeWoke(r string) {
 	if at == "" {
 		return
 	}
-	a.dispatch(e, map[string]any{"type": "thread.visit", "threadId": t.ID, "visitedAt": parseTime(at).UTC().Format(time.RFC3339Nano)})
+	a.dispatch(e, visit(t.ID, at))
+}
+
+// openDraft opens the new thread's draft where it was left.
+func (a *App) openDraft() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	envID, id := splitRef(a.draftHome)
+	if a.env(envID) == nil || a.draft != "" {
+		return
+	}
+	a.closeThreadLocked()
+	a.draftEnv, a.draft = envID, id
+}
+
+// draftMenu is the draft row's menu (buildDraftActionMenuItems): copying
+// its project's path, and discarding it.
+func draftMenu() []ui.MenuItem {
+	return []ui.MenuItem{
+		{ID: "copy", Label: "Copy", Icon: "copy", Children: []ui.MenuItem{{ID: "copy-path", Label: "Path", Icon: "folder"}}},
+		{ID: "discard", Label: "Discard draft", Icon: "trash", Danger: true, Sep: true},
+	}
+}
+
+// ---------- the undo notice ----------
+
+// undoEntry is a park or a discard the footer's notice can still undo
+// (showThreadUndoNotice.ts): what it says, and what puts it back.
+type undoEntry struct {
+	action string // "Settled", "Snoozed", "Unpinned", "Archived", "Discarded"
+	undo   func(th *ui.Theme)
+}
+
+// undoLife is how long the notice lasts after the last action joins it.
+const undoLife = 5 * time.Second
+
+// noteUndo adds an action to the notice and gives it 5s more, after which
+// everything in it stands. Until another key or an edit, mod+Z undoes it
+// even in a text field (threadUndoClaimsShortcut).
+func (a *App) noteUndo(action string, undo func(th *ui.Theme)) {
+	a.mu.Lock()
+	a.undos = append(a.undos, undoEntry{action, undo})
+	a.undoClaim = true
+	if a.undoTimer != nil {
+		a.undoTimer.Stop()
+	}
+	a.undoTimer = time.AfterFunc(undoLife, func() {
+		a.mu.Lock()
+		a.undos, a.undoClaim = nil, false
+		a.mu.Unlock()
+		a.changed()
+	})
+	a.mu.Unlock()
+	a.changed()
+}
+
+// undoGroup is what one undo puts back: the latest action and those like
+// it just before it. Call with the lock held.
+func (a *App) undoGroup() []undoEntry {
+	n := len(a.undos)
+	i := n
+	for i > 0 && a.undos[i-1].action == a.undos[n-1].action {
+		i--
+	}
+	return a.undos[i:]
+}
+
+// undoSummary is the notice's text: the group's action, and its count when
+// there are several, "Settled 3". Call with the lock held.
+func (a *App) undoSummary() string {
+	switch g := a.undoGroup(); len(g) {
+	case 0:
+		return ""
+	case 1:
+		return g[0].action
+	default:
+		return fmt.Sprintf("%s %d", g[0].action, len(g))
+	}
+}
+
+// undoLast undoes the notice's group (undoLatestThreadAction), and the
+// notice moves on to what's left in it.
+func (a *App) undoLast(th *ui.Theme) {
+	a.mu.Lock()
+	g := a.undoGroup()
+	a.undos = a.undos[:len(a.undos)-len(g)]
+	a.undoClaim = false
+	a.mu.Unlock()
+	for _, u := range g {
+		u.undo(th)
+	}
+	a.changed()
+}
+
+// undoPark is what undoes settling or snoozing t (planThreadUndo): a
+// snooze is woken; a settle is un-settled, then pinned again with its
+// order kept and snoozed again, as the settle undid both.
+func undoPark(t *t3.Thread, settled bool) []map[string]any {
+	if !settled {
+		return []map[string]any{{"type": "thread.unsnooze", "threadId": t.ID, "reason": "user"}}
+	}
+	steps := []map[string]any{{"type": "thread.unsettle", "threadId": t.ID, "reason": "user"}}
+	if t.PinnedAt != "" {
+		steps = append(steps, pinStep(t))
+	}
+	return append(steps, snoozeStep(t)...)
+}
+
+// pinStep pins t again where it was.
+func pinStep(t *t3.Thread) map[string]any {
+	cmd := map[string]any{"type": "thread.pin", "threadId": t.ID}
+	if t.PinOrderKey != "" {
+		cmd["orderKey"] = t.PinOrderKey
+	}
+	return cmd
+}
+
+// snoozeStep snoozes t again until it was due to wake, if it was snoozed:
+// pinning wakes a thread.
+func snoozeStep(t *t3.Thread) []map[string]any {
+	if t.SnoozedUntil == "" {
+		return nil
+	}
+	return []map[string]any{{"type": "thread.snooze", "threadId": t.ID, "snoozedUntil": t.SnoozedUntil}}
+}
+
+// chain sends steps to e one after another, each once the server has
+// taken the one before. A snooze whose time has come by then is left out,
+// as the server would refuse it (executeThreadUndo).
+func (a *App) chain(e *envState, steps []map[string]any) {
+	for len(steps) > 0 && steps[0]["type"] == "thread.snooze" && !parseTime(steps[0]["snoozedUntil"].(string)).After(time.Now()) {
+		steps = steps[1:]
+	}
+	if len(steps) > 0 {
+		a.dispatch(e, steps[0], func() { a.chain(e, steps[1:]) })
+	}
+}
+
+// discardDraft drops what's written and pasted under key, a thread's or
+// the new thread's "draft", and offers it back in the undo notice; it
+// comes back unless something new has been written there since
+// (discardComposerDraft).
+func (a *App) discardDraft(th *ui.Theme, key string) {
+	a.mu.Lock()
+	open := a.composerKey() == key
+	imgs := a.images[key]
+	delete(a.images, key)
+	a.mu.Unlock()
+	text := drafts[key]
+	if open {
+		text = th.EditorText("composer")
+		th.SetEditorText("composer", "")
+	}
+	saveDraft(key, "")
+	a.noteUndo("Discarded", func(th *ui.Theme) {
+		a.mu.Lock()
+		open := a.composerKey() == key
+		cur := drafts[key]
+		if open {
+			cur = th.EditorText("composer")
+		}
+		fresh := strings.TrimSpace(cur) != "" || len(a.images[key]) > 0
+		if !fresh && len(imgs) > 0 {
+			a.images[key] = imgs
+		}
+		a.mu.Unlock()
+		switch {
+		case fresh:
+			a.failf("Failed to restore draft: the draft has new content.")
+		case open:
+			th.SetEditorText("composer", text)
+		default:
+			saveDraft(key, text)
+		}
+	})
 }
 
 // startRename puts the row's title in an editor.
@@ -1025,6 +1255,12 @@ func (a *App) openThreadShortcut(th *ui.Theme, what string) {
 func (a *App) sidebarAction(th *ui.Theme, act ui.Action) bool {
 	id := act.ID
 	verb, arg, _ := strings.Cut(id, ":")
+	if act.Kind == "change" || act.Kind == "key" {
+		// Any other key or an edit hands mod+Z back to text fields.
+		a.mu.Lock()
+		a.undoClaim = false
+		a.mu.Unlock()
+	}
 	switch {
 	case id == "search":
 		a.searchInput(th, act)
@@ -1070,6 +1306,12 @@ func (a *App) sidebarAction(th *ui.Theme, act ui.Action) bool {
 		a.openMenu(arg, act.Text == "keyboard")
 		a.mu.Unlock()
 		return true
+	case verb == "draft" && act.Kind == "context":
+		a.mu.Lock()
+		a.closeMenusLocked()
+		a.ctxDraft, a.ctxKeyboard = true, act.Text == "keyboard"
+		a.mu.Unlock()
+		return true
 	case act.Kind != "click":
 		return false
 	}
@@ -1099,10 +1341,11 @@ func (a *App) sidebarAction(th *ui.Theme, act ui.Action) bool {
 	case "pr":
 		a.openPullRequest(arg)
 	case "discard":
-		saveDraft(arg, "")
-		a.mu.Lock()
-		delete(a.images, arg)
-		a.mu.Unlock()
+		a.discardDraft(th, arg)
+	case "draft":
+		a.switchTo(th, a.openDraft)
+	case "undo", "thread.undo":
+		a.undoLast(th)
 	case "terminal":
 		a.switchTo(th, func() { a.openThread(arg) })
 		a.mu.Lock()

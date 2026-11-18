@@ -338,6 +338,73 @@ func TestOpenChildShowsAsItsParent(t *testing.T) {
 	}
 }
 
+// A new thread left unsent shows above the list as a draft row, its
+// project and its first line, a rule under it; while it's open it's the
+// open row. Discarding drafts leaves the footer's undo notice, counting
+// them, and undoing puts them back (§2.7, §5.15).
+func TestDraftRowAndUndo(t *testing.T) {
+	t.Cleanup(func() { delete(drafts, "draft"); delete(drafts, "m/2") })
+	now := time.Now()
+	a := sideApp(t,
+		t3.Thread{ID: "1", Title: "one", CreatedAt: ago(now, time.Minute)},
+		t3.Thread{ID: "2", Title: "two", CreatedAt: ago(now, 2*time.Minute)},
+	)
+	th := ui.NewTheme()
+	a.draftEnv, a.draft = "m", "p"
+	saveDraft("draft", "\nPlan the release\nwith notes")
+	saveDraft("m/2", "a reply in two")
+	if d := a.build(now).Sidebar.Items[0].Draft; d == nil || !d.Active {
+		t.Fatalf("the open draft's row: %+v", d)
+	}
+	a.openThread("m/1")
+	s := a.build(now)
+	d := s.Sidebar.Items[0].Draft
+	if d == nil || d.Active || d.Preview != "Plan the release" || d.Project != "tern" || !s.Sidebar.Items[1].Divider {
+		t.Fatalf("the draft's row: %+v, then %+v", d, s.Sidebar.Items[1])
+	}
+	if got := listing(s); !strings.HasSuffix(got, "one, two, [Settled 0 false]") {
+		t.Fatalf("the list under it: %s", got)
+	}
+	a.handle(th, ui.Action{ID: "discard:draft", Kind: "click"})
+	a.handle(th, ui.Action{ID: "discard:m/2", Kind: "click"})
+	s = a.build(now)
+	if s.Sidebar.Items[0].Draft != nil || s.Sidebar.Undo != "Discarded 2" || rows(s)[1].Draft {
+		t.Fatalf("after discarding both: draft row %v, notice %q, two's pen %v", s.Sidebar.Items[0].Draft, s.Sidebar.Undo, rows(s)[1].Draft)
+	}
+	a.handle(th, ui.Action{ID: "undo", Kind: "click"})
+	s = a.build(now)
+	if s.Sidebar.Items[0].Draft == nil || s.Sidebar.Undo != "" || !rows(s)[1].Draft {
+		t.Fatalf("after undo: draft row %v, notice %q, two's pen %v", s.Sidebar.Items[0].Draft, s.Sidebar.Undo, rows(s)[1].Draft)
+	}
+}
+
+// Undoing a park puts the thread back as T3 does (planThreadUndo): a
+// snooze is woken; a settle is un-settled, then pinned again in its place
+// and snoozed again, as settling undid both.
+func TestUndoPark(t *testing.T) {
+	steps := func(cmds []map[string]any) string {
+		var out []string
+		for _, c := range cmds {
+			s := c["type"].(string)
+			if k, ok := c["orderKey"]; ok {
+				s += " " + k.(string)
+			}
+			out = append(out, s)
+		}
+		return strings.Join(out, ", ")
+	}
+	pinned := &t3.Thread{ID: "t", PinnedAt: "2026-11-17T10:00:00Z", PinOrderKey: "a1", SnoozedUntil: "2026-11-18T09:00:00Z"}
+	if got, want := steps(undoPark(pinned, true)), "thread.unsettle, thread.pin a1, thread.snooze"; got != want {
+		t.Fatalf("undoing a settle: %s, want %s", got, want)
+	}
+	if got, want := steps(undoPark(pinned, false)), "thread.unsnooze"; got != want {
+		t.Fatalf("undoing a snooze: %s, want %s", got, want)
+	}
+	if got, want := steps(undoPark(&t3.Thread{ID: "t"}, true)), "thread.unsettle"; got != want {
+		t.Fatalf("undoing a plain settle: %s, want %s", got, want)
+	}
+}
+
 // The snooze presets read as T3's do: durations from now, then today's
 // evening, tomorrow and next week, soonest first; a duration landing on
 // another day says which (resolveSnoozePresets).

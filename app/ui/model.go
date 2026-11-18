@@ -51,14 +51,30 @@ type Sidebar struct {
 	Snooze      *SnoozeMenu    // a card's snooze menu, while it's open
 	Renaming    string         // the row whose title is being edited
 	Ticking     bool           // a row shows a run timer, which moves each second
+	Undo        string         // the footer's undo notice: "Settled", "Settled 2"…
+	UndoClaim   bool           // mod+Z undoes it even in a text field
 }
 
-// SidebarItem is one entry in the thread list: a thread's row, a shelf's
-// header, or the Settled shelf's "Show N more".
+// SidebarItem is one entry in the thread list: a thread's row, the new
+// thread's draft and the rule under it, a shelf's header, or the Settled
+// shelf's "Show N more".
 type SidebarItem struct {
-	Row   *ThreadRow
-	Shelf *Shelf
-	More  int // "Show <More> more"
+	Row     *ThreadRow
+	Draft   *DraftRow
+	Divider bool
+	Shelf   *Shelf
+	More    int // "Show <More> more"
+}
+
+// DraftRow is the new thread's unsent draft (SidebarDraftBlock.tsx): its
+// project and the first line written.
+type DraftRow struct {
+	ID      string // click target "draft:<ID>"; its discard is "discard:<ID>"
+	Project string
+	Icon    ProjectIcon
+	Preview string // the first line written, else "2 attachments"
+	Active  bool   // the draft is open
+	Hover   bool   // a mockup draws it hovered
 }
 
 // Shelf is the header of the Working, Snoozed or Settled shelf.

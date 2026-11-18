@@ -91,6 +91,11 @@ type input struct {
 	resultHover int    // the search result under the pointer, plus one
 	filterHover string // the project filter's row under the pointer
 	renaming    bool   // the rename field had focus last frame
+	// The footer's undo notice: its last text, kept while it fades out,
+	// its fade, and whether mod+Z is its even in a text field.
+	undoText  string
+	undoFade  *fade
+	undoClaim bool
 	// The hover card: the row it's for, when the pointer came to rest there
 	// and when the last one closed; tipBusy is a control's tooltip in the
 	// row being drawn, which the card stands aside for.
@@ -415,6 +420,17 @@ func (th *Theme) editor(gtx C, id string, t Txt, placeholder string) D {
 	if th.in.focus == id {
 		gtx.Execute(key.FocusCmd{Tag: ed})
 		th.in.focus = ""
+	}
+	// Just after a park, mod+Z undoes it rather than the field's last
+	// edit, until another key or an edit (threadUndoClaimsShortcut).
+	for th.in.undoClaim {
+		ev, ok := gtx.Event(key.Filter{Focus: ed, Name: "Z", Required: key.ModShortcut})
+		if !ok {
+			break
+		}
+		if ke, ok := ev.(key.Event); ok && ke.State == key.Press {
+			th.push(Action{ID: "thread.undo", Kind: "click"})
+		}
 	}
 	// Alt+Enter has its own meaning in the composer (queue), so take it
 	// before the editor turns it into a submit.

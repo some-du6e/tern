@@ -327,7 +327,7 @@ func (a *App) closeMenus() {
 func (a *App) closeMenusLocked() {
 	a.picker, a.traitsOpen, a.accessOpen, a.projectsOpen, a.accountOpen = nil, false, false, false, false
 	a.detailsOpen, a.machinesOpen = false, false
-	a.ctxRef, a.ctxBulk, a.ctxKeyboard, a.ctxConfirm = "", false, false, false
+	a.ctxRef, a.ctxBulk, a.ctxDraft, a.ctxKeyboard, a.ctxConfirm = "", false, false, false, false
 	a.filterOpen, a.snoozeRef = false, ""
 }
 

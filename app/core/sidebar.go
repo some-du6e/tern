@@ -719,9 +719,14 @@ func (a *App) sidebar(s *ui.Scene, now time.Time) {
 	if a.snoozeRef != "" {
 		sb.Snooze = &ui.SnoozeMenu{Row: a.snoozeRef, Choices: snoozeItems(a.snoozeMenu, "", false)}
 	}
+	sb.Undo, sb.UndoClaim = a.undoSummary(), a.undoClaim
 	if q := strings.TrimSpace(a.search); q != "" {
 		a.searchScene(sb, l, q, now)
 		return
+	}
+	draft := a.draftRow(scope)
+	if draft != nil {
+		sb.Items = append(sb.Items, ui.SidebarItem{Draft: draft}, ui.SidebarItem{Divider: true})
 	}
 	add := func(t sideThread, shelf string) {
 		r := a.row(t, shelf, now)
@@ -754,9 +759,34 @@ func (a *App) sidebar(s *ui.Scene, now time.Time) {
 			sb.Items = append(sb.Items, ui.SidebarItem{More: min(hidden, settledPage)})
 		}
 	}
-	if len(l.pinned)+len(l.active)+len(l.working)+len(l.snoozed) == 0 && (len(l.settled) == 0 || scope != nil) {
+	if draft == nil && len(l.pinned)+len(l.active)+len(l.working)+len(l.snoozed) == 0 && (len(l.settled) == 0 || scope != nil) {
 		sb.Empty = a.emptyState(scope, len(l.settled) > 0)
 	}
+}
+
+// draftRow is the new thread's unsent draft as a row
+// (SidebarDraftBlock.tsx), nil without one: something written or pasted,
+// for a project in the scope. Its preview is the first line written, else
+// how many pictures it holds. Call with the lock held.
+func (a *App) draftRow(scope map[string]bool) *ui.DraftRow {
+	if a.draft != "" {
+		a.draftHome = ref(a.draftEnv, a.draft)
+	}
+	envID, id := splitRef(a.draftHome)
+	e := a.env(envID)
+	text := strings.TrimSpace(ui.StripChips(firstLine(drafts["draft"])))
+	n := len(a.images["draft"])
+	if e == nil || (text == "" && n == 0) || (scope != nil && !scope[a.draftHome]) {
+		return nil
+	}
+	p, ok := e.projects[id]
+	if !ok {
+		return nil
+	}
+	if text == "" {
+		text = plural(n, "attachment")
+	}
+	return &ui.DraftRow{ID: "draft", Project: p.Title, Icon: projectIcon(p), Preview: text, Active: a.draft != ""}
 }
 
 // emptyState is what the list says with nothing active to show.

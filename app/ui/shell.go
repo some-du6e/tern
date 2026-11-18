@@ -108,8 +108,9 @@ func (th *Theme) Desktop(gtx C, s *Scene) D {
 // shellKeys handles T3's shell shortcuts (keybindings.ts): mod+B the
 // sidebar, mod+J the terminal, mod+Alt+B the right panel, mod+Shift+B the
 // thread details; and the sidebar's: mod+N a new thread, mod+Shift+[ and ]
-// the thread before and after, mod+1…9 the nth thread, mod+Shift+S settle
-// and mod+Shift+P pin. The last three leave a focused terminal alone.
+// the thread before and after, mod+1…9 the nth thread, mod+Shift+S settle,
+// mod+Shift+P pin and mod+Z undo the last park. The last four leave a
+// focused terminal alone; a focused text field keeps its own mod+Z.
 func (th *Theme) shellKeys(gtx C, s *Scene) {
 	filters := []event.Filter{
 		key.Filter{Name: "B", Required: key.ModShortcut, Optional: key.ModShift | key.ModAlt},
@@ -119,6 +120,7 @@ func (th *Theme) shellKeys(gtx C, s *Scene) {
 		key.Filter{Name: "]", Required: key.ModShortcut | key.ModShift},
 		key.Filter{Name: "S", Required: key.ModShortcut | key.ModShift},
 		key.Filter{Name: "P", Required: key.ModShortcut | key.ModShift},
+		key.Filter{Name: "Z", Required: key.ModShortcut},
 	}
 	for n := 1; n <= 9; n++ {
 		filters = append(filters, key.Filter{Name: key.Name(strconv.Itoa(n)), Required: key.ModShortcut})
@@ -144,6 +146,8 @@ func (th *Theme) shellKeys(gtx C, s *Scene) {
 			th.push(Action{ID: "thread.settle", Kind: "click"})
 		case ke.Name == "P" && !term:
 			th.push(Action{ID: "thread.pin", Kind: "click"})
+		case ke.Name == "Z" && !term:
+			th.push(Action{ID: "thread.undo", Kind: "click"})
 		case len(ke.Name) == 1 && ke.Name >= "1" && ke.Name <= "9" && !term:
 			th.push(Action{ID: "thread.jump:" + string(ke.Name), Kind: "click"})
 		case ke.Name == "J" && s.Run != nil:

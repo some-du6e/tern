@@ -251,6 +251,45 @@ func TestListRevealsOpenRow(t *testing.T) {
 	wantPixel(t, img, image.Pt(20, 110), draft, "the first card, back at the top")
 }
 
+// The new thread's draft sits atop the list, 78dp in 2dp of padding on
+// warning at 4%; under it, 6dp clear, the sidebar border at 60% rules the
+// list 10dp in from the row's sides (§3.12).
+func TestDraftRow(t *testing.T) {
+	th := NewTheme()
+	s := &Scene{Sidebar: Sidebar{HasProjects: true, Items: []SidebarItem{
+		{Draft: &DraftRow{ID: "draft", Project: "tern", Icon: ProjectIcon{Text: "TN", Color: "amber"}, Preview: "Plan the release"}},
+		{Divider: true},
+		{Row: &ThreadRow{ID: "e/1", Title: "One", Age: "1h"}},
+	}}}
+	img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, s) })
+	tint := over(alpha(SP.Warning, 0x0a), SP.Sidebar)
+	wantPixel(t, img, image.Pt(20, 101), SP.Sidebar, "the draft's padding")
+	wantPixel(t, img, image.Pt(20, 103), tint, "the draft")
+	wantPixel(t, img, image.Pt(20, 179), tint, "its bottom")
+	wantPixel(t, img, image.Pt(20, 181), SP.Sidebar, "below it")
+	// The draft's item is 100..182; then the list's 1dp gap and 6 clear.
+	rule := over(faded(SP.SidebarBorder, 0.6), SP.Sidebar)
+	wantPixel(t, img, image.Pt(20, 188), SP.Sidebar, "above the rule")
+	wantPixel(t, img, image.Pt(20, 189), rule, "the rule")
+	wantPixel(t, img, image.Pt(17, 189), SP.Sidebar, "the rule's inset")
+}
+
+// The footer's undo notice takes what its buttons leave, 80..247, its text
+// right-aligned: the summary, then "<shortcut> to undo", on a 24dp line the
+// footer's row centres at 864.
+func TestUndoNotice(t *testing.T) {
+	th := NewTheme()
+	s := &Scene{Sidebar: Sidebar{Undo: "Settled"}}
+	img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, s) })
+	l, r, ok := inkCols(img, image.Rect(80, 856, 248, 900), SP.Sidebar)
+	if !ok || l < 90 || r < 244 || r > 247 {
+		t.Fatalf("the notice's text spans x %d..%d, want it to end at the footer's padding", l, r)
+	}
+	if top, bottom, _ := inkRows(img, image.Rect(80, 856, 248, 900), SP.Sidebar); top < 866 || bottom > 886 {
+		t.Errorf("the notice's text is on rows %d..%d, want it within its line at 864..888", top, bottom)
+	}
+}
+
 // A click on a card's pull request is the badge's: it opens the pull
 // request, not the thread.
 func TestPullRequestIsntARowClick(t *testing.T) {
