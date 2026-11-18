@@ -103,6 +103,7 @@ type App struct {
 	working     map[string]workingState
 	returned    map[string]time.Time
 	ordered     []string
+	openRow     string          // the open thread's row: its nearest listed ancestor's for a subagent or side chat
 	parked      map[string]bool // the Snoozed and Settled rows, which advancing skips
 	timer       *time.Timer     // a scene due when a Working shelf hold runs out
 
@@ -812,6 +813,13 @@ func (a *App) openThread(id string) {
 	}
 	a.closeThreadLocked()
 	a.openID = id
+	// A thread the project filter hides widens it to every project, so its
+	// row shows (resolveSidebarRouteReveal).
+	if scope := a.scopeSet(); scope != nil {
+		if e, t := a.thread(a.rowThread(id)); t != nil && listed(t) && t.ArchivedAt == "" && !scope[ref(e.id(), t.ProjectID)] {
+			a.setScope(nil)
+		}
+	}
 	found := false
 	for _, t := range a.tabs {
 		found = found || t == id

@@ -579,10 +579,31 @@ type sidebarList struct {
 	ordered                                   []string // refs top to bottom, as the jump keys and ranges count
 }
 
+// rowThread is the row thread r shows as: its own, or for a subagent or a
+// side chat, which have none, its nearest listed ancestor's
+// (resolveSidebarRowThreadId). A broken chain leaves r, which matches no
+// row. Call with the lock held.
+func (a *App) rowThread(r string) string {
+	e, t := a.thread(r)
+	seen := map[string]bool{}
+	for t != nil && !listed(t) {
+		if t.Lineage.ParentThreadID == "" || seen[t.ID] {
+			return r
+		}
+		seen[t.ID] = true
+		t = e.threads[t.Lineage.ParentThreadID]
+	}
+	if t == nil {
+		return r
+	}
+	return ref(e.id(), t.ID)
+}
+
 // shelve sorts every listed thread in the project scope onto its shelf.
 // Call with the lock held.
 func (a *App) shelve(now time.Time, scope map[string]bool) sidebarList {
 	var l sidebarList
+	a.openRow = a.rowThread(a.openID)
 	present := map[string]bool{}
 	for _, e := range a.envs {
 		children := childRequests(e.threads)
@@ -650,13 +671,13 @@ func (a *App) shelve(now time.Time, scope map[string]bool) sidebarList {
 }
 
 // shown is the part of a shelf the list draws: all of it while it's open,
-// else just the open thread, if it's there.
+// else just the open thread's row, if it's there.
 func (a *App) shown(shelf string, ts []sideThread) []sideThread {
 	if a.shelfOpen[shelf] {
 		return ts
 	}
 	for _, t := range ts {
-		if t.ref == a.openID {
+		if t.ref == a.openRow {
 			return []sideThread{t}
 		}
 	}
@@ -664,11 +685,11 @@ func (a *App) shown(shelf string, ts []sideThread) []sideThread {
 }
 
 // shownSettled is the Settled shelf's drawn rows: its first pages, plus the
-// open thread wherever it is.
+// open thread's row wherever it is.
 func (a *App) shownSettled(ts []sideThread) []sideThread {
 	vis := ts[:min(len(ts), a.settledShown())]
 	for _, t := range ts[len(vis):] {
-		if t.ref == a.openID {
+		if t.ref == a.openRow {
 			vis = append(vis[:len(vis):len(vis)], t)
 		}
 	}
@@ -690,6 +711,7 @@ func (a *App) sidebar(s *ui.Scene, now time.Time) {
 	}
 	sb.NoNew = !sb.HasProjects
 	sb.Scope, sb.ScopeLabel = a.scopeIcons(scope)
+	sb.ScopeKey, sb.Open = strings.Join(a.scope, "\n"), a.openRow
 	if a.filterOpen {
 		a.filterScene(sb, scope)
 	}
@@ -768,7 +790,7 @@ func (a *App) emptyState(scope map[string]bool, settled bool) *ui.SidebarEmpty {
 // shelf.
 func (a *App) row(st sideThread, shelf string, now time.Time) ui.ThreadRow {
 	t, e := st.Thread, st.e
-	active := st.ref == a.openID
+	active := st.ref == a.openRow
 	r := ui.ThreadRow{
 		ID:           st.ref,
 		Slim:         shelf == "snoozed" || shelf == "settled",

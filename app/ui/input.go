@@ -79,12 +79,15 @@ type input struct {
 	keyFocus bool
 	// The sidebar's list: its keyboard tree from the last layout, each
 	// row's focus tag and the row to focus once it's laid out; the list's
-	// height and how far it's scrolled.
+	// height and how far it's scrolled; the open thread's row it last
+	// scrolled to and the project scope it last started at the top for.
 	nav         listNav
 	rowTags     map[string]*int
 	focusRow    string
 	listView    int
 	listScroll  int
+	listOpen    string
+	listScope   string
 	resultHover int  // the search result under the pointer, plus one
 	renaming    bool // the rename field had focus last frame
 	// The hover card: the row it's for, when the pointer came to rest there

@@ -40,6 +40,8 @@ type Sidebar struct {
 	NoNew       bool           // there's nowhere to start a thread: New thread is disabled
 	Scope       []ProjectIcon  // the projects the filter narrows the list to, none for all
 	ScopeLabel  string         // the filter's label: "Filter threads by project: A, B"
+	ScopeKey    string         // the scope as chosen: a new one starts the list at its top
+	Open        string         // the open thread's row, which the list scrolls to each time it changes
 	Items       []SidebarItem  // the list, top to bottom
 	Empty       *SidebarEmpty  // what the list says when nothing is active
 	Results     []ThreadRow    // while searching, the matches in place of the list

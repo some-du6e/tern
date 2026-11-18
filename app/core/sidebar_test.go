@@ -286,6 +286,50 @@ func TestFullThreadMenu(t *testing.T) {
 	}
 }
 
+// Opening a thread the project filter hides widens it to every project, so
+// the thread's row shows; one in the scope leaves it (§5.8).
+func TestOpenWidensScope(t *testing.T) {
+	now := time.Now()
+	a := sideApp(t,
+		t3.Thread{ID: "1", Title: "in tern", CreatedAt: ago(now, time.Minute)},
+		t3.Thread{ID: "2", Title: "in atlas", ProjectID: "g", CreatedAt: ago(now, 2*time.Minute)},
+	)
+	a.envs[0].projects["g"] = t3.Project{ID: "g", Title: "atlas", WorkspaceRoot: "/srv/atlas"}
+	th := ui.NewTheme()
+	a.handle(th, ui.Action{ID: "filter.project:m/p", Kind: "click"})
+	a.openThread("m/1")
+	if s := a.build(now); titles(s) != "in tern@workstation" {
+		t.Fatalf("a thread in the scope changed it: %s", titles(s))
+	}
+	a.openThread("m/2")
+	s := a.build(now)
+	if titles(s) != "in tern@workstation, in atlas@workstation" || s.Sidebar.Scope != nil || s.Sidebar.ScopeKey != "" {
+		t.Fatalf("after opening one it hides: %s, scope %v %q", titles(s), s.Sidebar.Scope, s.Sidebar.ScopeKey)
+	}
+}
+
+// An open subagent has no row, so its parent's row is the open one, the
+// row the list scrolls to and the one the arrows step from.
+func TestOpenChildShowsAsItsParent(t *testing.T) {
+	now := time.Now()
+	a := sideApp(t,
+		t3.Thread{ID: "p", Title: "parent", CreatedAt: ago(now, time.Minute)},
+		t3.Thread{ID: "c", Title: "child", CreatedAt: ago(now, time.Minute), Lineage: &t3.Lineage{ParentThreadID: "p", RelationshipToParent: "subagent"}},
+		t3.Thread{ID: "o", Title: "other", CreatedAt: ago(now, 2*time.Minute)},
+	)
+	a.openID = "m/c"
+	s := a.build(now)
+	var open []string
+	for _, r := range rows(s) {
+		if r.Active {
+			open = append(open, r.Title)
+		}
+	}
+	if strings.Join(open, ", ") != "parent" || s.Sidebar.Open != "m/p" {
+		t.Fatalf("open rows %v, the list's open row %q", open, s.Sidebar.Open)
+	}
+}
+
 // The snooze presets read as T3's do: durations from now, then today's
 // evening, tomorrow and next week, soonest first; a duration landing on
 // another day says which (resolveSnoozePresets).

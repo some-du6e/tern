@@ -868,12 +868,12 @@ func (a *App) rowClick(th *ui.Theme, act ui.Action) {
 	a.switchTo(th, func() { a.openThread(r) })
 }
 
-// step opens the thread before or after the open one in the list
+// step opens the thread before or after the open thread's row in the list
 // (thread.previous, thread.next), not wrapping; with none open, the last or
 // the first.
 func (a *App) step(th *ui.Theme, dir int) {
 	a.mu.Lock()
-	ordered, open := a.ordered, a.openID
+	ordered, open := a.ordered, a.rowThread(a.openID)
 	a.mu.Unlock()
 	if len(ordered) == 0 {
 		return

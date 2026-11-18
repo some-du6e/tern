@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"image"
 	"image/color"
 	"testing"
@@ -208,6 +209,34 @@ func TestSnoozeMenu(t *testing.T) {
 	if gap < 22 || gap > 27 {
 		t.Errorf("the widest row's label and detail are %d apart, want 24 give or take their glyphs' sides", gap)
 	}
+}
+
+// A newly opened thread's row scrolls into view, as near as it can stay
+// (block: nearest), and a new project scope starts the list at its top
+// (routeReveal.ts, §5.8).
+func TestListRevealsOpenRow(t *testing.T) {
+	th := NewTheme()
+	s := &Scene{Sidebar: Sidebar{HasProjects: true}}
+	for i := range 20 {
+		r := &ThreadRow{ID: fmt.Sprint("e/", i), Title: fmt.Sprint("Thread ", i), Age: "1h"}
+		r.Draft, r.Active = i == 0, i == 14
+		s.Sidebar.Items = append(s.Sidebar.Items, SidebarItem{Row: r})
+	}
+	active := over(SP.SidebarRowActive, SP.Sidebar)
+	draft := over(alpha(SP.Warning, 0x0a), SP.Sidebar)
+	// Unopened, the list is at its top: the first card, a draft, at 102.
+	img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, s) })
+	wantPixel(t, img, image.Pt(20, 110), draft, "the first card, at the top")
+	// Cards are 64 apart plus the 1dp gap, so the 15th ends at 974 in the
+	// list, 218 past its 756: scrolled that far, it sits at the bottom.
+	s.Sidebar.Open = "e/14"
+	img = drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, s) })
+	wantPixel(t, img, image.Pt(20, 800), active, "the open card, scrolled in")
+	wantPixel(t, img, image.Pt(20, 852), active, "its bottom, at the list's")
+	// A new scope starts from the top again.
+	s.Sidebar.ScopeKey = "e/project"
+	img = drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, s) })
+	wantPixel(t, img, image.Pt(20, 110), draft, "the first card, back at the top")
 }
 
 // In light the open row is rung 1dp inside with the sidebar border at 70%.

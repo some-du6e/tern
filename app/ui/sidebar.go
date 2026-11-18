@@ -435,10 +435,37 @@ func (th *Theme) threadList(gtx C, s *Scene, top int) {
 	th.in.nav = listNav{items: items, tops: tops}
 	th.in.listView = size.Y
 	l := th.List("sidebar", false)
-	scroll := 0
-	if p := l.Position; p.First < len(items) {
-		scroll = tops[p.First] + p.Offset
+	scrolled := func() int {
+		if p := l.Position; p.First < len(items) {
+			return tops[p.First] + p.Offset
+		}
+		return 0
 	}
+	// A new project scope starts the list at its top. Each newly opened
+	// thread's row scrolls into view once, unless the pointer is on it,
+	// where a click leaves it; while the row isn't listed (a search
+	// replaces the list), it waits (routeReveal.ts).
+	sb := &s.Sidebar
+	if sb.ScopeKey != th.in.listScope {
+		th.in.listScope = sb.ScopeKey
+		l.Position = layout.Position{}
+	}
+	th.in.listScroll = scrolled()
+	switch {
+	case sb.Open == "":
+		th.in.listOpen = ""
+	case sb.Open != th.in.listOpen:
+		for i, it := range items {
+			if it.nav != "thread:"+sb.Open {
+				continue
+			}
+			th.in.listOpen = sb.Open
+			if c := th.in.clicks[it.nav]; c == nil || !c.Hovered() {
+				th.revealItem(i)
+			}
+		}
+	}
+	scroll := scrolled()
 	th.in.listScroll = scroll
 	inset := dp(gtx, sideInset)
 	l.Layout(gtx, len(items)+1, func(gtx C, i int) D {
