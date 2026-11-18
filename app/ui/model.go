@@ -417,7 +417,7 @@ const (
 type MenuRow struct {
 	Kind     MenuRowKind
 	Label    string
-	Icon     string // a lucide icon, 16dp at 80% before the label (12dp in radio rows)
+	Icon     string // a lucide icon, 16dp at 80% before the label (12dp in radio rows); "provider:<kind>" or "editor:<id>" for a mark
 	Shortcut string
 	Checked  bool
 	Disabled bool

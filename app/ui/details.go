@@ -583,10 +583,12 @@ func (th *Theme) openInRow(d *ThreadDetails) W {
 			ctl{id: "card.openin", disabled: o.Disabled, tip: o.Label},
 			ctl{id: "card.editors", disabled: o.MenuDisabled, popup: true, open: d.Menu != nil && d.Menu.For == "openin", tip: "Choose editor"},
 			func(gtx C, w int) {
-				// T3 draws the editor's brand mark here; tern has none of
-				// them yet, so every editor gets the generic icon T3 uses
-				// when there's no editor to name.
-				rowIcon(gtx, "square-arrow-out-up-right", P.MutedForeground, 0, 16)
+				// The preferred editor's mark at the icon column.
+				s := dp(gtx, 16)
+				func() {
+					defer op.Offset(image.Pt(dp(gtx, 11), (dp(gtx, rowH)-s)/2)).Push(gtx.Ops).Pop()
+					editorIcon(o.Editor, P.MutedForeground, 16)(gtx)
+				}()
 				th.rowLabel(gtx, rowFont(rowText()), o.Label, dp(gtx, rowLabelX), w-dp(gtx, rowLabelX+10))
 			})
 	}

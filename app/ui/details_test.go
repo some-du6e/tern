@@ -205,6 +205,52 @@ func TestAlertDialogDrawn(t *testing.T) {
 	wantPixel(t, img, image.Pt(1148+140, 64+4), over(alpha(rgb(0), 0xa3), over(alpha(P.Popover, 0xd5), P.Background)), "the backdrop over the card")
 }
 
+// The Open in split leads with the preferred editor's brand mark (§3.7),
+// in its own colours: VS Code's blue; Cursor's mark is near black in light
+// and near white in dark. With no editor to name it's T3's muted open
+// icon. The row's icon column is at 1168, 113 (the row under the machine
+// row).
+func TestEditorMarksDrawn(t *testing.T) {
+	defer SetDark(false)
+	box := image.Rect(1157+11, 105+8, 1157+27, 105+24)
+	scan := func(img *image.RGBA, ok func(c [3]uint8) bool) bool {
+		for y := box.Min.Y; y < box.Max.Y; y++ {
+			for x := box.Min.X; x < box.Max.X; x++ {
+				if c := img.RGBAAt(x, y); ok([3]uint8{c.R, c.G, c.B}) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	blue := func(c [3]uint8) bool { return int(c[2]) > int(c[0])+80 }
+	for _, c := range []struct {
+		editor string
+		dark   bool
+		want   func(c [3]uint8) bool
+		what   string
+	}{
+		{"vscode", false, blue, "VS Code's blue"},
+		{"cursor", false, func(c [3]uint8) bool { return c[0] < 0x40 }, "Cursor's dark mark"},
+		{"cursor", true, func(c [3]uint8) bool { return c[0] > 0xc0 }, "Cursor's light mark"},
+	} {
+		SetDark(c.dark)
+		s := cardScene()
+		s.Card.OpenIn = &OpenIn{Editor: c.editor, Label: "Open in " + c.editor}
+		img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return NewTheme().Desktop(gtx, s) })
+		if !scan(img, c.want) {
+			t.Errorf("%s, dark %v: not drawn", c.what, c.dark)
+		}
+	}
+	SetDark(false)
+	s := cardScene()
+	s.Card.OpenIn = &OpenIn{Label: "Open in editor", Disabled: true}
+	img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return NewTheme().Desktop(gtx, s) })
+	if scan(img, blue) || !scan(img, func(c [3]uint8) bool { return c[0] < 0xd0 }) {
+		t.Error("with no editor, the split should lead with the muted open icon, no mark")
+	}
+}
+
 // With every row turned off, the card offers "Choose what to show",
 // padded 8, which opens the items menu under itself.
 func TestCardFallback(t *testing.T) {

@@ -126,6 +126,10 @@ func (th *Theme) cardMenuRow(gtx C, r MenuRow) D {
 					if kind, ok := strings.CutPrefix(r.Icon, "provider:"); ok {
 						icon = ProviderMark(kind, alpha(P.MutedForeground, 0xcc), 16)
 					}
+					if id, ok := strings.CutPrefix(r.Icon, "editor:"); ok {
+						// Brand marks at full strength (opacity-100).
+						icon = editorIcon(id, alpha(P.MutedForeground, 0xcc), 16)
+					}
 					kids = append(kids, rigid(func(gtx C) D { return pad(0, -2, 0, -2).Layout(gtx, icon) }), rigid(Spacer(8, 0)))
 				}
 			}

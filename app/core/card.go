@@ -333,7 +333,7 @@ func editorMenu(choices []string, pref string, mode openMode, target t3.RemoteOp
 	}
 	var rows []ui.MenuRow
 	for _, id := range choices {
-		r := ui.MenuRow{Label: editorLabel(id), Icon: "square-arrow-out-up-right", Disabled: noFolder}
+		r := ui.MenuRow{Label: editorLabel(id), Icon: "editor:" + id, Disabled: noFolder}
 		if id == pref {
 			r.Shortcut = ui.Shortcut("O")
 		}
