@@ -440,6 +440,60 @@ func TestProjectFilter(t *testing.T) {
 	}
 }
 
+// The filter's popup takes the keyboard as T3's combobox does: it opens on
+// the scope's own row, the arrows move the highlight, Enter picks it,
+// Shift+Enter adds a project and keeps the popup open, and typing
+// highlights the first match.
+func TestProjectFilterKeys(t *testing.T) {
+	now := time.Now()
+	a := sideApp(t, t3.Thread{ID: "1", Title: "in tern", CreatedAt: ago(now, time.Minute)})
+	a.envs[0].projects["g"] = t3.Project{ID: "g", Title: "atlas", WorkspaceRoot: "/srv/atlas"}
+	th := ui.NewTheme()
+	lit := func() string {
+		s := a.build(now)
+		if s.Sidebar.Filter == nil {
+			return "closed: " + s.Sidebar.ScopeLabel
+		}
+		for _, it := range s.Sidebar.Filter.Items {
+			if it.Highlighted {
+				return it.Label
+			}
+		}
+		return "none"
+	}
+	key := func(name string, shift bool) {
+		a.handle(th, ui.Action{ID: "filter.search", Kind: "key", Text: name, Shift: shift})
+	}
+	a.handle(th, ui.Action{ID: "filter", Kind: "click"})
+	if got := lit(); got != "All projects" {
+		t.Fatalf("opened on %q, want All projects", got)
+	}
+	key("↓", false)
+	if got := lit(); got != "atlas" {
+		t.Fatalf("ArrowDown to %q, want atlas", got)
+	}
+	a.handle(th, ui.Action{ID: "filter.search", Kind: "submit"})
+	if got := lit(); got != "closed: Filter threads by project: atlas" {
+		t.Fatalf("after Enter: %s", got)
+	}
+	a.handle(th, ui.Action{ID: "filter", Kind: "click"})
+	if got := lit(); got != "atlas" {
+		t.Fatalf("reopened on %q, want the scope's atlas", got)
+	}
+	key("↓", false)
+	key("⏎", true)
+	if got := lit(); got != "tern" {
+		t.Fatalf("after Shift+Enter the popup shows %q, want it open on tern", got)
+	}
+	if got := a.build(now).Sidebar.ScopeLabel; got != "Filter threads by project: atlas, tern" {
+		t.Fatalf("scope %q after Shift+Enter", got)
+	}
+	a.handle(th, ui.Action{ID: "filter.search", Kind: "change", Text: "ter"})
+	if got := lit(); got != "tern" {
+		t.Fatalf("typing highlights %q, want the first match", got)
+	}
+}
+
 // The search lists the threads whose title or branch has every word, in
 // place of the list; nothing matching says so.
 func TestSearch(t *testing.T) {

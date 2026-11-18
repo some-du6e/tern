@@ -132,12 +132,17 @@ func (a *App) filterOrder() []string {
 }
 
 // filterScene is the filter's popup: "All projects" (not while searching
-// it), then the projects whose name has the query.
+// it), then the projects whose name has the query. One row is
+// highlighted: on opening the scope's own, then the first match as the
+// query changes, then the arrows' and the pointer's (T3's combobox, with
+// autoHighlight).
 func (a *App) filterScene(sb *ui.Sidebar, scope map[string]bool) {
 	f := &ui.ProjectFilter{}
 	q := strings.ToLower(strings.TrimSpace(a.filterQuery))
+	a.filterShown = a.filterShown[:0]
 	if q == "" {
 		f.Items = append(f.Items, ui.FilterItem{Label: "All projects", Selected: len(scope) == 0})
+		a.filterShown = append(a.filterShown, "")
 	}
 	for _, k := range a.filterKeys {
 		envID, id := splitRef(k)
@@ -150,8 +155,48 @@ func (a *App) filterScene(sb *ui.Sidebar, scope map[string]bool) {
 			continue
 		}
 		f.Items = append(f.Items, ui.FilterItem{ID: k, Label: p.Title, Icon: projectIcon(p), Selected: scope[k]})
+		a.filterShown = append(a.filterShown, k)
+	}
+	if a.filterHi < 0 {
+		// The combobox's value: All projects, or the one project in scope.
+		// Several have none, and the first row takes the highlight.
+		a.filterHi = 0
+		for i, k := range a.filterShown {
+			if len(scope) == 1 && scope[k] {
+				a.filterHi = i
+			}
+		}
+	}
+	if a.filterHi = min(a.filterHi, len(f.Items)-1); a.filterHi >= 0 {
+		f.Items[a.filterHi].Highlighted = true
 	}
 	sb.Filter = f
+}
+
+// filterKey is a key in the filter's search: the arrows move the
+// highlight, wrapping; Enter picks the highlighted row, and Shift+Enter
+// adds or drops its project, keeping the popup open; Escape closes it.
+func (a *App) filterKey(act ui.Action) {
+	a.mu.Lock()
+	n := len(a.filterShown)
+	switch {
+	case act.Text == "⎋":
+		a.filterOpen = false
+	case (act.Text == "↓" || act.Text == "↑") && n > 0:
+		step := 1
+		if act.Text == "↑" {
+			step = -1
+		}
+		a.filterHi = (max(0, a.filterHi) + step + n) % n
+	case act.Text == "⏎" && a.filterHi >= 0 && a.filterHi < n:
+		k := a.filterShown[a.filterHi]
+		a.mu.Unlock()
+		if k != "" || !act.Shift {
+			a.pickProject(k, act.Shift)
+		}
+		return
+	}
+	a.mu.Unlock()
 }
 
 // setScope narrows the list to keys and saves it. A new scope starts the
@@ -995,12 +1040,23 @@ func (a *App) sidebarAction(th *ui.Theme, act ui.Action) bool {
 		}
 		return true
 	case id == "filter.search":
-		a.mu.Lock()
 		switch act.Kind {
 		case "change":
-			a.filterQuery = act.Text
+			a.mu.Lock()
+			a.filterQuery, a.filterHi = act.Text, 0
+			a.mu.Unlock()
 		case "key":
-			a.filterOpen = false
+			a.filterKey(act)
+		case "submit":
+			a.filterKey(ui.Action{Text: "⏎"})
+		}
+		return true
+	case verb == "filter.project" && act.Kind == "hover":
+		a.mu.Lock()
+		for i, k := range a.filterShown {
+			if k == arg {
+				a.filterHi = i
+			}
 		}
 		a.mu.Unlock()
 		return true
@@ -1082,7 +1138,7 @@ func (a *App) sidebarAction(th *ui.Theme, act ui.Action) bool {
 		a.mu.Lock()
 		open := !a.filterOpen
 		a.closeMenusLocked()
-		a.filterOpen, a.filterQuery = open, ""
+		a.filterOpen, a.filterQuery, a.filterHi = open, "", -1
 		if open {
 			a.filterKeys = a.filterOrder()
 		}

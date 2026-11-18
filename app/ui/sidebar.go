@@ -316,6 +316,7 @@ func (th *Theme) filterSearch(gtx C, s *Scene) D {
 				th.Text(g, Txt{Size: 14, LineH: 26.0 / 14, Color: P.MutedForeground, MaxLines: 1}, "Search projects...")
 			}
 			if s.Live {
+				th.filterKeys(g, ed)
 				th.editor(g, "filter.search", Txt{Size: 14, LineH: 26.0 / 14, Color: P.PopoverForeground}, "")
 			}
 		}()
@@ -328,20 +329,44 @@ func (th *Theme) filterSearch(gtx C, s *Scene) D {
 	})
 }
 
+// filterKeys hands the filter search's arrows and Shift+Enter to its rows:
+// the arrows move the highlight rather than the caret, and Shift+Enter
+// adds or drops the highlighted project where Enter would pick it.
+func (th *Theme) filterKeys(gtx C, ed any) {
+	for {
+		ev, ok := gtx.Event(key.Filter{Focus: ed, Name: key.NameDownArrow}, key.Filter{Focus: ed, Name: key.NameUpArrow},
+			key.Filter{Focus: ed, Name: key.NameReturn, Required: key.ModShift})
+		if !ok {
+			return
+		}
+		if ke, ok := ev.(key.Event); ok && ke.State == key.Press {
+			th.push(Action{ID: "filter.search", Kind: "key", Text: string(ke.Name), Shift: ke.Modifiers.Contain(key.ModShift)})
+		}
+	}
+}
+
 // filterItem is one of the popup's rows: 32dp at least, padded 4 by 8,
-// radius 4, the icon and the name 8dp apart, foreground at 9% under the
-// pointer; a 24dp gap at the end where T3 keeps its project buttons.
+// radius 4, the icon and the name 8dp apart, foreground at 9% while it's
+// highlighted or under the pointer, which highlights it; a 24dp gap at the
+// end where T3 keeps its project buttons.
 func (th *Theme) filterItem(gtx C, s *Scene, it FilterItem) D {
 	id := liveID(s, "filter.project:"+it.ID)
 	hovered := false
 	if id != "" {
 		c, _ := th.events(gtx, id)
 		hovered = c.Hovered()
+		switch {
+		case hovered && th.in.filterHover != id:
+			th.in.filterHover = id
+			th.push(Action{ID: id, Kind: "hover"})
+		case !hovered && th.in.filterHover == id:
+			th.in.filterHover = ""
+		}
 	}
 	w, h := gtx.Constraints.Max.X, dp(gtx, 32)
 	r := image.Rect(0, 0, w, h)
 	bg := P.Popover
-	if hovered {
+	if hovered || it.Highlighted {
 		bg = over(alpha(P.Foreground, 0x17), P.Popover)
 		fill(gtx, bg, r, dp(gtx, 4))
 	}

@@ -163,10 +163,11 @@ type ProjectFilter struct {
 
 // FilterItem is one of the filter's projects; ID "" is "All projects".
 type FilterItem struct {
-	ID       string // click target "filter.project:<ID>"
-	Label    string
-	Icon     ProjectIcon
-	Selected bool
+	ID          string // click target "filter.project:<ID>"
+	Label       string
+	Icon        ProjectIcon
+	Selected    bool
+	Highlighted bool // where the arrows are, and Enter picks
 }
 
 // SnoozeMenu is the menu a card's clock opens: when to wake it.

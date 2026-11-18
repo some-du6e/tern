@@ -88,8 +88,9 @@ type input struct {
 	listScroll  int
 	listOpen    string
 	listScope   string
-	resultHover int  // the search result under the pointer, plus one
-	renaming    bool // the rename field had focus last frame
+	resultHover int    // the search result under the pointer, plus one
+	filterHover string // the project filter's row under the pointer
+	renaming    bool   // the rename field had focus last frame
 	// The hover card: the row it's for, when the pointer came to rest there
 	// and when the last one closed; tipBusy is a control's tooltip in the
 	// row being drawn, which the card stands aside for.

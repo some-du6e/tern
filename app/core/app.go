@@ -96,6 +96,8 @@ type App struct {
 	filterOpen  bool
 	filterQuery string
 	filterKeys  []string
+	filterShown []string // the popup's rows, "" for All projects
+	filterHi    int      // its highlighted row, -1 for the scope's own
 	shelfOpen   map[string]bool
 	settledMore int
 	selected    map[string]bool
