@@ -74,8 +74,9 @@ func (a *App) toggleTerminal() {
 }
 
 // runInTerminal is a code block's "Run in terminal": the command runs in
-// the open thread's terminal, with the drawer open on it
-// (useChatTerminalActions.ts:317-328).
+// one of the open thread's terminals that isn't running anything, the
+// active one first, or in a new one, with the drawer open on it
+// (useChatTerminalActions.ts:201-290, projectScriptTerminal.ts).
 func (a *App) runInTerminal(command string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -88,12 +89,19 @@ func (a *App) runInTerminal(command string) {
 		a.drawers[a.openID] = d
 	}
 	d.open = true
-	if len(d.terms) == 0 {
-		if err := a.newTerminalLocked(d); err != nil {
-			d.open = false
-			a.fail(err)
-			return
+	idle := func(t *terminal) bool { return !t.busy && t.status == "running" }
+	reuse := -1
+	for i, t := range d.terms {
+		if idle(t) && (reuse < 0 || i == d.active) {
+			reuse = i
 		}
+	}
+	if reuse >= 0 {
+		d.active = reuse
+	} else if err := a.newTerminalLocked(d); err != nil {
+		d.open = len(d.terms) > 0
+		a.fail(err)
+		return
 	}
 	term := d.terms[d.active]
 	term.queued += command + "\r"
