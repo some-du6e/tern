@@ -62,6 +62,7 @@ func run(w *app.Window) error {
 		case app.FrameEvent:
 			if d := dark.Load(); d != shownDark {
 				shownDark = d
+				ui.SetDark(d)
 				titleDark(d)
 			}
 			gtx := app.NewContext(&ops, e)

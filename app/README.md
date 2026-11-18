@@ -1,9 +1,17 @@
 # tern app (Go + Gio)
 
 A native T3 Code client in Go. The UI is [Gio](https://gioui.org), an
-immediate-mode GPU toolkit in the same family as Dear ImGui, written in pure
-Go. The Windows build needs no C toolchain; the Mac build needs one for
-Gio's Cocoa code.
+immediate-mode GPU toolkit written in pure Go. The Windows build needs no C
+toolchain; the Mac build needs one for Gio's Cocoa code.
+
+The interface is a 1:1 port of T3 Code's own client, pinned to the nightly
+the server runs. `../docs/ui/` specifies it surface by surface, from T3's
+source and measurements of its live web UI (`tools/t3ui/inspect.sh`). The
+colours, lengths and type come from `../docs/ui/tokens.json` through
+`tools/t3ui/gentokens.py` into `ui/tokens_gen.go`; tern follows the system's
+light or dark setting as T3 does. Text is SF Pro and SF Mono on a Mac (loaded
+from the system) and T3's own Inter Variable elsewhere, instanced at T3's
+weights by `tools/t3ui/instance-inter.py`.
 
 - `t3/` is the protocol: Clerk sign-in, DPoP keys, the relay, environment
   sessions (T3 Connect or a `t3 pair` URL) and the Effect RPC socket. It

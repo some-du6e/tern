@@ -1,22 +1,17 @@
-// Package ui draws tern's interface with Gio. The look is a tightened take on
-// Dear ImGui's dark style: dense rows, flat frames, one blue accent.
+// Package ui draws tern's interface with Gio, ported from T3 Code's own web
+// client: its tokens (tokens_gen.go), components and behaviour, as specified
+// in docs/ui.
 package ui
 
 import (
-	"embed"
 	"image"
 	"image/color"
 
-	"gioui.org/font"
-	"gioui.org/font/opentype"
 	"gioui.org/io/system"
 	"gioui.org/op/clip"
 	"gioui.org/text"
 	"gioui.org/unit"
 )
-
-//go:embed fonts/*.otf fonts/*.ttf
-var fontFiles embed.FS
 
 func rgb(c uint32) color.NRGBA {
 	return color.NRGBA{R: uint8(c >> 16), G: uint8(c >> 8), B: uint8(c), A: 0xff}
@@ -27,39 +22,58 @@ func alpha(c color.NRGBA, a uint8) color.NRGBA {
 	return c
 }
 
-// Palette. Surfaces step up in lightness from the window to active frames.
+// The theme. P is T3's palette for the light or dark theme the system is in;
+// SP and CP are the same theme inside the sidebar and the composer, which
+// restyle some tokens (dark mode's sidebar is black, for one). SetDark
+// switches them.
 var (
-	ColWindow      = rgb(0x0c0e11)
-	ColPanel       = rgb(0x121519)
-	ColPanelHi     = rgb(0x161a1f)
-	ColFrame       = rgb(0x1a1e24)
-	ColFrameHover  = rgb(0x222730)
-	ColFrameActive = rgb(0x2a303a)
-	ColBorder      = rgb(0x242930)
-	ColBorderHi    = rgb(0x333a45)
-
-	ColText  = rgb(0xe2e5e9)
-	ColDim   = rgb(0x8d95a1)
-	ColFaint = rgb(0x5b626e)
-
-	ColAccent     = rgb(0x4c8dff)
-	ColAccentHi   = rgb(0x6aa2ff)
-	ColAccentSoft = alpha(rgb(0x4c8dff), 0x2c)
-	ColSelected   = alpha(rgb(0x4c8dff), 0x24)
-
-	ColGreen  = rgb(0x3dd68c)
-	ColAmber  = rgb(0xf2b544)
-	ColRed    = rgb(0xff5f5f)
-	ColViolet = rgb(0xb08cff)
-	ColCyan   = rgb(0x5cc8e6)
-	ColCode   = rgb(0xe8b77a)
-
-	ColAddBg  = rgb(0x15291f)
-	ColAddFg  = rgb(0x7fe0a7)
-	ColDelBg  = rgb(0x2e171b)
-	ColDelFg  = rgb(0xff8e8e)
-	ColHunkFg = rgb(0x7aa7ff)
+	P    = &T3Light
+	SP   = &T3LightSidebar
+	CP   = &T3LightComposer
+	dark bool
 )
+
+// SetDark switches to T3's dark theme, or back to light. T3 follows the
+// system's setting, and so does tern.
+func SetDark(d bool) {
+	dark = d
+	P, SP, CP = &T3Light, &T3LightSidebar, &T3LightComposer
+	if d {
+		P, SP, CP = &T3Dark, &T3DarkSidebar, &T3DarkComposer
+	}
+	legacyColors()
+}
+
+// IsDark reports whether the dark theme is on.
+func IsDark() bool { return dark }
+
+func init() { SetDark(false) }
+
+// The colours tern's screens were first drawn with, before the port to T3's
+// design. Until a screen is ported they map onto T3's tokens, so the whole
+// app already follows its light and dark themes.
+var (
+	ColWindow, ColPanel, ColPanelHi, ColFrame, ColFrameHover, ColFrameActive color.NRGBA
+	ColBorder, ColBorderHi, ColText, ColDim, ColFaint                        color.NRGBA
+	ColAccent, ColAccentHi, ColAccentSoft, ColSelected                       color.NRGBA
+	ColGreen, ColAmber, ColRed, ColViolet, ColCyan, ColCode                  color.NRGBA
+	ColAddBg, ColAddFg, ColDelBg, ColDelFg, ColHunkFg                        color.NRGBA
+)
+
+func legacyColors() {
+	ColWindow, ColPanel, ColPanelHi = P.Background, SP.Sidebar, P.Background
+	ColFrame, ColFrameHover, ColFrameActive = P.Card, P.Accent, P.Accent
+	ColBorder, ColBorderHi = P.Border, P.Input
+	ColText, ColDim, ColFaint = P.Foreground, P.MutedForeground, alpha(P.MutedForeground, 0xb3)
+	ColAccent, ColAccentHi = P.Primary, P.Primary
+	ColAccentSoft, ColSelected = alpha(P.Primary, 0x2c), alpha(P.Primary, 0x24)
+	ColGreen, ColAmber, ColRed = P.Success, P.Warning, P.Error
+	ColViolet, ColCyan, ColCode = Tailwind["violet-500"], P.Info, P.CodeForeground
+	ColAddBg, ColAddFg = alpha(P.DiffAddition, 0x26), P.DiffAdditionForeground
+	ColDelBg, ColDelFg = alpha(P.DiffDeletion, 0x26), P.DiffDeletionForeground
+	ColHunkFg = P.Info
+	chipColors()
+}
 
 // Type scale, in sp.
 const (
@@ -104,23 +118,7 @@ func (th *Theme) dragArea(gtx C, size image.Point) {
 }
 
 func NewTheme() *Theme {
-	var faces []font.FontFace
-	entries, _ := fontFiles.ReadDir("fonts")
-	for _, e := range entries {
-		data, err := fontFiles.ReadFile("fonts/" + e.Name())
-		if err != nil {
-			panic(err)
-		}
-		parsed, err := opentype.ParseCollection(data)
-		if err != nil {
-			panic(err)
-		}
-		faces = append(faces, parsed...)
-	}
 	// The embedded faces come first; the system's fill in the scripts they
 	// don't cover, like Chinese and Japanese.
-	return &Theme{Shaper: text.NewShaper(text.WithCollection(faces))}
+	return &Theme{Shaper: text.NewShaper(text.WithCollection(faces()))}
 }
-
-func UI(w font.Weight) font.Font { return font.Font{Typeface: "Inter", Weight: w} }
-func Mono() font.Font            { return font.Font{Typeface: "JetBrains Mono"} }

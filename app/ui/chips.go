@@ -211,11 +211,14 @@ type textRegions interface {
 // Chip colours, shaped like T3's context chips (the accent at 11% for the
 // fill, mixed 34% into the border and 22% into the text) but in the app's
 // blue: T3's image red read as an error.
-var (
+var chipAccent, chipBorder, chipText color.NRGBA
+
+// chipColors derives them from the theme; SetDark calls it.
+func chipColors() {
 	chipAccent = ColAccent
 	chipBorder = mix(chipAccent, ColBorderHi, 0.34)
-	chipText   = mix(chipAccent, ColText, 0.22)
-)
+	chipText = mix(chipAccent, ColText, 0.22)
+}
 
 func mix(a, b color.NRGBA, t float32) color.NRGBA {
 	f := func(x, y uint8) uint8 { return uint8(float32(x)*t + float32(y)*(1-t) + 0.5) }

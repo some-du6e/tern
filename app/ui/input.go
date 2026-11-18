@@ -226,7 +226,7 @@ func (th *Theme) Click(id string, w W) W {
 		dims := w(gtx)
 		call := m.Stop()
 		if c.Hovered() {
-			fill(gtx, alpha(rgb(0xffffff), 0x0a), image.Rectangle{Max: dims.Size}, dp(gtx, 4))
+			fill(gtx, P.Accent, image.Rectangle{Max: dims.Size}, dp(gtx, 4))
 		}
 		call.Add(gtx.Ops)
 		th.hit(gtx, id, dims.Size)

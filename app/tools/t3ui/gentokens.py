@@ -1,18 +1,22 @@
 """gentokens.py writes ui/tokens_gen.go from docs/ui/tokens.json, the design
 tokens measured off T3 Code's own web UI (see docs/ui/01-tokens.md).
 
-    python3 tools/t3ui/gentokens.py ../docs/ui/tokens.json > ui/tokens_gen.go
+    python3 tools/t3ui/gentokens.py ../docs/ui/tokens.json ../docs/ui/tokens.extra.json | gofmt > ui/tokens_gen.go
 
 Every custom property whose value is a colour in both themes becomes a
 Palette field named after it (--sidebar-row-hover is SidebarRowHover), and
 every length becomes a dp value in Metrics. Tailwind's palette (--color-*)
-goes in a map, for the components that use its colours directly.
+goes in a map, for the components that use its colours directly. Scopes
+that restyle a subtree (the sidebar's [data-app-sidebar], the composer's
+[data-slot=composer-shell]) become whole palettes too: the theme's, with the
+scope's overrides.
 """
 import json
 import re
 import sys
 
 doc = json.load(open(sys.argv[1]))
+extra = json.load(open(sys.argv[2])) if len(sys.argv) > 2 else {}
 themes = doc["themes"]
 light, dark = themes["light"], themes["dark"]
 
@@ -99,6 +103,22 @@ for title, idx in (("T3Light", 2), ("T3Dark", 3)):
     out.append(f"var {title} = Palette{{")
     out += [f"\t{p[0]}: {p[idx]}," for p in palette]
     out += ["}", ""]
+SCOPES = {"[data-app-sidebar]": "Sidebar", "[data-slot=composer-shell]": "Composer"}
+fields = {n: i for i, (_, n, _, _, _) in enumerate(palette)}
+for sel, suffix in SCOPES.items():
+    scope = extra.get("scopes", {}).get(sel)
+    if not scope:
+        continue
+    for title, theme, idx in (("T3Light", "light", 2), ("T3Dark", "dark", 3)):
+        over = {}
+        for n, e in scope.get(theme, {}).items():
+            c = color(value(e))
+            if n in fields and c and c != palette[fields[n]][idx]:
+                over[n] = c
+        out.append(f"// {title}{suffix} is {title} inside {sel}, which restyles it.")
+        out.append(f"var {title}{suffix} = Palette{{")
+        out += [f"\t{p[0]}: {over.get(p[1], p[idx])}," for p in palette]
+        out += ["}", ""]
 out += [
     "// Metrics is T3's lengths in dp (one CSS pixel is one dp).",
     "var Metrics = struct {",
