@@ -237,11 +237,14 @@ func TestListRevealsOpenRow(t *testing.T) {
 	img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, s) })
 	wantPixel(t, img, image.Pt(20, 110), draft, "the first card, at the top")
 	// Cards are 64 apart plus the 1dp gap, so the 15th ends at 974 in the
-	// list, 218 past its 756: scrolled that far, it sits at the bottom.
+	// list, 218 past its 756: scrolled that far, it sits at the bottom,
+	// 792..856 in the window, its surface 2dp in. (The list's last 12dp
+	// fade, as there's more below.)
 	s.Sidebar.Open = "e/14"
 	img = drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, s) })
-	wantPixel(t, img, image.Pt(20, 800), active, "the open card, scrolled in")
-	wantPixel(t, img, image.Pt(20, 852), active, "its bottom, at the list's")
+	wantPixel(t, img, image.Pt(20, 793), SP.Sidebar, "above the open card")
+	wantPixel(t, img, image.Pt(20, 796), active, "the open card, scrolled in")
+	wantPixel(t, img, image.Pt(200, 840), active, "its lower half")
 	// A new scope starts from the top again.
 	s.Sidebar.ScopeKey = "e/project"
 	img = drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, s) })
