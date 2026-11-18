@@ -148,6 +148,30 @@ func TestCardDrawn(t *testing.T) {
 	}
 }
 
+// The keyboard's ring on a row is T3's inset box shadow (§3.6): inside the
+// row's transparent 1dp border, 1dp of --background, then 2dp of --ring.
+// Opened from the keyboard, the card focuses its first control, here Open
+// in (the started thread's machine row isn't one), its middle at y 121.
+func TestCardFocusRing(t *testing.T) {
+	s := cardScene()
+	l := newLive(image.Pt(1440, 900), nil)
+	l.draw = func(gtx C) { l.th.Desktop(gtx, s) }
+	l.frame(0)
+	l.th.in.keyFocus = true
+	l.th.FocusCard()
+	for range 3 {
+		l.frame(0)
+	}
+	img := l.pixels(t)
+	fill := over(alpha(P.Popover, 0xd5), P.Background)
+	x := 1148 + 1 + 8
+	wantPixel(t, img, image.Pt(x, 121), fill, "the row's border, clear")
+	wantPixel(t, img, image.Pt(x+1, 121), P.Background, "the --background band")
+	wantPixel(t, img, image.Pt(x+2, 121), P.Ring, "the ring")
+	wantPixel(t, img, image.Pt(x+3, 121), P.Ring, "the ring's second dp")
+	wantPixel(t, img, image.Pt(x+4, 121), fill, "inside the ring")
+}
+
 // Hovering a select row fills it, stacks a second fill on the hovered
 // half and shows the 1×16 hairline before its chevron (§3.6).
 func TestSelectRowHalves(t *testing.T) {

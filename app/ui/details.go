@@ -334,11 +334,13 @@ func (k corners) inset(d int) corners {
 	return corners{max(0, k.nw-d), max(0, k.ne-d), max(0, k.se-d), max(0, k.sw-d)}
 }
 
-// focusRing is a control's keyboard focus: inside its border 1dp of
-// --background, then 2dp of --ring, over under (the colour it sits on).
+// focusRing is a control's keyboard focus, over under (the colour it sits
+// on): inset box shadows start inside the 1dp transparent border, so 1dp
+// of --background, then 2dp of --ring.
 func focusRing(gtx C, r image.Rectangle, k corners, under color.NRGBA) {
-	one, three := dp(gtx, 1), dp(gtx, 3)
-	k.fill(gtx, P.Background, r)
+	b := max(1, dp(gtx, 1))
+	one, three := b+dp(gtx, 1), b+dp(gtx, 3)
+	k.inset(b).fill(gtx, P.Background, r.Inset(b))
 	k.inset(one).fill(gtx, P.Ring, r.Inset(one))
 	k.inset(three).fill(gtx, under, r.Inset(three))
 }
