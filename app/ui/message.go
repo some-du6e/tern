@@ -66,7 +66,8 @@ func (p Picture) cover(gtx C, r image.Rectangle) {
 }
 
 // reveal is the opacity of something that fades in over 200ms while on is
-// set and out when it isn't (transition-opacity duration-200).
+// set and out when it isn't (transition-opacity duration-200). Like a CSS
+// transition, it starts where it should be the first time it's drawn.
 func (th *Theme) reveal(gtx C, id string, on bool) float32 {
 	if th.tl.reveals == nil {
 		th.tl.reveals = map[string]revealState{}
@@ -77,7 +78,7 @@ func (th *Theme) reveal(gtx C, id string, on bool) float32 {
 		if ok {
 			from = s.at(gtx.Now)
 		} else if on {
-			from = 0
+			from = 1
 		}
 		s = revealState{on: on, since: gtx.Now, from: from}
 		th.tl.reveals[id] = s
@@ -128,11 +129,13 @@ func (th *Theme) userRow(gtx C, r *TimelineRow, hot bool) int {
 	maxW := w * 80 / 100
 	gap := dp(gtx, 4)
 	y := 0
-	place := func(rec recording, right int) {
-		off := op.Offset(image.Pt(w-right-rec.Size.X, y)).Push(gtx.Ops)
+	place := func(rec recording, right int) image.Rectangle {
+		at := image.Pt(w-right-rec.Size.X, y)
+		off := op.Offset(at).Push(gtx.Ops)
 		rec.call.Add(gtx.Ops)
 		off.Pop()
 		y += rec.Size.Y + gap
+		return image.Rectangle{Min: at, Max: at.Add(rec.Size)}
 	}
 	if m.SentByT3 {
 		place(th.recorded(gtx, func(gtx C) D {
@@ -153,16 +156,21 @@ func (th *Theme) userRow(gtx C, r *TimelineRow, hot bool) int {
 		}), dp(gtx, 4))
 	}
 	words := m.Text != ""
+	var body image.Rectangle // the bubble, or the media alone
 	if len(m.Pictures) > 0 {
-		place(th.recorded(within(gtx, maxW), func(gtx C) D { return th.media(gtx, m, words) }), 0)
+		body = place(th.recorded(within(gtx, maxW), func(gtx C) D { return th.media(gtx, m, words) }), 0)
 	}
 	if words {
-		place(th.recorded(within(gtx, maxW), func(gtx C) D { return th.bubble(gtx, r, len(m.Pictures) > 0) }), 0)
+		body = place(th.recorded(within(gtx, maxW), func(gtx C) D { return th.bubble(gtx, r, len(m.Pictures) > 0) }), 0)
 	}
 	if m.Status != "" {
 		place(th.recorded(gtx, func(gtx C) D { return th.statusPill(gtx, m.Status) }), dp(gtx, 4))
 	}
 	// The actions: the time, then copy; they fade in with the row's hover.
+	// A message another of yours follows floats them 8dp left of the
+	// bubble, so the two sit 4dp apart; a lane under 37rem keeps them on
+	// their own line (TimelineUserMessageRow.tsx:788-790, 1038-1056).
+	float := m.GroupedNext && w >= dp(gtx, 592)
 	a := th.reveal(gtx, r.ID+":actions", hot)
 	actions := th.recorded(gtx, func(gtx C) D {
 		cid := "copy:" + r.ID
@@ -175,12 +183,19 @@ func (th *Theme) userRow(gtx C, r *TimelineRow, hot bool) int {
 			layout.Rigid(th.messageCopy(cid, P.Background)),
 		)
 	})
+	at := image.Pt(w-dp(gtx, 4)-actions.Size.X, y)
+	if float {
+		at = image.Pt(body.Min.X-dp(gtx, 8)-actions.Size.X, body.Min.Y+(body.Dy()-actions.Size.Y)/2)
+	}
 	if a > 0 {
-		off := op.Offset(image.Pt(w-dp(gtx, 4)-actions.Size.X, y)).Push(gtx.Ops)
+		off := op.Offset(at).Push(gtx.Ops)
 		fade := paint.PushOpacity(gtx.Ops, a)
 		actions.call.Add(gtx.Ops)
 		fade.Pop()
 		off.Pop()
+	}
+	if float {
+		return y - gap
 	}
 	return y + dp(gtx, 24)
 }

@@ -26,6 +26,7 @@ func TestTimelineRowHeights(t *testing.T) {
 		want float32
 	}{
 		{"user message, one line", TimelineRow{ID: "u", Kind: RowUser, Message: &Message{ID: "u", Text: "Hello"}}, 90.75},
+		{"user message another follows", TimelineRow{ID: "g", Kind: RowUser, Message: &Message{ID: "g", Text: "Hello", GroupedNext: true}}, 46.75 + 4},
 		{"assistant message, its meta inline", TimelineRow{ID: "a", Kind: RowAssistant, Message: &Message{ID: "a", Text: "Done.", Meta: true, Copy: true}}, 2 + 22.75 + 6 + 24 + 2 + 16},
 		{"turn fold", TimelineRow{ID: "f", Kind: RowTurnFold, Group: "run", Label: "Worked for 2m 14s"}, 41.75},
 		{"work row, standalone", TimelineRow{ID: "w", Kind: RowWork, Entries: three[:1]}, 36},
@@ -69,6 +70,21 @@ func TestUserBubble(t *testing.T) {
 		wantPixel(t, img, image.Pt(x, 92), surface, "the bubble's last row of pixels")
 		wantPixel(t, img, image.Pt(x, 96), P.Background, "under the bubble")
 		wantPixel(t, img, image.Pt(2*400, 2*20), P.Background, "left of the bubble")
+	}
+}
+
+// A message another of yours follows tightens its bottom-right corner to
+// 6dp (rounded-br-md), and floats its actions beside the bubble (§5.2.10).
+func TestGroupedUserBubble(t *testing.T) {
+	th := NewTheme()
+	corner := image.Pt(2*736-5, 88) // 5px in from the bubble's bottom-right corner, at 2x
+	for _, grouped := range []bool{false, true} {
+		img := rowDrawn(t, th, TimelineRow{ID: fmt.Sprint("g", grouped), Kind: RowUser, Message: &Message{ID: "g", Text: "Hello", GroupedNext: grouped}}, image.Pt(736, 100), 2)
+		want, what := P.Background, "outside the bubble's 16dp corner"
+		if grouped {
+			want, what = rgb(0xebebed), "inside the bubble's 6dp corner"
+		}
+		wantPixel(t, img, corner, want, what)
 	}
 }
 
