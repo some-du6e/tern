@@ -11,7 +11,6 @@ import (
 	"gioui.org/io/key"
 	"gioui.org/op"
 	"gioui.org/op/clip"
-	"gioui.org/op/paint"
 	"gioui.org/unit"
 	"gioui.org/widget"
 )
@@ -202,7 +201,7 @@ func (th *Theme) snapChips(ed *widget.Editor) {
 	th.in.caret = [2]int{ns, ne}
 }
 
-// textRegions is what drawChips needs from an editor or a selectable.
+// textRegions is what drawChips needs from the editor.
 type textRegions interface {
 	Text() string
 	Regions(start, end int, regions []widget.Region) []widget.Region
@@ -301,51 +300,4 @@ func editorScroll(ed *widget.Editor, size image.Point) image.Point {
 	}
 	cc := ed.CaretCoords()
 	return image.Pt(x-int(cc.X+0.5), rg.Bounds.Min.Y+rg.Baseline-int(cc.Y+0.5))
-}
-
-// chipText lays out a sent message's text with its pictures as chips. It's
-// selectable, which the chips need for their positions.
-func (th *Theme) chipText(gtx C, id, s string, labels []string) D {
-	d, sel := th.selectableSel(gtx, id, s, UI(font.Normal), SizeBody, ColText, 1.42)
-	th.drawChips(gtx, sel, d.Size, image.Point{}, ColFrameHover, float32(SizeBody), func(n int) string {
-		if n <= len(labels) {
-			return labels[n-1]
-		}
-		return ImageLabel(n)
-	})
-	return d
-}
-
-// selectable lays out s as text the user can select and copy, kept per id.
-func (th *Theme) selectable(gtx C, id, s string, f font.Font, size unit.Sp, c color.NRGBA, lineH float32) D {
-	d, _ := th.selectableSel(gtx, id, s, f, size, c, lineH)
-	return d
-}
-
-func (th *Theme) selectableSel(gtx C, id, s string, f font.Font, size unit.Sp, c color.NRGBA, lineH float32) (D, *widget.Selectable) {
-	if th.in.selectables == nil {
-		th.in.selectables = map[string]*widget.Selectable{}
-	}
-	sel := th.in.selectables[id]
-	if sel == nil {
-		sel = &widget.Selectable{LineHeightScale: lineH}
-		th.in.selectables[id] = sel
-	}
-	if sel.Text() != s {
-		sel.SetText(s)
-	}
-	col := func(c color.NRGBA) op.CallOp {
-		m := op.Record(gtx.Ops)
-		paint.ColorOp{Color: c}.Add(gtx.Ops)
-		return m.Stop()
-	}
-	return sel.Layout(gtx, th.Shaper, f, size, col(c), col(alpha(ColAccent, 0x60))), sel
-}
-
-// plural is "1 image", "2 images".
-func plural(n int, what string) string {
-	if n == 1 {
-		return "1 " + what
-	}
-	return strconv.Itoa(n) + " " + what + "s"
 }

@@ -78,6 +78,9 @@ type Button struct {
 	// On is the surface under the button, for its translucent colours;
 	// zero means the window background.
 	On color.NRGBA
+	// IconSize overrides the size's icon, as a size-3 class on the icon
+	// does; 0 keeps it.
+	IconSize float32
 }
 
 // buttonColors is a variant's fill, text, border and icon at rest and on
@@ -169,7 +172,11 @@ func (th *Theme) T3Button(id string, b Button) W {
 					return D{}
 				}
 				// Icons sit 2dp into the padding on both sides.
-				return pad(0, -2, 0, -2).Layout(gtx, LucideW(b.Icon, icon, sz.icon))
+				size := sz.icon
+				if b.IconSize > 0 {
+					size = b.IconSize
+				}
+				return pad(0, -2, 0, -2).Layout(gtx, LucideW(b.Icon, icon, size))
 			}),
 			layout.Rigid(func(gtx C) D {
 				if b.Label == "" || b.Icon == "" {

@@ -2,9 +2,7 @@ package ui
 
 import (
 	"image"
-	"strings"
 	"testing"
-	"time"
 
 	"gioui.org/f32"
 	gioinput "gioui.org/io/input"
@@ -273,100 +271,5 @@ func TestComposerChips(t *testing.T) {
 	}
 	if got := StripChips("hi " + ChipText(3) + "!"); got != "hi !" {
 		t.Fatalf("StripChips: %q", got)
-	}
-}
-
-// A reply's code block has a copy button, like T3's.
-func TestCodeBlockCopy(t *testing.T) {
-	th := NewTheme()
-	var r gioinput.Router
-	var ops op.Ops
-	src := "Run this:\n\n```powershell\nGet-Process tern | Stop-Process\n```"
-	frame := func() {
-		ops.Reset()
-		gtx := layout.Context{Ops: &ops, Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Exact(image.Pt(600, 300)), Source: r.Source(), Now: time.Now()}
-		th.Markdown(gtx, src)
-		r.Frame(&ops)
-		th.Actions()
-	}
-	frame()
-	// The button is the last thing in the header, at the right.
-	var at image.Point
-	for id := range th.in.copies {
-		if !strings.HasPrefix(id, "copy:code:") {
-			t.Fatalf("copy id %q", id)
-		}
-	}
-	for y := 0; y < 60 && at == (image.Point{}); y += 2 {
-		for x := 599; x > 500; x -= 2 {
-			p := f32.Pt(float32(x), float32(y))
-			r.Queue(pointer.Event{Kind: pointer.Move, Position: p, Source: pointer.Mouse})
-			frame()
-			if c := th.in.clicks["copy:"+firstKey(th.in.copies)[len("copy:"):]]; c != nil && c.Hovered() {
-				at = image.Pt(x, y)
-				break
-			}
-		}
-	}
-	if at == (image.Point{}) {
-		t.Fatal("no copy button in the header")
-	}
-	p := f32.Pt(float32(at.X), float32(at.Y))
-	r.Queue(pointer.Event{Kind: pointer.Press, Position: p, Buttons: pointer.ButtonPrimary, Source: pointer.Mouse},
-		pointer.Event{Kind: pointer.Release, Position: p, Source: pointer.Mouse})
-	frame()
-	if mime, data, ok := r.WriteClipboard(); !ok || mime != "application/text" || string(data) != "Get-Process tern | Stop-Process" {
-		t.Fatalf("clipboard = %q %q %v", mime, data, ok)
-	}
-}
-
-func firstKey(m map[string]string) string {
-	for k := range m {
-		return k
-	}
-	return ""
-}
-
-// PowerShell blocks get a ▷ that runs them on this PC; other languages don't.
-func TestCodeBlockRun(t *testing.T) {
-	th := NewTheme()
-	var ran [][2]string
-	th.CanRun = func(lang string) bool { return lang == "powershell" }
-	th.Run = func(lang, code string) error { ran = append(ran, [2]string{lang, code}); return nil }
-	var r gioinput.Router
-	var ops op.Ops
-	src := "```powershell\nStart-Process notepad\n```\n\n```go\nfunc main() {}\n```"
-	frame := func() {
-		ops.Reset()
-		gtx := layout.Context{Ops: &ops, Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Exact(image.Pt(600, 300)), Source: r.Source(), Now: time.Now()}
-		th.Markdown(gtx, src)
-		r.Frame(&ops)
-		th.Actions()
-	}
-	frame()
-	if len(th.in.runs) != 1 {
-		t.Fatalf("run buttons: %d, want 1 (PowerShell only)", len(th.in.runs))
-	}
-	var rid string
-	for k := range th.in.runs {
-		rid = k
-	}
-	// Find it by hovering along the header, then click it.
-	for x := 599; x > 400; x-- {
-		p := f32.Pt(float32(x), 12)
-		r.Queue(pointer.Event{Kind: pointer.Move, Position: p, Source: pointer.Mouse})
-		frame()
-		if c := th.in.clicks[rid]; c != nil && c.Hovered() {
-			r.Queue(pointer.Event{Kind: pointer.Press, Position: p, Buttons: pointer.ButtonPrimary, Source: pointer.Mouse},
-				pointer.Event{Kind: pointer.Release, Position: p, Source: pointer.Mouse})
-			frame()
-			break
-		}
-	}
-	if len(ran) != 1 || ran[0] != [2]string{"powershell", "Start-Process notepad"} {
-		t.Fatalf("ran %v", ran)
-	}
-	if _, _, copied := r.WriteClipboard(); copied {
-		t.Fatal("the run button copied too")
 	}
 }

@@ -53,26 +53,24 @@ type input struct {
 	tipSince   map[string]time.Time // when the pointer came to rest on each tooltip's target
 	// The shell: whether the details card fits inline (from the last
 	// layout), and the sidebar rail's drag.
-	cardFits    bool
-	menuHover   bool // the menu row being drawn is under the pointer
-	railDrag    bool
-	railW       float32
-	railEdge    handle
-	clicks      map[string]*gesture.Click
-	context     map[string]*int // right-click targets, by the same ids
-	ptr         int             // tag for the window-wide pointer watch
-	ctxAt       image.Point     // where the last right-click landed, in window coordinates
-	editors     map[string]*widget.Editor
-	lists       map[string]*layout.List
-	focus       string
-	caret       [2]int                        // the composer's selection last frame, to step over chips
-	selectables map[string]*widget.Selectable // selectable text: sent messages, code blocks
-	copies      map[string]string             // copy buttons' text, by click id
-	copied      map[string]time.Time          // when each was last clicked, for its check
-	runs        map[string][2]string          // run buttons' language and code, by click id
-	runFailed   map[string]bool               // a run that couldn't start, for its ✕
-	paste       string                        // an editor to paste text into next frame
-	actions     []Action
+	cardFits  bool
+	menuHover bool // the menu row being drawn is under the pointer
+	railDrag  bool
+	railW     float32
+	railEdge  handle
+	clicks    map[string]*gesture.Click
+	context   map[string]*int // right-click targets, by the same ids
+	ptr       int             // tag for the window-wide pointer watch
+	ctxAt     image.Point     // where the last right-click landed, in window coordinates
+	editors   map[string]*widget.Editor
+	lists     map[string]*layout.List
+	focus     string
+	caret     [2]int               // the composer's selection last frame, to step over chips
+	copies    map[string]string    // copy buttons' text, by click id
+	copied    map[string]time.Time // when each was last clicked, for its check
+	runs      map[string]string    // run buttons' commands, by click id
+	paste     string               // an editor to paste text into next frame
+	actions   []Action
 }
 
 // Action is one thing the user did this frame: ID is the target, Kind is
@@ -153,16 +151,8 @@ func (th *Theme) events(gtx C, id string) (*gesture.Click, *int) {
 			break
 		}
 		if e.Kind == gesture.KindClick {
-			if r, ok := th.in.runs[id]; ok {
-				err := th.Run(r[0], r[1])
-				if th.in.copied == nil {
-					th.in.copied = map[string]time.Time{}
-				}
-				if th.in.runFailed == nil {
-					th.in.runFailed = map[string]bool{}
-				}
-				th.in.copied[id], th.in.runFailed[id] = gtx.Now, err != nil
-				gtx.Execute(op.InvalidateCmd{})
+			if cmd, ok := th.in.runs[id]; ok {
+				th.push(Action{ID: "terminal.run", Kind: "click", Text: cmd})
 				continue
 			}
 			if text, ok := th.in.copies[id]; ok {
