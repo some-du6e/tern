@@ -50,7 +50,7 @@ func wantPixel(t *testing.T, img *image.RGBA, p image.Point, c color.NRGBA, what
 
 // nearPixel reports a pixel that is c, give or take a step.
 func nearPixel(got color.RGBA, c color.NRGBA) bool {
-	near := func(a, b uint8) bool { return a-b < 3 || b-a < 3 }
+	near := func(a, b uint8) bool { d := int(a) - int(b); return d < 3 && d > -3 }
 	return near(got.R, c.R) && near(got.G, c.G) && near(got.B, c.B)
 }
 
