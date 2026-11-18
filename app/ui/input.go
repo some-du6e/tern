@@ -77,12 +77,11 @@ type input struct {
 	// The sidebar's list: its keyboard tree from the last layout, each
 	// row's focus tag, the row to focus once it's laid out, and whether
 	// focus came from the keyboard (T3 rings rows on :focus-visible only);
-	// the list's top in the window, its height and how far it's scrolled.
+	// the list's height and how far it's scrolled.
 	nav         listNav
 	rowTags     map[string]*int
 	focusRow    string
 	kbdFocus    bool
-	listTop     int
 	listView    int
 	listScroll  int
 	resultHover int  // the search result under the pointer, plus one

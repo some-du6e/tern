@@ -433,7 +433,7 @@ func (th *Theme) threadList(gtx C, s *Scene, top int) {
 	}
 	tops[len(items)] = y - gap
 	th.in.nav = listNav{items: items, tops: tops}
-	th.in.listTop, th.in.listView = top, size.Y
+	th.in.listView = size.Y
 	l := th.List("sidebar", false)
 	scroll := 0
 	if p := l.Position; p.First < len(items) {
