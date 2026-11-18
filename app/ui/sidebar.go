@@ -2025,14 +2025,18 @@ func (th *Theme) hoverCard(gtx C, s *Scene, r *ThreadRow, rect image.Rectangle, 
 		open = hot && !th.in.tipBusy && left <= 0
 		instant = (open && th.in.cardInstant) || (!open && th.in.cardRow != "" && th.in.cardRow != r.ID)
 	}
-	if !open && th.in.fades[key] == nil {
-		return
-	}
-	var k float32
-	if instant {
+	if th.in.fades[key] == nil {
+		if !open {
+			return
+		}
+		// A card starts closed, so its first opening plays too.
 		if th.in.fades == nil {
 			th.in.fades = map[string]*fade{}
 		}
+		th.in.fades[key] = &fade{}
+	}
+	var k float32
+	if instant {
 		th.in.fades[key] = &fade{on: open, from: level(open)}
 		k = level(open)
 	} else {
