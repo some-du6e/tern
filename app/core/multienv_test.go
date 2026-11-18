@@ -62,8 +62,8 @@ func TestInboxMixesEnvironments(t *testing.T) {
 	if s.Active[1].ID != "mac/same" || s.Active[2].ID != "swiss/same" {
 		t.Fatalf("refs = %q, %q", s.Active[1].ID, s.Active[2].ID)
 	}
-	if s.Run != nil {
-		t.Fatal("nothing is open, so there should be no details panel")
+	if s.Header == nil || s.Header.Server || s.Card == nil || s.Card.Run.Locked {
+		t.Fatal("nothing is open, so the header and card are a new thread's")
 	}
 }
 
@@ -71,8 +71,8 @@ func TestOpenThreadOnEitherMachine(t *testing.T) {
 	a := testApp(t)
 	a.openThread("mac/same")
 	s := a.build(time.Now())
-	if s.Title != "Same id on the Mac" || s.Project != "horizon" {
-		t.Fatalf("open = %q in %q", s.Title, s.Project)
+	if s.Title != "Same id on the Mac" || s.Header.Project != "horizon" {
+		t.Fatalf("open = %q in %q", s.Title, s.Header.Project)
 	}
 	if !s.Active[1].Selected || s.Active[2].Selected {
 		t.Fatal("only the Mac's thread should be selected")
@@ -83,10 +83,10 @@ func TestDraftProjectMenu(t *testing.T) {
 	a := testApp(t)
 	a.newDraft()
 	s := a.build(time.Now())
-	if !s.PickProject || !strings.HasPrefix(s.Project, "goog") {
-		t.Fatalf("draft in %q (pick=%v)", s.Project, s.PickProject)
+	if s.Header.Project != "goog" || s.Hero != "goog" {
+		t.Fatalf("draft in %q (hero %q)", s.Header.Project, s.Hero)
 	}
-	a.handle(ui.NewTheme(), ui.Action{ID: "project", Kind: "click"})
+	a.handle(ui.NewTheme(), ui.Action{ID: "project.hero", Kind: "click"})
 	s = a.build(time.Now())
 	if s.Projects == nil || len(s.Projects.Groups) != 2 {
 		t.Fatalf("project menu = %+v", s.Projects)
@@ -97,8 +97,8 @@ func TestDraftProjectMenu(t *testing.T) {
 	}
 	a.handle(ui.NewTheme(), ui.Action{ID: "project:1:0", Kind: "click"})
 	s = a.build(time.Now())
-	if s.Projects != nil || s.Project != "horizon  ·  MacBook" || a.draftEnv != "mac" {
-		t.Fatalf("after pick: %q env=%q menu=%v", s.Project, a.draftEnv, s.Projects != nil)
+	if s.Projects != nil || s.Header.Project != "horizon" || s.Card.Run.Label != "MacBook" || a.draftEnv != "mac" {
+		t.Fatalf("after pick: %q on %q env=%q menu=%v", s.Header.Project, s.Card.Run.Label, a.draftEnv, s.Projects != nil)
 	}
 }
 
@@ -160,8 +160,8 @@ func TestDetailsPopover(t *testing.T) {
 	a.openThread("swiss/t1")
 	a.handle(ui.NewTheme(), ui.Action{ID: "details", Kind: "click"})
 	s := a.build(time.Now())
-	if !s.Details || s.Run == nil || s.Run.Machine != "swiss" {
-		t.Fatalf("details = %v, run = %+v", s.Details, s.Run)
+	if !s.Details || s.Card == nil || s.Card.Run.Label != "swiss" {
+		t.Fatalf("details = %v, card = %+v", s.Details, s.Card)
 	}
 	a.handle(ui.NewTheme(), ui.Action{ID: "menus.close", Kind: "click"})
 	if s = a.build(time.Now()); s.Details {
@@ -177,7 +177,7 @@ func TestNothingOpenIsANewThread(t *testing.T) {
 	if a.draft != "p1" || a.draftEnv != "swiss" || strings.Contains(s.Empty, "Pick a thread") {
 		t.Fatalf("draft %q on %q, empty %q", a.draft, a.draftEnv, s.Empty)
 	}
-	if !s.PickProject {
+	if s.Hero != "goog" {
 		t.Fatal("the draft should offer the project picker")
 	}
 }

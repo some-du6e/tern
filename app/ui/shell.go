@@ -73,7 +73,7 @@ func (th *Theme) Desktop(gtx C, s *Scene) D {
 		g.Constraints = layout.Exact(image.Pt(w, size.Y))
 		draw(g)
 	}
-	at(sw, colW, func(gtx C) { th.chatColumn(gtx, s, sw == 0, rp > 0) })
+	at(sw, colW, func(gtx C) { th.chatColumn(gtx, s, sw, rp > 0, size.X < dp(gtx, 640)) })
 	if rp > 0 {
 		at(size.X-rp, rp, func(gtx C) { th.panelHost(gtx, s) })
 	}
@@ -91,22 +91,36 @@ func (th *Theme) Desktop(gtx C, s *Scene) D {
 	if s.Context != nil {
 		th.contextMenu(gtx, size, s)
 	}
-	if s.Live && (s.Picker != nil || s.Traits != nil || s.Access != nil || s.Account != nil || s.Machines != nil || s.Projects != nil || s.Context != nil || s.Details) {
+	if s.Live && menuOpen(s) {
 		// A click anywhere outside an open menu closes it. The menus are
 		// deferred, so they sit above this.
 		th.hit(gtx, "menus.close", size)
 	}
+	if s.Confirm != nil {
+		th.confirmDialog(gtx, s.Confirm, size)
+	}
 	return D{Size: size}
+}
+
+// menuOpen reports whether a menu or popover is up, for a click outside
+// or Escape to close.
+func menuOpen(s *Scene) bool {
+	card := s.Card != nil && (s.Card.Menu != nil || s.Card.Picker != nil)
+	return s.Picker != nil || s.Traits != nil || s.Access != nil || s.Account != nil || s.Machines != nil ||
+		s.Projects != nil || s.Context != nil || s.Details || card
 }
 
 // shellKeys handles T3's shell shortcuts (keybindings.ts): mod+B the
 // sidebar, mod+J the terminal, mod+Alt+B the right panel, mod+Shift+B the
-// thread details.
+// thread details, mod+O Open in editor; and Escape, which closes the open
+// menu or popover, or answers the dialog's Abort.
 func (th *Theme) shellKeys(gtx C, s *Scene) {
 	for {
 		ev, ok := gtx.Event(
 			key.Filter{Name: "B", Required: key.ModShortcut, Optional: key.ModShift | key.ModAlt},
 			key.Filter{Name: "J", Required: key.ModShortcut},
+			key.Filter{Name: "O", Required: key.ModShortcut},
+			key.Filter{Name: key.NameEscape},
 		)
 		if !ok {
 			return
@@ -116,11 +130,19 @@ func (th *Theme) shellKeys(gtx C, s *Scene) {
 			continue
 		}
 		switch {
-		case ke.Name == "J" && s.Run != nil:
+		case ke.Name == key.NameEscape && s.Confirm != nil:
+			th.push(Action{ID: "confirm:abort", Kind: "click"})
+		case ke.Name == key.NameEscape && menuOpen(s):
+			th.push(Action{ID: "menus.close", Kind: "click"})
+		case ke.Name == "J" && s.Card != nil:
 			th.push(Action{ID: "terminal.toggle", Kind: "click"})
-		case ke.Name == "B" && ke.Modifiers.Contain(key.ModShift) && s.Run != nil:
+		case ke.Name == "O" && s.Card != nil && s.Card.OpenIn != nil && !s.Card.OpenIn.Disabled:
+			th.push(Action{ID: "card.openin", Kind: "click"})
+		case ke.Name == "B" && ke.Modifiers.Contain(key.ModShift) && s.Card != nil:
+			// The keyboard's open shows the card's first row focused.
+			th.in.keyFocus = true
 			th.push(th.detailsAction())
-		case ke.Name == "B" && ke.Modifiers.Contain(key.ModAlt) && s.Run != nil:
+		case ke.Name == "B" && ke.Modifiers.Contain(key.ModAlt) && s.Card != nil:
 			th.push(Action{ID: "browser.toggle", Kind: "click"})
 		case ke.Name == "B" && !ke.Modifiers.Contain(key.ModShift|key.ModAlt):
 			th.push(Action{ID: "sidebar.toggle", Kind: "click"})
@@ -345,7 +367,7 @@ func (th *Theme) sidebarTrigger(gtx C, s *Scene, visible bool) {
 // details, terminal drawer, right panel. While the right panel is open the
 // details toggle moves into the chat header and Maximize joins them.
 func (th *Theme) titlebarControls(gtx C, s *Scene, size image.Point, panelOpen bool) {
-	none := s.Run == nil
+	none := s.Card == nil
 	type ctl struct {
 		id, tip string
 		b       titleButton
@@ -385,8 +407,9 @@ func (th *Theme) detailsShown(s *Scene) bool {
 // ---------- the chat column ----------
 
 // chatColumn is the header, the canvas below it and the terminal drawer at
-// the bottom.
-func (th *Theme) chatColumn(gtx C, s *Scene, collapsed, panelOpen bool) {
+// the bottom. x is the column's left edge in the window; narrow is a
+// window under 640dp.
+func (th *Theme) chatColumn(gtx C, s *Scene, x int, panelOpen, narrow bool) {
 	size := gtx.Constraints.Max
 	top := dp(gtx, topBarH)
 	drawer := 0
@@ -405,30 +428,42 @@ func (th *Theme) chatColumn(gtx C, s *Scene, collapsed, panelOpen bool) {
 		g.Constraints = layout.Exact(image.Pt(size.X, top))
 		fill(g, P.Background, image.Rectangle{Max: g.Constraints.Max}, 0)
 		th.dragArea(g, g.Constraints.Max)
-		left := float32(20)
-		if collapsed {
+		left, end := float32(20), float32(20)
+		switch {
+		case narrow:
+			left, end = 56, 12
+		case x == 0:
 			left = th.contentLeft()
 		}
-		// The header's own 20dp end padding plus its content's reserve for
-		// the fixed controls (pr-24), or pr-10 while the panel is open.
-		right := float32(20 + 96)
+		// The header's end padding plus its content's reserve for the
+		// fixed controls (pr-24), or pr-10 while the panel is open.
+		right := end + 96
 		if panelOpen {
-			right = 20 + 40
+			right = end + 40
 		}
-		if s.Title != "" || !s.Live {
-			pad(0, right, 0, left).Layout(g, func(gtx C) D { return th.threadHeader(gtx, s) })
+		if s.Header != nil {
+			at := image.Pt(x+dp(gtx, left), 0)
+			pad(0, right, 0, left).Layout(g, func(gtx C) D { return th.chatHeader(gtx, s, at, narrow) })
 		}
 		// Without room for the card, the details are a popover off the
-		// header's bottom right, 4dp in.
-		th.deferBelow(g, image.Pt(size.X-dp(gtx, 4+cardW), top), func(gtx C) D {
-			origin := f32.Pt(float32(dp(gtx, cardW)), 0)
-			return th.popIn(gtx, "details", !th.in.cardFits && s.Details && s.Run != nil, &origin, func(gtx C) D { return th.details(gtx, s) })
+		// header's bottom right: the card 8dp into a box whose right edge is
+		// 4dp in, at most the window less 104dp tall, its density judged
+		// against the canvas less 52.
+		open := !th.in.cardFits && s.Details && s.Card != nil
+		th.deferBelow(g, image.Pt(size.X-dp(gtx, 4+8+cardW), top+dp(gtx, 8)), func(gtx C) D {
+			return th.popover(gtx, "details", open, f32.Pt(float32(dp(gtx, cardW)), 0), func(gtx C) D {
+				if s.Card == nil {
+					return D{}
+				}
+				gtx.Constraints = layout.Constraints{Max: image.Pt(dp(gtx, cardW), max(0, size.Y-dp(gtx, 104)))}
+				return th.details(gtx, s, size.Y-top-drawer-dp(gtx, 52))
+			})
 		})
 		if panelOpen {
 			// The details toggle moves into the header while the panel is open.
 			defer op.Offset(image.Pt(size.X-dp(gtx, 12+controlSize), dp(gtx, 12))).Push(gtx.Ops).Pop()
 			th.titleButtonW(th.detailsID(), "Toggle thread details ("+ShortcutShift("B")+")",
-				titleButton{icon: "square-menu", pressed: th.detailsShown(s), disabled: s.Run == nil, tipAlign: 1})(gtx)
+				titleButton{icon: "square-menu", pressed: th.detailsShown(s), disabled: s.Card == nil, tipAlign: 1})(gtx)
 		}
 	}()
 	if drawer > 0 {
@@ -471,7 +506,7 @@ func (th *Theme) canvas(gtx C, s *Scene) {
 	size := gtx.Constraints.Max
 	fill(gtx, P.Background, image.Rectangle{Max: size}, 0)
 	cardX := size.X - dp(gtx, cardW+cardInset)
-	th.in.cardFits = s.Run != nil && cardX-dp(gtx, 32+lanePad) >= dp(gtx, laneMin) && size.Y-dp(gtx, 2*cardInset) >= dp(gtx, 160)
+	th.in.cardFits = s.Card != nil && cardX-dp(gtx, 32+lanePad) >= dp(gtx, laneMin) && size.Y-dp(gtx, 2*cardInset) >= dp(gtx, 160)
 	cardLeft := -1
 	if th.in.cardFits && s.DetailsCard {
 		cardLeft = cardX
@@ -507,11 +542,27 @@ func (th *Theme) canvas(gtx C, s *Scene) {
 		}()
 	}
 	if cardLeft >= 0 {
+		// Inline, the card's density is judged against its slot.
+		slot := size.Y - dp(gtx, 2*cardInset)
 		defer op.Offset(image.Pt(cardX, dp(gtx, cardInset))).Push(gtx.Ops).Pop()
 		g := gtx
-		g.Constraints = layout.Constraints{Max: image.Pt(dp(gtx, cardW), size.Y-dp(gtx, 2*cardInset))}
-		th.details(g, s)
+		g.Constraints = layout.Constraints{Max: image.Pt(dp(gtx, cardW), slot)}
+		th.details(g, s, slot)
 	}
+}
+
+// popover shows w while open the way T3's popovers come and go (popover.tsx):
+// over 150ms on its ease-in-out it fades and grows in from 98% about origin
+// (in w's box), and fades and shrinks back out the same way once closed.
+func (th *Theme) popover(gtx C, id string, open bool, origin f32.Point, w W) D {
+	t := th.transition(gtx, id+".pop", open, transitionDur)
+	if t == 0 {
+		return D{}
+	}
+	defer paint.PushOpacity(gtx.Ops, t).Pop()
+	k := 0.98 + 0.02*t
+	defer op.Affine(f32.Affine2D{}.Scale(origin, f32.Pt(k, k))).Push(gtx.Ops).Pop()
+	return w(gtx)
 }
 
 // topFade fades the timeline in under the header over 25dp, as T3's mask

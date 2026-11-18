@@ -45,7 +45,7 @@ func TestSidebarFrame(t *testing.T) {
 // 1367, 1399; 28dp at y 12), and a pressed one is filled with --accent.
 func TestTitlebarControls(t *testing.T) {
 	th := NewTheme()
-	s := &Scene{Live: true, Title: "A thread", Run: &RunInfo{Status: "Idle"}, Term: nil}
+	s := &Scene{Live: true, Title: "A thread", Card: &ThreadDetails{}, Term: nil}
 	img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D {
 		th.titleButtonW("terminal.toggle", "", titleButton{icon: "panel-bottom", pressed: true})(gtx)
 		return D{}

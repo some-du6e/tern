@@ -46,6 +46,15 @@ func main() {
 		{"5-new-thread-commands", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, draftScene()) }},
 		{"6-sign-in", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.SignInScreen(gtx, signInScene()) }},
 		{"7-phone", 390, 844, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Phone(gtx, phoneScene()) }},
+		{"8-details-git-menu", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, gitMenuScene()) }},
+		{"9-details-popover", 1000, 800, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, popoverScene()) }},
+		{"10-details-compact-running", 1440, 300, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, gitRunningScene()) }},
+		{"11-git-confirm", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, confirmScene()) }},
+		{"12-draft-workspace-menu", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, draftMenuScene()) }},
+		{"13-header-rename", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions {
+			th.SetEditorText("header.title", "Port the T3 Connect client to Go")
+			return th.Desktop(gtx, renameScene())
+		}},
 	}
 	if *anim != "" {
 		if err := renderAnims(th, float32(*scale), *anim); err != nil {

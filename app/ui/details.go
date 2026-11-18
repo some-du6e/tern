@@ -1,19 +1,37 @@
 package ui
 
 import (
+	"fmt"
 	"image"
 	"image/color"
+	"strings"
 	"time"
 
 	"gioui.org/f32"
 	"gioui.org/font"
+	"gioui.org/gesture"
+	"gioui.org/io/pointer"
 	"gioui.org/layout"
 	"gioui.org/op"
+	"gioui.org/op/clip"
 	"gioui.org/op/paint"
 )
 
+// T3's thread details card (ThreadDetailsCard.tsx, ThreadDetailsPanel.tsx,
+// ThreadDetailsControl.tsx, threadDetailsPanelStyles.ts;
+// docs/ui/05-header.md §2.5–2.7, §3.5–3.8, §4.3–4.5): a glass card of
+// sections, each a column of 32dp rows, inline at the canvas's top right
+// or as a popover off the header.
+
 // detailsW is the thread details card's width (--thread-details-panel-width).
 const detailsW = cardW
+
+const (
+	rowH      = 32  // h-8
+	rowLabelX = 37  // every label starts here: border, padding 10, icon 16, gap 10
+	halfW     = 229 // a split's primary, or a select row's label half
+	cardFade  = 24  // the scroll area's --fade-size
+)
 
 // ShortcutShift is Shortcut with Shift: ⇧⌘B on a Mac, Ctrl+Shift+B
 // elsewhere (keybindings.ts: ⌃⌥⇧⌘ order on a Mac, words elsewhere).
@@ -44,9 +62,9 @@ func (th *Theme) iconToggle(icon string, on bool) W {
 	}
 }
 
-// popIn plays a popover's opening the way T3's do: it fades in over 150ms,
-// growing from origin (in its own box) or, with none, rising a little.
-// Each time id opens again it plays again.
+// popIn plays a popover's opening the way T3's do: over 150ms on its
+// ease-in-out it fades in, growing from 98% about origin (in its own box)
+// or, with none, rising a little. Each time id opens again it plays again.
 func (th *Theme) popIn(gtx C, id string, open bool, origin *f32.Point, w W) D {
 	if th.in.popAt == nil {
 		th.in.popAt = map[string]time.Time{}
@@ -60,13 +78,13 @@ func (th *Theme) popIn(gtx C, id string, open bool, origin *f32.Point, w W) D {
 		start = gtx.Now
 		th.in.popAt[id] = start
 	}
-	t := easeOut(since(gtx.Now, start, 150*time.Millisecond))
+	t := easeInOut(since(gtx.Now, start, transitionDur))
 	if t < 1 {
 		gtx.Execute(op.InvalidateCmd{})
 	}
 	defer paint.PushOpacity(gtx.Ops, t).Pop()
 	if origin != nil {
-		k := 0.95 + 0.05*t
+		k := 0.98 + 0.02*t
 		defer op.Affine(f32.Affine2D{}.Scale(*origin, f32.Pt(k, k))).Push(gtx.Ops).Pop()
 	} else {
 		defer op.Offset(image.Pt(0, int((1-t)*float32(dp(gtx, 4))))).Push(gtx.Ops).Pop()
@@ -74,110 +92,801 @@ func (th *Theme) popIn(gtx C, id string, open bool, origin *f32.Point, w W) D {
 	return w(gtx)
 }
 
-// details is T3's thread details popover: the machine and the run up top,
-// the branch and folder below. Clicking the branch or folder copies it.
-func (th *Theme) details(gtx C, s *Scene) D {
-	r := s.Run
-	gtx.Constraints.Min.X, gtx.Constraints.Max.X = dp(gtx, detailsW), dp(gtx, detailsW)
-	return popupFrame(gtx, func(gtx C) D {
-		return pad(5, 5, 5, 5).Layout(gtx, func(gtx C) D {
-			var kids []layout.FlexChild
-			row := func(lead W, text string, mono bool, copyID string) {
-				if text == "" {
-					return
-				}
-				kids = append(kids, rigid(th.detailsRow(lead, text, mono, copyID)))
+// The card's density (threadDetailsCardLayout.ts): everything; then
+// without the machine row, the Git actions row (unless one is running or
+// just finished) and the Version Control rule; then also without Open in.
+type density int
+
+const (
+	densityFull density = iota
+	densityCompact
+	densityEssential
+)
+
+// cardFill is the card's glass, popover at 83.6%, as it paints over the
+// canvas: Gio has no backdrop blur, so this is T3's flat case.
+func cardFill() color.NRGBA { return over(alpha(P.Popover, 0xd5), P.Background) }
+
+// rowTint is a row's hover fill, black 3.5% or white 8% in dark mode.
+func rowTint() color.NRGBA {
+	if dark {
+		return alpha(rgb(0xffffff), 0x14)
+	}
+	return alpha(rgb(0), 0x09)
+}
+
+// rowText is the rows' text, foreground at 80%.
+func rowText() color.NRGBA { return over(alpha(P.Foreground, 0xcc), cardFill()) }
+
+// rowFont is the rows' type: 13/19.5, medium.
+func rowFont(col color.NRGBA) Txt {
+	return Txt{Size: 13, LineH: 19.5 / 13, Font: UI(font.Medium), Color: col}
+}
+
+// details draws the card in gtx.Constraints.Max (its width and the most
+// it may grow to), judging its density against avail, and scrolls what
+// doesn't fit with fades at the overflowing edges. It returns the card's
+// size.
+func (th *Theme) details(gtx C, s *Scene, avail int) D {
+	w, most := gtx.Constraints.Max.X, gtx.Constraints.Max.Y
+	px := max(1, dp(gtx, 1))
+	measure := func(dn density) int {
+		m := op.Record(gtx.Ops)
+		g := gtx
+		g.Constraints = layout.Constraints{Max: image.Pt(w-2*px, 1<<20)}
+		h := th.cardContent(g, s, dn).Size.Y
+		m.Stop()
+		return h + 2*px
+	}
+	dn := densityFull
+	if full := measure(densityFull); full > avail {
+		dn = densityCompact
+		if measure(densityCompact) > avail {
+			dn = densityEssential
+		}
+	}
+	m := op.Record(gtx.Ops)
+	g := gtx
+	g.Constraints = layout.Constraints{Max: image.Pt(w-2*px, 1<<20)}
+	content := th.cardContent(g, s, dn)
+	call := m.Stop()
+	h := min(content.Size.Y+2*px, most)
+	r := image.Rect(0, 0, w, h)
+	rad := dp(gtx, 16)
+	fill(gtx, cardFill(), r, rad)
+	// The card takes the presses between its rows, so they don't fall
+	// through to what's under it.
+	th.hover(gtx, "card", r.Max)
+
+	// The scroll area, inside the border.
+	view := image.Rect(px, px, w-px, h-px)
+	overflow := content.Size.Y - view.Dy()
+	if th.in.cardScroll > overflow {
+		th.in.cardScroll = max(0, overflow)
+	}
+	if overflow > 0 {
+		d := th.in.cardScrollG.Update(gtx.Metric, gtx.Source, gtx.Now, gesture.Vertical,
+			pointer.ScrollRange{}, pointer.ScrollRange{Min: -th.in.cardScroll, Max: overflow - th.in.cardScroll})
+		th.in.cardScroll = max(0, min(overflow, th.in.cardScroll+d))
+	}
+	func() {
+		defer op.Offset(view.Min).Push(gtx.Ops).Pop()
+		defer clip.UniformRRect(image.Rectangle{Max: view.Size()}, rad-px).Push(gtx.Ops).Pop()
+		if overflow > 0 {
+			th.in.cardScrollG.Add(gtx.Ops)
+		}
+		func() {
+			defer op.Offset(image.Pt(0, -th.in.cardScroll)).Push(gtx.Ops).Pop()
+			call.Add(gtx.Ops)
+		}()
+		// Each overflowing edge fades over as much of 24dp as it overflows by.
+		top, bottom := min(dp(gtx, cardFade), th.in.cardScroll), min(dp(gtx, cardFade), overflow-th.in.cardScroll)
+		edgeFade(gtx, cardFill(), image.Rect(0, 0, view.Dx(), top), true)
+		edgeFade(gtx, cardFill(), image.Rect(0, view.Dy()-bottom, view.Dx(), view.Dy()), false)
+	}()
+	strokeRect(gtx, over(alpha(P.ContrastForeground, 0x1a), cardFill()), r, rad, float32(px))
+	return D{Size: r.Max}
+}
+
+// edgeFade paints col over r, opaque at the top (down) or bottom edge and
+// clear at the other, the way a mask fades content into what's behind it.
+func edgeFade(gtx C, col color.NRGBA, r image.Rectangle, down bool) {
+	if r.Dy() <= 0 {
+		return
+	}
+	from, to := f32.Pt(0, float32(r.Min.Y)), f32.Pt(0, float32(r.Max.Y))
+	if !down {
+		from, to = to, from
+	}
+	defer clip.Rect(r).Push(gtx.Ops).Pop()
+	paint.LinearGradientOp{Stop1: from, Color1: col, Stop2: to, Color2: alpha(col, 0)}.Add(gtx.Ops)
+	paint.PaintOp{}.Add(gtx.Ops)
+}
+
+// cardContent is the card's sections at density dn, gtx.Constraints.Max.X
+// wide (the scroll area's 278).
+func (th *Theme) cardContent(gtx C, s *Scene, dn density) D {
+	d := s.Card
+	w := gtx.Constraints.Max.X
+	// Each row with the popup it opens, which hangs 4dp under it as wide
+	// as it is.
+	type row struct {
+		w     W
+		popup string
+	}
+	var workspace, vcs []row
+	if d.Run != nil && dn == densityFull {
+		workspace = append(workspace, row{th.runRow(d), "run"})
+	}
+	if d.OpenIn != nil && dn != densityEssential {
+		workspace = append(workspace, row{th.openInRow(d), "openin"})
+	}
+	if d.Scripts != nil {
+		workspace = append(workspace, row{th.scriptsRow(d), "scripts"})
+	}
+	if d.Branch != nil {
+		vcs = append(vcs, row{th.branchRow(d), "branch"})
+	}
+	if d.InitGit {
+		vcs = append(vcs, row{th.initGitRow(), ""})
+	}
+	// Compact density drops the Git actions row unless it's showing an
+	// action at work or its result.
+	if g := d.Git; g != nil && (dn == densityFull || g.Running != nil || g.Success != nil) {
+		vcs = append(vcs, row{th.gitRow(d), "git"})
+	}
+	if d.Changes != nil {
+		vcs = append(vcs, row{th.changesRow(d), ""})
+	}
+	rowW := w - dp(gtx, 16)
+	y := 0
+	section := func(rows []row, rule bool) {
+		if len(rows) == 0 {
+			return
+		}
+		if rule && y > 0 {
+			// The divider, border at 65%, only after a section with rows.
+			fill(gtx, over(alpha(P.Border, uint8(int(P.Border.A)*65/100)), cardFill()), image.Rect(0, y, w, y+max(1, dp(gtx, 1))), 0)
+			y += max(1, dp(gtx, 1))
+		}
+		y += dp(gtx, 8)
+		for _, r := range rows {
+			off := op.Offset(image.Pt(dp(gtx, 8), y)).Push(gtx.Ops)
+			g := gtx
+			g.Constraints = layout.Constraints{Max: image.Pt(rowW, 1<<20)}
+			h := r.w(g).Size.Y
+			off.Pop()
+			at := image.Pt(dp(gtx, 8), y+h+dp(gtx, 4))
+			switch {
+			case r.popup == "branch" && d.Picker != nil:
+				th.deferBelow(gtx, at, func(gtx C) D { return th.branchPicker(gtx, d.Picker, rowW) })
+			case r.popup != "" && d.Menu != nil && d.Menu.For == r.popup:
+				th.deferBelow(gtx, at, func(gtx C) D { return th.cardMenu(gtx, d.Menu, rowW) })
 			}
-			row(LucideW("server", ColDim, 16), r.Machine, false, "")
-			status := r.Status
-			if r.Elapsed != "" {
-				status += " · " + r.Elapsed
-			}
-			row(func(gtx C) D { return layout.Center.Layout(gtx, th.statusGlyph(s)) }, status, false, "")
-			row(ProviderLogo(r.Provider, 16), r.Model, false, "")
-			lock := "lock"
-			if r.Mode == "Full access" {
-				lock = "lock-open"
-			}
-			row(LucideW(lock, ColDim, 16), r.Mode, false, "")
-			if r.Branch != "" || r.Worktree != "" {
-				kids = append(kids, rigid(func(gtx C) D {
-					w := gtx.Constraints.Max.X
-					hline(gtx, ColBorder, dp(gtx, 4), 0, w)
-					return D{Size: image.Pt(w, dp(gtx, 9))}
-				}))
-			}
-			row(LucideW("git-branch", ColDim, 16), r.Branch, true, "details.branch")
-			row(LucideW("folder", ColDim, 16), r.Worktree, true, "details.folder")
-			return Col(gtx, kids...)
-		})
+			y += h
+		}
+		y += dp(gtx, 10)
+	}
+	section(workspace, false)
+	section(vcs, dn == densityFull)
+	return D{Size: image.Pt(w, y)}
+}
+
+// ---------- the rows' parts ----------
+
+// ctl is one of the card's controls (ThreadDetailsControl).
+type ctl struct {
+	id       string
+	disabled bool // :disabled at 64%, taking no pointer
+	explains bool // aria-disabled at 64%: it still hovers, to explain itself
+	popup    bool // opens a menu: no press scale
+	open     bool // its menu is open: the hover fill stays
+	tip      string
+}
+
+// state handles c's events and reports whether it's hovered, pressed and
+// showing keyboard focus.
+func (th *Theme) state(gtx C, c ctl) (hovered, pressed, focused bool) {
+	if c.disabled || c.id == "" {
+		return false, false, false
+	}
+	g, _ := th.events(gtx, c.id)
+	focused = th.keyTarget(gtx, c.id)
+	if th.in.focusCard {
+		// The first control that can take the focus does.
+		th.in.focusCard = false
+		th.focusTarget(gtx, c.id)
+	}
+	return g.Hovered(), g.Pressed(), focused
+}
+
+// corners is a rect's four radii, clockwise from the top left.
+type corners struct{ nw, ne, se, sw int }
+
+func (k corners) fill(gtx C, col color.NRGBA, r image.Rectangle) {
+	paint.FillShape(gtx.Ops, col, clip.RRect{Rect: r, NW: k.nw, NE: k.ne, SE: k.se, SW: k.sw}.Op(gtx.Ops))
+}
+
+func (k corners) inset(d int) corners {
+	return corners{max(0, k.nw-d), max(0, k.ne-d), max(0, k.se-d), max(0, k.sw-d)}
+}
+
+// focusRing is a control's keyboard focus: inside its border 1dp of
+// --background, then 2dp of --ring, over under (the colour it sits on).
+func focusRing(gtx C, r image.Rectangle, k corners, under color.NRGBA) {
+	one, three := dp(gtx, 1), dp(gtx, 3)
+	k.fill(gtx, P.Background, r)
+	k.inset(one).fill(gtx, P.Ring, r.Inset(one))
+	k.inset(three).fill(gtx, under, r.Inset(three))
+}
+
+// control draws c over r (relative to the current origin) with corners k:
+// the hover or open fill on top of under, the focus ring, the 97% press
+// and the disabled fade around content, and its tooltip above.
+func (th *Theme) control(gtx C, c ctl, r image.Rectangle, k corners, under color.NRGBA, content func(gtx C)) {
+	hovered, pressed, focused := th.state(gtx, c)
+	bg := under
+	if hovered || c.open {
+		bg = over(rowTint(), under)
+		k.fill(gtx, bg, r)
+	}
+	if focused {
+		focusRing(gtx, r, k, bg)
+	}
+	scale := float32(1)
+	if !c.popup && c.id != "" {
+		scale = 1 - 0.03*th.transition(gtx, c.id+".press", pressed, transitionDur)
+	}
+	func() {
+		if c.disabled || c.explains {
+			defer paint.PushOpacity(gtx.Ops, 0.64).Pop()
+		}
+		if scale != 1 {
+			mid := f32.Pt(float32(r.Min.X+r.Max.X)/2, float32(r.Min.Y+r.Max.Y)/2)
+			defer op.Affine(f32.Affine2D{}.Scale(mid, f32.Pt(scale, scale))).Push(gtx.Ops).Pop()
+		}
+		content(gtx)
+	}()
+	if c.id != "" && !c.disabled {
+		off := op.Offset(r.Min).Push(gtx.Ops)
+		th.hit(gtx, c.id, r.Size())
+		th.tipAt(gtx, c.id, c.tip, r.Size(), true, 0)
+		off.Pop()
+	}
+}
+
+// rowIcon draws a lucide icon at the rows' icon column, centred on a 32dp
+// row from x (the row's left edge).
+func rowIcon(gtx C, name string, col color.NRGBA, x int, sizeDp float32) {
+	s := dp(gtx, sizeDp)
+	defer op.Offset(image.Pt(x+dp(gtx, 11), (dp(gtx, rowH)-s)/2)).Push(gtx.Ops).Pop()
+	LucideW(name, col, sizeDp)(gtx)
+}
+
+// rowLabel draws a row's label from x, w at most, its caps centred on the row.
+func (th *Theme) rowLabel(gtx C, t Txt, s string, x, w int) int {
+	defer op.Offset(image.Pt(x, 0)).Push(gtx.Ops).Pop()
+	g := gtx
+	g.Constraints.Max.X = max(0, w)
+	return th.capText(g, t, s, dp(gtx, rowH)/2)
+}
+
+// chevron draws a split's or select row's chevron, centred in its 32dp half from x.
+func chevron(gtx C, x int) {
+	defer op.Offset(image.Pt(x+dp(gtx, 8), dp(gtx, 8))).Push(gtx.Ops).Pop()
+	LucideW("chevron-down", P.MutedForeground, 16)(gtx)
+}
+
+// hairline is a split's 1×16 divider at x, border at 65%, shown while the
+// pair is in use.
+func hairline(gtx C, x int, under color.NRGBA) {
+	col := over(alpha(P.Border, uint8(int(P.Border.A)*65/100)), under)
+	fill(gtx, col, image.Rect(x, dp(gtx, 8), x+max(1, dp(gtx, 1)), dp(gtx, 24)), 0)
+}
+
+// row is a 32dp row control as wide as gtx allows, with icon (size sizeDp,
+// muted at 16dp, in the text colour at 14dp) and label.
+func (th *Theme) row(gtx C, c ctl, icon string, sizeDp float32, label string) D {
+	w := gtx.Constraints.Max.X
+	r := image.Rect(0, 0, w, dp(gtx, rowH))
+	th.control(gtx, c, r, corners{8, 8, 8, 8}.scaled(gtx), cardFill(), func(gtx C) {
+		col := P.MutedForeground
+		if sizeDp < 16 {
+			col = rowText()
+		}
+		rowIcon(gtx, icon, col, 0, sizeDp)
+		th.rowLabel(gtx, rowFont(rowText()), label, dp(gtx, rowLabelX), w-dp(gtx, rowLabelX+11))
 	})
+	return D{Size: r.Max}
 }
 
-// statusGlyph is the run's spinner or dot.
-func (th *Theme) statusGlyph(s *Scene) W {
-	switch s.State {
-	case ThreadApproval, ThreadQuestion:
-		return Dot(ColAmber, true)
-	case ThreadError:
-		return Dot(ColRed, false)
-	case ThreadIdle:
-		return Dot(ColGreen, false)
+// scaled is k's radii from dp to px.
+func (k corners) scaled(gtx C) corners {
+	return corners{dp(gtx, float32(k.nw)), dp(gtx, float32(k.ne)), dp(gtx, float32(k.se)), dp(gtx, float32(k.sw))}
+}
+
+// split is a split group: primary and secondary controls sharing one
+// fill, with the hairline between them while the pair is hovered or its
+// menu is open. primary draws the left half's content.
+func (th *Theme) split(gtx C, p, sec ctl, primary func(gtx C, w int)) D {
+	w := gtx.Constraints.Max.X
+	h := dp(gtx, rowH)
+	pw := w - dp(gtx, 1+32)
+	pr, sr := image.Rect(0, 0, pw, h), image.Rect(pw+dp(gtx, 1), 0, w, h)
+	ph, sh := false, false
+	if !p.disabled && p.id != "" {
+		g, _ := th.events(gtx, p.id)
+		ph = g.Hovered()
 	}
-	return Spinner(ColAccentHi, 11, s.Phase)
+	if !sec.disabled && sec.id != "" {
+		g, _ := th.events(gtx, sec.id)
+		sh = g.Hovered()
+	}
+	group := cardFill()
+	if ph || sh || sec.open {
+		group = over(rowTint(), group)
+		fill(gtx, group, image.Rect(0, 0, w, h), dp(gtx, 8))
+		hairline(gtx, pw, group)
+	}
+	r8 := dp(gtx, 8)
+	th.control(gtx, p, pr, corners{nw: r8, sw: r8}, group, func(gtx C) { primary(gtx, pw) })
+	th.control(gtx, sec, sr, corners{ne: r8, se: r8}, group, func(gtx C) { chevron(gtx, sr.Min.X) })
+	return D{Size: image.Pt(w, h)}
 }
 
-// detailsRow is one line of the popover, like a T3 menu item. With a
-// copyID, a click copies text and the row says so for a moment.
-func (th *Theme) detailsRow(lead W, text string, mono bool, copyID string) W {
+// selectRow is a row whose right 32dp is a chevron half: hovering either
+// half stacks a second fill on it, and the hairline before the chevron
+// shows while the row is hovered or open. label draws the left half.
+func (th *Theme) selectRow(gtx C, c ctl, label func(gtx C, w int)) D {
+	w := gtx.Constraints.Max.X
+	h := dp(gtx, rowH)
+	r := image.Rect(0, 0, w, h)
+	hovered := false
+	if !c.disabled && c.id != "" {
+		g, _ := th.events(gtx, c.id)
+		hovered = g.Hovered()
+	}
+	px := max(1, dp(gtx, 1))
+	half := w - dp(gtx, 32) // the chevron half overlaps the right border by 1dp
+	left, right := image.Rect(px, px, half, h-px), image.Rect(half, px, w, h-px)
+	onLeft, onRight := th.hoverState(gtx, c.id+".label"), th.hoverState(gtx, c.id+".icon")
+	th.control(gtx, c, r, corners{8, 8, 8, 8}.scaled(gtx), cardFill(), func(gtx C) {
+		under := cardFill()
+		if hovered || c.open {
+			under = over(rowTint(), under)
+			hairline(gtx, half-px, under)
+		}
+		// The half under the pointer gets a fill of its own.
+		r8 := dp(gtx, 8) - px
+		switch {
+		case hovered && onLeft:
+			corners{nw: r8, sw: r8}.fill(gtx, over(rowTint(), under), left)
+		case hovered && onRight:
+			corners{ne: r8, se: r8}.fill(gtx, over(rowTint(), under), right)
+		}
+		label(gtx, half)
+		chevron(gtx, half)
+	})
+	if !c.disabled && c.id != "" {
+		func() {
+			defer op.Offset(left.Min).Push(gtx.Ops).Pop()
+			th.hoverArea(gtx, c.id+".label", left.Size())
+		}()
+		defer op.Offset(right.Min).Push(gtx.Ops).Pop()
+		th.hoverArea(gtx, c.id+".icon", right.Size())
+	}
+	return D{Size: r.Max}
+}
+
+// ---------- the rows ----------
+
+// machineIcons are the machine kinds' marks (EnvironmentMachineIcon.tsx);
+// Mac mini and Mac Studio are T3's own drawings, the rest lucide's.
+var machineIcons = map[string]string{
+	"server": "server", "cloud": "cloud", "linux": "server", "desktop": "monitor", "laptop": "laptop",
+	"mac-mini": "mac-mini", "mac-studio": "mac-studio",
+}
+
+// runRow is the machine and workspace row: the machine's mark (18dp, a
+// pixel into the padding each side), its name, and the workspace's icon at
+// the end. A started thread's is a plain row; a draft's opens its menu.
+func (th *Theme) runRow(d *ThreadDetails) W {
 	return func(gtx C) D {
-		body := func(gtx C) D {
-			return FixedH(gtx, 32, func(gtx C) D {
-				gtx.Constraints.Min.X = gtx.Constraints.Max.X
-				return pad(0, 8, 0, 8).Layout(gtx, func(gtx C) D {
-					gtx.Constraints.Min.X = gtx.Constraints.Max.X
-					f := Txt{MaxLines: 1, Color: ColText}
-					if mono {
-						f.Font, f.Size = Mono(), SizeMono
-					}
-					shown := text
-					if th.copiedRecently(gtx, copyID) {
-						shown, f.Color, f.Font, f.Size = "Copied", ColGreen, UI(font.Medium), SizeUI
-					}
-					return Row(gtx,
-						rigid(func(gtx C) D { return FixedW(gtx, 16, lead) }),
-						rigid(Spacer(10, 0)),
-						flexed(func(gtx C) D { return th.Text(gtx, f, shown) }),
-					)
-				})
-			})
+		rc := d.Run
+		w := gtx.Constraints.Max.X
+		content := func(gtx C, end int, col color.NRGBA) {
+			x := 0
+			if rc.Machine != "" {
+				icon := machineIcons[rc.Machine]
+				if icon == "" {
+					icon = "server"
+				}
+				s := dp(gtx, 18)
+				off := op.Offset(image.Pt(dp(gtx, 10), (dp(gtx, rowH)-s)/2)).Push(gtx.Ops)
+				LucideW(icon, P.MutedForeground, 18)(gtx)
+				th.hover(gtx, "card.machine", image.Pt(s, s))
+				th.tipAt(gtx, "card.machine", rc.Tip, image.Pt(s, s), true, 0)
+				off.Pop()
+			} else {
+				x = -1 // the workspace icon leads instead
+				th.workspaceIcon(gtx, rc, 0)
+			}
+			trailing := end - dp(gtx, 10+16)
+			th.rowLabel(gtx, rowFont(col), rc.Label, dp(gtx, rowLabelX), trailing-dp(gtx, 10+rowLabelX))
+			if x == 0 {
+				th.workspaceIcon(gtx, rc, trailing-dp(gtx, 11))
+			}
 		}
-		if copyID == "" {
-			return body(gtx)
+		if rc.Locked {
+			col := rowText()
+			if dark {
+				col = P.MutedForeground
+			}
+			content(gtx, w-dp(gtx, 1), col)
+			return D{Size: image.Pt(w, dp(gtx, rowH))}
 		}
-		if th.in.copies == nil {
-			th.in.copies = map[string]string{}
-		}
-		if th.in.copied == nil {
-			th.in.copied = map[string]time.Time{}
-		}
-		th.in.copies[copyID] = text
-		return th.Click(copyID, body)(gtx)
+		return th.selectRow(gtx, ctl{id: "card.run", popup: true, open: d.Menu != nil && d.Menu.For == "run"}, func(gtx C, half int) {
+			content(gtx, half, rowText())
+		})
 	}
 }
 
-// copiedRecently reports whether id's text was copied in the last 1.5s.
-func (th *Theme) copiedRecently(gtx C, id string) bool {
-	at, ok := th.in.copied[id]
-	if id == "" || !ok {
-		return false
+// workspaceIcon is the run row's workspace icon at the icon column from
+// x, with the workspace's path as its tooltip.
+func (th *Theme) workspaceIcon(gtx C, rc *RunContext, x int) {
+	rowIcon(gtx, rc.Workspace, P.MutedForeground, x, 16)
+	s := dp(gtx, 16)
+	defer op.Offset(image.Pt(x+dp(gtx, 11), (dp(gtx, rowH)-s)/2)).Push(gtx.Ops).Pop()
+	th.hover(gtx, "card.workspace", image.Pt(s, s))
+	th.tipAt(gtx, "card.workspace", rc.WorkspaceTip, image.Pt(s, s), true, 0)
+}
+
+// openInRow is the Open in editor split: the preferred editor's mark and
+// "Open in <Editor>", and the chevron that picks another.
+func (th *Theme) openInRow(d *ThreadDetails) W {
+	return func(gtx C) D {
+		o := d.OpenIn
+		return th.split(gtx,
+			ctl{id: "card.openin", disabled: o.Disabled, tip: o.Label},
+			ctl{id: "card.editors", disabled: o.MenuDisabled, popup: true, open: d.Menu != nil && d.Menu.For == "openin", tip: "Choose editor"},
+			func(gtx C, w int) {
+				// T3 draws the editor's brand mark here; tern has none of
+				// them yet, so every editor gets the generic icon T3 uses
+				// when there's no editor to name.
+				rowIcon(gtx, "square-arrow-out-up-right", P.MutedForeground, 0, 16)
+				th.rowLabel(gtx, rowFont(rowText()), o.Label, dp(gtx, rowLabelX), w-dp(gtx, rowLabelX+10))
+			})
 	}
-	if left := 1500*time.Millisecond - gtx.Now.Sub(at); left > 0 {
-		gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(left)})
-		return true
+}
+
+// scriptIcons are the project script icons' lucide names (ProjectScriptsControl.tsx).
+var scriptIcons = map[string]string{
+	"play": "play", "test": "flask-conical", "lint": "list-checks", "configure": "wrench", "build": "hammer", "debug": "bug",
+}
+
+// scriptsRow is the project's scripts: a split that runs the primary
+// script, a split whose halves both open the menu when there's none, or a
+// row that adds the first.
+func (th *Theme) scriptsRow(d *ThreadDetails) W {
+	return func(gtx C) D {
+		sc := d.Scripts
+		open := d.Menu != nil && d.Menu.For == "scripts"
+		switch {
+		case sc.Primary != "":
+			return th.split(gtx,
+				ctl{id: "card.script", tip: "Run " + sc.Primary},
+				ctl{id: "card.scripts", popup: true, open: open, tip: "Script actions"},
+				func(gtx C, w int) {
+					icon := scriptIcons[sc.Icon]
+					if icon == "" {
+						icon = "play"
+					}
+					rowIcon(gtx, icon, P.MutedForeground, 0, 16)
+					th.rowLabel(gtx, rowFont(rowText()), sc.Primary, dp(gtx, rowLabelX), w-dp(gtx, rowLabelX+10))
+				})
+		case sc.Any:
+			return th.split(gtx,
+				ctl{id: "card.scripts", popup: true, open: open},
+				ctl{id: "card.scripts.more", popup: true, open: open},
+				func(gtx C, w int) {
+					rowIcon(gtx, "wrench", P.MutedForeground, 0, 16)
+					th.rowLabel(gtx, rowFont(rowText()), "Actions", dp(gtx, rowLabelX), w-dp(gtx, rowLabelX+10))
+				})
+		}
+		return th.row(gtx, ctl{id: "card.addscript", disabled: !sc.CanAdd, tip: "Add project script"}, "plus", 14, "Add project script")
 	}
-	delete(th.in.copied, id)
-	return false
+}
+
+// branchRow is the branch picker's trigger: the branch, middle-truncated
+// so its end stays readable.
+func (th *Theme) branchRow(d *ThreadDetails) W {
+	return func(gtx C) D {
+		b := d.Branch
+		return th.selectRow(gtx, ctl{id: "card.branch", disabled: b.Disabled, popup: true, open: d.Picker != nil}, func(gtx C, half int) {
+			rowIcon(gtx, "git-branch", P.MutedForeground, 0, 16)
+			defer op.Offset(image.Pt(dp(gtx, rowLabelX), 0)).Push(gtx.Ops).Pop()
+			g := gtx
+			g.Constraints.Max.X = max(0, half-dp(gtx, rowLabelX+10))
+			th.middleTruncate(g, rowFont(rowText()), b.Label, dp(gtx, rowH)/2)
+		})
+	}
+}
+
+// initGitRow offers to make the folder a repository.
+func (th *Theme) initGitRow() W {
+	return func(gtx C) D {
+		return th.row(gtx, ctl{id: "card.initgit"}, "git-branch-plus", 14, "Initialize Git")
+	}
+}
+
+// gitRow is the Git actions split: the quick action and the options
+// chevron. While an action runs the pair is filled, the primary shows its
+// progress and the chevron gives way to the time it's taken; a finished
+// one leaves its result for ten seconds.
+func (th *Theme) gitRow(d *ThreadDetails) W {
+	return func(gtx C) D {
+		g := d.Git
+		w := gtx.Constraints.Max.X
+		if g.Running != nil || g.Success != nil {
+			return th.gitStatusRow(gtx, g, w)
+		}
+		primary := ctl{id: "card.git", tip: g.Label}
+		if g.Hint != "" {
+			// A hint is a popover trigger: it explains instead of acting.
+			primary = ctl{id: "card.git", explains: true, popup: true}
+		}
+		dims := th.split(gtx, primary, ctl{id: "card.gitmenu", disabled: g.MenuDisabled, popup: true, open: d.Menu != nil && d.Menu.For == "git", tip: "Git action options"},
+			func(gtx C, w int) {
+				th.gitIcon(gtx, g.Icon)
+				th.rowLabel(gtx, rowFont(rowText()), g.Label, dp(gtx, rowLabelX), w-dp(gtx, rowLabelX+10))
+			})
+		if g.Hint != "" {
+			th.reasonPopover(gtx, "card.git", g.Hint, image.Pt(w-dp(gtx, 1+32), dp(gtx, rowH)))
+		}
+		return dims
+	}
+}
+
+// gitIcon is the quick action's icon at the rows' icon column: lucide's,
+// or the source control host's mark.
+func (th *Theme) gitIcon(gtx C, icon string) {
+	if kind, ok := strings.CutPrefix(icon, "provider:"); ok {
+		s := dp(gtx, 16)
+		defer op.Offset(image.Pt(dp(gtx, 11), (dp(gtx, rowH)-s)/2)).Push(gtx.Ops).Pop()
+		ProviderMark(kind, P.MutedForeground, 16)(gtx)
+		return
+	}
+	rowIcon(gtx, icon, P.MutedForeground, 0, 16)
+}
+
+// gitStatusRow is the Git row at work (a spinner, the phase and the last
+// output line, and the elapsed time) or done (a check, the result and its
+// description).
+func (th *Theme) gitStatusRow(gtx C, g *GitActions, w int) D {
+	title, detail, elapsed := "", "", ""
+	if p := g.Running; p != nil {
+		title, detail, elapsed = p.Status, p.Output, p.Elapsed
+	} else {
+		title, detail = g.Success.Title, g.Success.Description
+	}
+	// The detail line grows in over 200ms.
+	t := easeOutCSS(th.transition(gtx, "card.git.detail", detail != "", 200*time.Millisecond))
+	lineH := dp(gtx, 18)
+	h := max(dp(gtx, rowH), dp(gtx, 12)+lineH+int(t*float32(dp(gtx, 2+16))))
+	r := image.Rect(0, 0, w, h)
+	if g.Running != nil {
+		fill(gtx, over(gitRunTint(), cardFill()), r, dp(gtx, 8))
+	}
+	pw := w - dp(gtx, 1+32)
+	if elapsed != "" {
+		pw = w - th.textW(gtx, Txt{Size: 11, LineH: 16.0 / 11}, elapsed) - dp(gtx, 10+12)
+	}
+	y := dp(gtx, 6)
+	icon := dp(gtx, 14)
+	func() {
+		defer op.Offset(image.Pt(dp(gtx, 11), y+(lineH-icon)/2)).Push(gtx.Ops).Pop()
+		if g.Running != nil {
+			T3Spinner(P.MutedForeground, 14, float64(gtx.Now.UnixMilli()%1000)/1000)(gtx)
+			gtx.Execute(op.InvalidateCmd{})
+		} else {
+			LucideW("check", P.Success, 14)(gtx)
+		}
+	}()
+	tx := dp(gtx, 11+14+12)
+	func() {
+		defer op.Offset(image.Pt(tx, y)).Push(gtx.Ops).Pop()
+		g := gtx
+		g.Constraints.Max.X = max(0, pw-tx-dp(gtx, 10))
+		th.capText(g, rowFont(rowText()), title, lineH/2)
+	}()
+	if detail != "" {
+		func() {
+			defer op.Offset(image.Pt(tx, y+lineH+dp(gtx, 2))).Push(gtx.Ops).Pop()
+			defer paint.PushOpacity(gtx.Ops, t).Pop()
+			g := gtx
+			g.Constraints.Max.X = max(0, pw-tx-dp(gtx, 10))
+			th.Text(g, Txt{Size: 11, LineH: 16.0 / 11, Color: P.MutedForeground, MaxLines: 1}, detail)
+		}()
+	}
+	if elapsed != "" {
+		func() {
+			ew := th.textW(gtx, Txt{Size: 11, LineH: 16.0 / 11}, elapsed)
+			defer op.Offset(image.Pt(w-dp(gtx, 10)-ew, 0)).Push(gtx.Ops).Pop()
+			th.capText(gtx, Txt{Size: 11, LineH: 16.0 / 11, Color: P.MutedForeground}, elapsed, dp(gtx, rowH)/2)
+		}()
+	}
+	return D{Size: r.Max}
+}
+
+// gitRunTint fills the Git actions pair while an action runs: black 3.5%,
+// white 5.5% in dark mode.
+func gitRunTint() color.NRGBA {
+	if dark {
+		return alpha(rgb(0xffffff), 0x0e)
+	}
+	return alpha(rgb(0), 0x09)
+}
+
+// changesRow is the change totals: "Changes", what they're against, and
+// the insertions and deletions in mono at the end, coloured once they're
+// above zero. It opens the diff.
+func (th *Theme) changesRow(d *ThreadDetails) W {
+	return func(gtx C) D {
+		ch := d.Changes
+		w := gtx.Constraints.Max.X
+		r := image.Rect(0, 0, w, dp(gtx, rowH))
+		th.control(gtx, ctl{id: "card.changes", disabled: ch.Disabled}, r, corners{8, 8, 8, 8}.scaled(gtx), cardFill(), func(gtx C) {
+			rowIcon(gtx, "file-diff", P.MutedForeground, 0, 16)
+			mono := Txt{Size: 13, LineH: 19.5 / 13, Font: font.Font{Typeface: mono, Weight: font.Medium}}
+			add, del := "+"+groupDigits(ch.Insertions), "-"+groupDigits(ch.Deletions)
+			addW, delW := th.textW(gtx, mono, add), th.textW(gtx, mono, del)
+			end := w - dp(gtx, 11)
+			delX := end - delW
+			addX := delX - dp(gtx, 8) - addW
+			x := dp(gtx, rowLabelX)
+			x += th.rowLabel(gtx, rowFont(rowText()), "Changes", x, addX-x)
+			if ch.Base != "" {
+				bx := x + dp(gtx, 6)
+				bw := min(th.textW(gtx, rowFont(P.MutedForeground), ch.Base), addX-dp(gtx, 8)-bx)
+				base := rowFont(P.MutedForeground)
+				base.Font = UI(font.Normal)
+				th.rowLabel(gtx, base, ch.Base, bx, bw)
+				off := op.Offset(image.Pt(bx, (dp(gtx, rowH)-dp(gtx, 20))/2)).Push(gtx.Ops)
+				th.hover(gtx, "card.changes.base", image.Pt(max(0, bw), dp(gtx, 20)))
+				th.tipAt(gtx, "card.changes.base", ch.Base, image.Pt(max(0, bw), dp(gtx, 20)), true, 0)
+				off.Pop()
+			}
+			tone := func(n int, c color.NRGBA) color.NRGBA {
+				if n == 0 {
+					return P.MutedForeground
+				}
+				return c
+			}
+			mono.Color = tone(ch.Insertions, P.DiffAdditionForeground)
+			th.rowLabel(gtx, mono, add, addX, addW)
+			mono.Color = tone(ch.Deletions, P.DiffDeletionForeground)
+			th.rowLabel(gtx, mono, del, delX, delW)
+		})
+		return D{Size: r.Max}
+	}
+}
+
+// groupDigits writes n with English thousands separators, as
+// Intl.NumberFormat does: 2382 is "2,382".
+func groupDigits(n int) string {
+	s := fmt.Sprint(n)
+	if n < 0 {
+		return "-" + groupDigits(-n)
+	}
+	var out []byte
+	for i := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			out = append(out, ',')
+		}
+		out = append(out, s[i])
+	}
+	return string(out)
+}
+
+// reasonPopover is T3's tooltip-styled popover for an action that can't
+// run: it opens 300ms after the pointer reaches target id (size big at the
+// current origin), 4dp below it. Declared at its start, it flips to its
+// end, since the card sits at the window's right.
+func (th *Theme) reasonPopover(gtx C, id, reason string, size image.Point) {
+	c := th.in.clicks[id]
+	if c == nil || !c.Hovered() {
+		delete(th.in.tipSince, id+".reason")
+		return
+	}
+	if th.in.tipSince == nil {
+		th.in.tipSince = map[string]time.Time{}
+	}
+	at, ok := th.in.tipSince[id+".reason"]
+	if !ok {
+		at = gtx.Now
+		th.in.tipSince[id+".reason"] = at
+	}
+	if gtx.Now.Sub(at) < 300*time.Millisecond {
+		gtx.Execute(op.InvalidateCmd{At: at.Add(300 * time.Millisecond)})
+		return
+	}
+	m := op.Record(gtx.Ops)
+	g := gtx
+	g.Constraints = layout.Constraints{Max: image.Pt(dp(gtx, 320), dp(gtx, 200))}
+	td := th.tooltip(g, reason)
+	call := m.Stop()
+	m2 := op.Record(gtx.Ops)
+	op.Offset(image.Pt(size.X-td.Size.X, size.Y+dp(gtx, 4))).Add(gtx.Ops)
+	call.Add(gtx.Ops)
+	op.Defer(gtx.Ops, m2.Stop())
+}
+
+// middleTruncate draws s in the width gtx allows, its caps centred on
+// mid, cutting the middle rather than the end when it doesn't fit
+// (MiddleTruncate, docs/ui/02-primitives.md §5.14): the tail keeps its full
+// width, the head gives up its last glyphs and "…" joins the two.
+func (th *Theme) middleTruncate(gtx C, t Txt, s string, mid int) {
+	w := gtx.Constraints.Max.X
+	if th.textW(gtx, t, s) <= w {
+		th.capText(gtx, t, s, mid)
+		return
+	}
+	head, tail := splitMiddle(s)
+	if tail == "" {
+		th.capText(gtx, t, s, mid)
+		return
+	}
+	tailW := th.textW(gtx, t, "…"+tail)
+	room := w - tailW
+	hr := []rune(head)
+	n := 0
+	for n < len(hr) && th.textW(gtx, t, string(hr[:n+1])) <= room {
+		n++
+	}
+	x := th.capText(gtx, t, string(hr[:n]), mid)
+	defer op.Offset(image.Pt(x, 0)).Push(gtx.Ops).Pop()
+	th.capText(gtx, t, "…"+tail, mid)
+}
+
+// splitMiddle is T3's splitForMiddleTruncate: the tail is the last path
+// segment when that's at most 16 long, else the last 10, moved to start on
+// a word where one is near. An empty tail means s ends with the usual
+// ellipsis instead.
+func splitMiddle(s string) (head, tail string) {
+	chars := []rune(s)
+	n := len(chars)
+	keep := 10
+	if slash := strings.LastIndex(s, "/"); slash > 0 && slash < len(s)-1 {
+		if seg := n - len([]rune(s[:slash])) - 1; seg <= 16 {
+			keep = seg
+		}
+	}
+	if keep <= 0 || n <= keep+4 {
+		return s, ""
+	}
+	brk := func(r rune) bool { return r == '-' || r == '_' || r == '.' || r == '/' }
+	cut := n - keep
+	if !brk(chars[cut-1]) {
+		snapped := 0
+		for i := cut + 1; i <= n-4; i++ {
+			if brk(chars[i-1]) {
+				snapped = i
+				break
+			}
+		}
+		if snapped == 0 {
+			for i := cut - 1; i >= n-16 && i > 4; i-- {
+				if brk(chars[i-1]) {
+					snapped = i
+					break
+				}
+			}
+		}
+		if snapped > 0 {
+			cut = snapped
+		}
+	}
+	return string(chars[:cut]), string(chars[cut:])
 }
 
 // sidebarFooter is T3's: icon buttons with tooltips. One lists the

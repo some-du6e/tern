@@ -273,7 +273,22 @@ func (a *App) build(now time.Time) *ui.Scene {
 	s.Notice = a.notice
 	s.Panel = ui.PanelChanges
 	s.Details = a.detailsOpen
-	s.DetailsCard = a.detailsCard
+	cardKey := a.openID
+	if a.draft != "" {
+		cardKey = "draft"
+	}
+	s.DetailsCard = !a.cardHidden[cardKey]
+	if c := a.confirm; c != nil {
+		var st *t3.VcsStatus
+		if _, _, _, v := a.checkout(); v != nil {
+			st = v.status
+		}
+		// Until the status loads the feature branch stays on offer; the
+		// server refuses a stale request.
+		dirty := st == nil || st.HasWorkingTreeChanges
+		title, desc, cont := confirmCopy(c.action, c.branch, c.includesCommit, termsFor(st))
+		s.Confirm = &ui.Confirm{Title: title, Description: desc, Continue: cont, BranchOff: featureBranchOff(c.branch, dirty)}
+	}
 	s.SidebarHidden, s.SidebarW = a.sidebarHidden, a.sidebarWidth
 	s.Term = a.termView()
 	s.Web = a.browserView()
@@ -349,16 +364,14 @@ func (a *App) draftScene(s *ui.Scene) {
 	}
 	s.Title = "New thread"
 	s.State = ui.ThreadIdle
-	s.StateLabel = "Draft"
-	s.Project = p.Title
-	if len(a.envs) > 1 && e != nil {
-		s.Project += "  ·  " + e.env.Label
+	if e != nil {
+		_, ok := e.projects[a.draft]
+		a.headerScene(s, e, nil, p, ok)
+		a.cardScene(s, e, nil, p, ok, time.Now())
 	}
-	s.PickProject = true
 	s.Hero = p.Title
 	s.Placeholder = "Ask anything…"
 	if a.projectsOpen {
-		s.ProjectsHero = a.projectsHero
 		s.Projects = &ui.Traits{}
 		for _, g := range a.projectChoices() {
 			s.Projects.Groups = append(s.Projects.Groups, g.trait)
@@ -433,28 +446,9 @@ func (a *App) threadScene(s *ui.Scene) {
 		s.Title = "Untitled"
 	}
 	s.State = threadState(t)
-	switch s.State {
-	case ui.ThreadRunning:
-		s.StateLabel = "Working"
-		if st := parseTime(t.ActivityRunStartedAt); !st.IsZero() {
-			s.StateLabel = "Working · " + duration(time.Since(st))
-		}
-	case ui.ThreadApproval:
-		s.StateLabel = "Needs approval"
-	case ui.ThreadQuestion:
-		s.StateLabel = "Has a question"
-	case ui.ThreadError:
-		s.StateLabel = "Failed"
-	default:
-		s.StateLabel = "Idle"
-		if t.SettledAt != "" {
-			s.StateLabel = "Settled"
-		}
-	}
-	s.Project = e.projects[t.ProjectID].Title
-	if t.Branch != "" {
-		s.Project += "  ›  " + t.Branch
-	}
+	p, ok := e.projects[t.ProjectID]
+	a.headerScene(s, e, t, p, ok)
+	a.cardScene(s, e, t, p, ok, time.Now())
 	s.Placeholder = "Ask, steer or queue.   /  commands    @  files"
 	v := a.view
 	if v == nil || !v.loaded {
@@ -464,19 +458,6 @@ func (a *App) threadScene(s *ui.Scene) {
 		a.pending(s, t, v)
 	}
 	a.composerScene(s, a.openID)
-	s.Run = &ui.RunInfo{Machine: e.env.Label, Provider: s.Provider, Mode: runtimeLabel(t.RuntimeMode), Branch: t.Branch, Worktree: shortPath(t.WorktreePath)}
-	switch s.State {
-	case ui.ThreadRunning:
-		s.Run.Status = s.StateLabel
-	case ui.ThreadIdle:
-		s.Run.Status = "Idle"
-	default:
-		s.Run.Status = s.StateLabel
-	}
-	s.Run.Model = s.Model
-	if s.Effort != "" {
-		s.Run.Model += " · " + s.Effort
-	}
 	if v != nil {
 		s.Changes = changes(v)
 	}

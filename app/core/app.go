@@ -85,23 +85,42 @@ type App struct {
 	traitsOpen   bool
 	accessOpen   bool
 	projectsOpen bool
-	projectsHero bool // the project menu hangs off the heading, not the header
 	accountOpen  bool
 	detailsOpen  bool // the thread details popover is up
-	// T3's shell: the details card shown inline (on by default), the
-	// sidebar collapsed, and its dragged width in dp (0 for the default).
-	// All three persist.
-	detailsCard   bool
+	// T3's shell: the threads whose inline details card is toggled off
+	// (it's on by default), the sidebar collapsed, and its dragged width in
+	// dp (0 for the default). All three persist.
+	cardHidden    map[string]bool
 	sidebarHidden bool
 	sidebarWidth  float32
-	machinesOpen  bool                // the footer's machines menu is up
-	drawers       map[string]*drawer  // each thread's terminals, by ref
-	browsers      map[string]*browser // each thread's browser panel, by ref
-	ctxRef        string              // the thread whose right-click menu is open
-	ctxConfirm    bool                // Delete was clicked once and wants a second click
-	errText       string
-	notice        string
-	answers       map[string]map[int]bool // question id -> picked option indexes
+	// The chat header and the details card: the thread whose title is
+	// being renamed; the card's open menu (run, openin, scripts or git)
+	// and branch picker; a Git action asking first; each checkout's Git
+	// status, by environment and folder; the editor last picked (and
+	// whether Open in has said it works over SSH) and each project's last
+	// script, which persist; and the draft's new worktree and its base.
+	renaming      string
+	cardMenu      string
+	branchPicker  *refPicker
+	confirm       *pendingGit
+	vcs           map[string]*vcsState
+	lastEditor    string
+	hintSeen      bool
+	lastScripts   map[string]string
+	draftWorktree bool
+	draftBase     string
+	remoteEditors func() []string
+	// OpenURL opens a URL on this computer: an editor's, for a folder on
+	// another machine.
+	OpenURL      func(string) error
+	machinesOpen bool                // the footer's machines menu is up
+	drawers      map[string]*drawer  // each thread's terminals, by ref
+	browsers     map[string]*browser // each thread's browser panel, by ref
+	ctxRef       string              // the thread whose right-click menu is open
+	ctxConfirm   bool                // Delete was clicked once and wants a second click
+	errText      string
+	notice       string
+	answers      map[string]map[int]bool // question id -> picked option indexes
 
 	uiOps []func(*ui.Theme) // editor and focus changes from goroutines, run on the UI goroutine
 
@@ -174,9 +193,14 @@ func NewWithStore(store *t3.Store, redraw func()) (*App, error) {
 		browsers: map[string]*browser{},
 		answers:  map[string]map[int]bool{},
 	}
-	_ = store.Delete("env-filter") // from when a machine's chip filtered the inbox
-	a.detailsCard = true
-	_, _ = store.Get("details-card", &a.detailsCard)
+	_ = store.Delete("env-filter")   // from when a machine's chip filtered the inbox
+	_ = store.Delete("details-card") // from when one switch hid every thread's card
+	a.cardHidden, a.lastScripts, a.vcs = map[string]bool{}, map[string]string{}, map[string]*vcsState{}
+	a.remoteEditors = probeRemoteEditors
+	_, _ = store.Get("details-hidden", &a.cardHidden)
+	_, _ = store.Get("last-editor", &a.lastEditor)
+	_, _ = store.Get("remote-open-hint", &a.hintSeen)
+	_, _ = store.Get("last-scripts", &a.lastScripts)
 	_, _ = store.Get("sidebar-hidden", &a.sidebarHidden)
 	_, _ = store.Get("sidebar-width", &a.sidebarWidth)
 	_ = store.Delete("panel-hidden") // from when details were a side panel
@@ -763,6 +787,7 @@ func (a *App) closeThreadLocked() {
 	a.view = nil
 	a.openID = ""
 	a.picker, a.traitsOpen, a.accessOpen, a.projectsOpen = nil, false, false, false
+	a.renaming, a.cardMenu, a.branchPicker, a.confirm = "", "", nil, nil
 }
 
 // openThread shows a thread, by ref, and subscribes to it. Call without the
