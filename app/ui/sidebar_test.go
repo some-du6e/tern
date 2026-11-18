@@ -336,6 +336,26 @@ func TestListRevealsOpenRow(t *testing.T) {
 	wantPixel(t, img, image.Pt(20, 110), draft, "the first card, back at the top")
 }
 
+// A search result scrolls into view as it lights, nearest edge first
+// (Sidebar.tsx's highlighted option); the first lights at the top.
+func TestSearchRevealsHighlight(t *testing.T) {
+	th := NewTheme()
+	s := &Scene{Sidebar: Sidebar{HasProjects: true, Query: "thread"}}
+	for i := range 30 {
+		s.Sidebar.Results = append(s.Sidebar.Results, ThreadRow{ID: fmt.Sprint("e/", i), Title: fmt.Sprint("Thread ", i), Age: "1h"})
+	}
+	active := over(SP.SidebarRowActive, SP.Sidebar)
+	img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, s) })
+	wantPixel(t, img, image.Pt(20, 101), active, "the first result")
+	// Results are 37 apart, so the 26th ends at 961 in the list, 205 past
+	// its 756: it sits at the bottom, 820..856 in the window.
+	s.Sidebar.Highlight = 25
+	img = drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, s) })
+	wantPixel(t, img, image.Pt(20, 818), SP.Sidebar, "above the lit result")
+	wantPixel(t, img, image.Pt(20, 822), active, "the lit result, scrolled in")
+	wantPixel(t, img, image.Pt(240, 840), active, "its lower half")
+}
+
 // The new thread's draft sits atop the list, 78dp in 2dp of padding on
 // warning at 4%; under it, 6dp clear, the sidebar border at 60% rules the
 // list 10dp in from the row's sides (§3.12).

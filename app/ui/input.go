@@ -80,19 +80,21 @@ type input struct {
 	// The sidebar's list: its keyboard tree from the last layout, each
 	// row's focus tag and the row to focus once it's laid out; the list's
 	// height and how far it's scrolled; the open thread's row it last
-	// scrolled to and the project scope it last started at the top for.
+	// scrolled to, the search result it last scrolled to as it lit, and the
+	// project scope it last started at the top for.
 	nav         listNav
 	rowTags     map[string]*int
 	focusRow    string
 	listView    int
 	listScroll  int
 	listOpen    string
+	listHi      string
 	listScope   string
 	resultHover int    // the search result under the pointer, plus one
 	filterHover string // the project filter's row under the pointer
 	renaming    bool   // the rename field had focus last frame
 	// The footer's undo notice: its last text, kept while it fades out,
-	// its fade, and whether mod+Z is its even in a text field.
+	// its fade, and whether mod+Z is its, even in a text field.
 	undoText  string
 	undoFade  *fade
 	undoClaim bool

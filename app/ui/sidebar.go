@@ -505,7 +505,8 @@ func (th *Theme) threadList(gtx C, s *Scene, top int) {
 	// A new project scope starts the list at its top. Each newly opened
 	// thread's row scrolls into view once, unless the pointer is on it,
 	// where a click leaves it; while the row isn't listed (a search
-	// replaces the list), it waits (routeReveal.ts).
+	// replaces the list), it waits (routeReveal.ts). A search result
+	// scrolls into view as it lights, as T3's highlighted option does.
 	sb := &s.Sidebar
 	if sb.ScopeKey != th.in.listScope {
 		th.in.listScope = sb.ScopeKey
@@ -525,6 +526,14 @@ func (th *Theme) threadList(gtx C, s *Scene, top int) {
 				th.revealItem(i)
 			}
 		}
+	}
+	if hi := sb.Highlight; hi >= 0 && hi < len(sb.Results) {
+		if id := sb.Results[hi].ID; id != th.in.listHi {
+			th.in.listHi = id
+			th.revealItem(hi)
+		}
+	} else {
+		th.in.listHi = ""
 	}
 	scroll := scrolled()
 	th.in.listScroll = scroll
