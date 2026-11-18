@@ -2177,7 +2177,10 @@ func (th *Theme) hoverCard(gtx C, s *Scene, r *ThreadRow, rect image.Rectangle, 
 		k = th.transition(gtx, key, open, 150*time.Millisecond)
 	}
 	if k == 0 {
-		delete(th.in.fades, key)
+		// Closed, it's forgotten; opening, it's yet to show.
+		if !open {
+			delete(th.in.fades, key)
+		}
 		return
 	}
 	m := op.Record(gtx.Ops)
