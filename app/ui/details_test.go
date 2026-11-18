@@ -2,6 +2,7 @@ package ui
 
 import (
 	"image"
+	"strings"
 	"testing"
 	"time"
 
@@ -392,6 +393,40 @@ func TestCardMenu(t *testing.T) {
 	// its three 28dp rows padded 4.
 	if first, last := run(img, 1148+1+8+130, top-8, top+200, P.Popover); first != top+2 || last != top+1+4+3*28+4-1 {
 		t.Errorf("the menu's surface spans y %d..%d, want %d..%d", first, last, top+2, top+1+4+3*28+4-1)
+	}
+}
+
+// A menu row that's off explains itself once the pointer has rested on it
+// for 300ms: T3's tooltip-styled popover 4dp left of the row, level with
+// its middle, over the canvas beside the card.
+func TestMenuReasonDrawn(t *testing.T) {
+	defer SetDark(false)
+	SetDark(true)
+	s := cardScene()
+	s.Card.Menu = &CardMenu{For: "git", Rows: []MenuRow{
+		{Label: "Commit", Icon: "git-commit-horizontal", Disabled: true, Reason: "Worktree is clean. Make changes before committing."},
+		{Label: "Push", Icon: "cloud-upload"}}}
+	l := newLive(image.Pt(1440, 900), nil)
+	l.draw = func(gtx C) { l.th.Desktop(gtx, s) }
+	l.frame(0)
+	// The menu hangs 4dp under the Git row; its first row is inside its
+	// border and padding, 28 tall.
+	row := 64 + 1 + 114 + 1 + 8 + 64 + 4 + 1 + 4
+	l.move(1162+40, float32(row+14))
+	l.frame(0)
+	l.frame(100 * time.Millisecond)
+	img := l.pixels(t)
+	beside := image.Pt(1100, row+3)
+	wantPixel(t, img, beside, P.Background, "no reason before the pointer rests")
+	l.frame(300 * time.Millisecond)
+	img = l.pixels(t)
+	wantPixel(t, img, beside, P.Popover, "the reason's popover left of the row")
+	wantPixel(t, img, image.Pt(1100, row-6), P.Background, "above it")
+	l.click(1162+40, float32(row+14))
+	for _, a := range l.frame(10 * time.Millisecond) {
+		if strings.HasPrefix(a.ID, "card.git") {
+			t.Errorf("the row that's off was picked: %+v", a)
+		}
 	}
 }
 

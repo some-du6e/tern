@@ -681,7 +681,7 @@ func (th *Theme) gitRow(d *ThreadDetails) W {
 				th.rowLabel(gtx, rowFont(rowText()), g.Label, dp(gtx, rowLabelX), w-dp(gtx, rowLabelX+10))
 			})
 		if g.Hint != "" {
-			th.reasonPopover(gtx, "card.git", g.Hint, image.Pt(w-dp(gtx, 1+32), dp(gtx, rowH)))
+			th.reasonPopover(gtx, "card.git", g.Hint, image.Pt(w-dp(gtx, 1+32), dp(gtx, rowH)), false)
 		}
 		return dims
 	}
@@ -830,9 +830,10 @@ func groupDigits(n int) string {
 
 // reasonPopover is T3's tooltip-styled popover for an action that can't
 // run: it opens 300ms after the pointer reaches target id (size big at the
-// current origin), 4dp below it. Declared at its start, it flips to its
-// end, since the card sits at the window's right.
-func (th *Theme) reasonPopover(gtx C, id, reason string, size image.Point) {
+// current origin), 4dp below it, or with left 4dp left of it and level
+// with its middle. Declared below at its start, it flips to its end, since
+// the card sits at the window's right.
+func (th *Theme) reasonPopover(gtx C, id, reason string, size image.Point, left bool) {
 	c := th.in.clicks[id]
 	if c == nil || !c.Hovered() {
 		delete(th.in.tipSince, id+".reason")
@@ -855,8 +856,12 @@ func (th *Theme) reasonPopover(gtx C, id, reason string, size image.Point) {
 	g.Constraints = layout.Constraints{Max: image.Pt(dp(gtx, 320), dp(gtx, 200))}
 	td := th.tooltip(g, reason)
 	call := m.Stop()
+	at2 := image.Pt(size.X-td.Size.X, size.Y+dp(gtx, 4))
+	if left {
+		at2 = image.Pt(-td.Size.X-dp(gtx, 4), (size.Y-td.Size.Y)/2)
+	}
 	m2 := op.Record(gtx.Ops)
-	op.Offset(image.Pt(size.X-td.Size.X, size.Y+dp(gtx, 4))).Add(gtx.Ops)
+	op.Offset(at2).Add(gtx.Ops)
 	call.Add(gtx.Ops)
 	op.Defer(gtx.Ops, m2.Stop())
 }

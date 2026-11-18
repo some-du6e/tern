@@ -110,6 +110,42 @@ func TestGitMenu(t *testing.T) {
 	}
 }
 
+// A row that's off says why, as T3's getMenuActionDisabledReason does,
+// first reason wins; a row that's on says nothing.
+func TestGitMenuReasons(t *testing.T) {
+	reasons := func(st *t3.VcsStatus, busy, remote bool) string {
+		var out []string
+		for _, it := range buildGitMenu(st, busy, remote) {
+			out = append(out, it.label+": "+gitMenuReason(it, st, busy, remote))
+		}
+		return strings.Join(out, " | ")
+	}
+	for _, c := range []struct {
+		name   string
+		st     *t3.VcsStatus
+		busy   bool
+		remote bool
+		want   string
+	}{
+		{"clean, nothing ahead", status(nil), false, true,
+			"Commit: Worktree is clean. Make changes before committing. | Push: No local commits to push. | Create PR: No local commits to include in a pull request."},
+		{"dirty", status(func(s *t3.VcsStatus) { s.HasWorkingTreeChanges = true }), false, true,
+			"Commit:  | Push: Commit or stash local changes before pushing. | Create PR: No local commits to include in a pull request."},
+		{"behind and ahead", status(func(s *t3.VcsStatus) { s.AheadCount, s.BehindCount = 2, 1 }), false, true,
+			"Commit: Worktree is clean. Make changes before committing. | Push: Branch is behind upstream. Pull/rebase before pushing. | Create PR: Branch is behind upstream. Pull/rebase before creating a pull request."},
+		{"detached on GitLab", status(func(s *t3.VcsStatus) {
+			s.RefName, s.AheadCount, s.SourceControlProvider = "", 1, &t3.SourceControlProvider{Kind: "gitlab"}
+		}), false, true,
+			"Commit: Worktree is clean. Make changes before committing. | Push: Detached HEAD: check out a branch before pushing. | Create MR: Detached HEAD: check out a branch before creating a merge request."},
+		{"busy", status(func(s *t3.VcsStatus) { s.AheadCount = 1 }), true, true,
+			"Commit: Git action in progress. | Push: Git action in progress. | Create PR: Git action in progress."},
+	} {
+		if got := reasons(c.st, c.busy, c.remote); got != c.want {
+			t.Errorf("%s:\n got %s\nwant %s", c.name, got, c.want)
+		}
+	}
+}
+
 // The Changes row counts the branch's changes when it has any, else the
 // working tree's, and names what it counts against.
 func TestChangesTotals(t *testing.T) {

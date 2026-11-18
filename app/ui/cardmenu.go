@@ -63,6 +63,21 @@ func (th *Theme) cardMenu(gtx C, m *CardMenu, w int) D {
 							return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: col}, r.Label)
 						})
 					}))
+				case MenuItemRow:
+					if r.Disabled && r.Reason != "" {
+						// A disabled row explains itself in a popover to its
+						// left while the pointer rests on it; its presses do
+						// nothing.
+						off := "off." + id
+						kids = append(kids, rigid(func(gtx C) D {
+							d := th.cardMenuRow(gtx, r)
+							th.hover(gtx, off, d.Size)
+							th.reasonPopover(gtx, off, r.Reason, d.Size, true)
+							return d
+						}))
+						continue
+					}
+					fallthrough
 				default:
 					if r.Disabled {
 						id = ""

@@ -246,7 +246,8 @@ func (a *App) cardScene(s *ui.Scene, e *envState, t *t3.Thread, p t3.Project, ha
 	if a.cardMenu == "git" {
 		var rows []ui.MenuRow
 		for _, it := range items {
-			rows = append(rows, ui.MenuRow{Label: it.label, Icon: gitMenuIcon(it.id, providerKind(st)), Disabled: it.disabled})
+			rows = append(rows, ui.MenuRow{Label: it.label, Icon: gitMenuIcon(it.id, providerKind(st)), Disabled: it.disabled,
+				Reason: gitMenuReason(it, st, busy, hasRemote)})
 		}
 		d.Menu = &ui.CardMenu{For: "git", Rows: append(rows, notes...)}
 	}

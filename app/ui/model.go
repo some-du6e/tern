@@ -421,6 +421,7 @@ type MenuRow struct {
 	Shortcut string
 	Checked  bool
 	Disabled bool
+	Reason   string // why a disabled row is off, in a popover to its left on hover
 	Tone     string // a note's colour: "warning" or "destructive"
 }
 

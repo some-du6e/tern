@@ -293,7 +293,7 @@ func gitMenuScene() *ui.Scene {
 	s.Card.Git = &ui.GitActions{Label: "Push & create PR", Icon: "provider:github"}
 	s.Card.Changes = &ui.Changes{Base: "vs main"}
 	s.Card.Menu = &ui.CardMenu{For: "git", Rows: []ui.MenuRow{
-		{Label: "Commit", Icon: "git-commit-horizontal", Disabled: true},
+		{Label: "Commit", Icon: "git-commit-horizontal", Disabled: true, Reason: "Worktree is clean. Make changes before committing."},
 		{Label: "Push", Icon: "cloud-upload"},
 		{Label: "Create PR", Icon: "provider:github"},
 	}}

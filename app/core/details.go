@@ -276,6 +276,54 @@ func buildGitMenu(st *t3.VcsStatus, busy, hasPrimaryRemote bool) []gitMenuItem {
 	return []gitMenuItem{commit, push, pr}
 }
 
+// gitMenuReason is why a Git menu row is off (getMenuActionDisabledReason),
+// "" while it's on.
+func gitMenuReason(it gitMenuItem, st *t3.VcsStatus, busy, hasPrimaryRemote bool) string {
+	switch {
+	case !it.disabled:
+		return ""
+	case busy:
+		return "Git action in progress."
+	case st == nil:
+		return "Git status is unavailable."
+	}
+	terms := termsFor(st)
+	detached, dirty, behind := st.RefName == "", st.HasWorkingTreeChanges, st.BehindCount > 0
+	noRemote := !st.HasUpstream && !hasPrimaryRemote
+	switch it.id {
+	case "commit":
+		if !dirty {
+			return "Worktree is clean. Make changes before committing."
+		}
+		return "Commit is currently unavailable."
+	case "push":
+		switch {
+		case detached:
+			return "Detached HEAD: check out a branch before pushing."
+		case dirty:
+			return "Commit or stash local changes before pushing."
+		case behind:
+			return "Branch is behind upstream. Pull/rebase before pushing."
+		case noRemote:
+			return `Add an "origin" remote before pushing.`
+		case st.AheadCount == 0:
+			return "No local commits to push."
+		}
+		return "Push is currently unavailable."
+	}
+	switch {
+	case detached:
+		return "Detached HEAD: check out a branch before creating a " + terms.singular + "."
+	case noRemote:
+		return `Add an "origin" remote before creating a ` + terms.singular + "."
+	case aheadOfDefault(st) <= 0:
+		return "No local commits to include in a " + terms.singular + "."
+	case behind:
+		return "Branch is behind upstream. Pull/rebase before creating a " + terms.singular + "."
+	}
+	return "Create " + terms.singular + " is currently unavailable."
+}
+
 // gitMenuIcon is a menu row's icon: the host's mark for the pull request.
 func gitMenuIcon(id, provider string) string {
 	switch id {
