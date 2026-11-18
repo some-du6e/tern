@@ -21,6 +21,12 @@ type Timeline struct {
 	// Approvals are pending approvals no row claimed; they go under the
 	// rows (MessagesTimeline.tsx:755-767).
 	Approvals []PendingApproval
+	// CanRun: the thread has a project, so a reply's shell blocks can run
+	// in its terminal.
+	CanRun bool
+	// Working: the thread is working, so opening a row while the live end
+	// is followed keeps following it.
+	Working bool
 }
 
 // RowKind is a row's kind (§2.2).
@@ -68,6 +74,10 @@ type TimelineRow struct {
 	Detail string // a divider's detail, a failed compaction's reason
 	Icon   string // a group's summary icon, a divider's icon
 	Failed bool   // the group's latest tool failed; the compaction failed
+	// A divider's button: Action names it, and it opens thread Thread, a
+	// ref. Wrap lets its detail wrap, each line centred.
+	Action, Thread string
+	Wrap           bool
 	// Live: the live or thinking row animates; a compaction is running.
 	Live bool
 	// Entry is RowWorkLive's running tool; Thought the newest thought over
@@ -108,6 +118,7 @@ type Message struct {
 	// A user's message.
 	Chips    []string  // the labels of the pictures ChipText(1), ChipText(2), … in Text
 	Pictures []Picture // the attached pictures, as they load
+	Files    []File    // the attached files
 	// GroupedNext and GroupedPrev: another of your messages follows or
 	// precedes it, so they sit 4dp apart with their joined corners tight.
 	GroupedNext, GroupedPrev bool
@@ -120,6 +131,15 @@ type Message struct {
 	Meta  bool   // the copy and time row under it
 	Copy  bool   // the copy button on that row
 	Badge string // its status, when not completed: "interrupted"
+}
+
+// File is a file sent with a message (ChatFileAttachment): its download
+// is click target "file.download:<ID>".
+type File struct {
+	ID, Name string
+	Size     int
+	Pasted   bool // text pasted as a file: "Pasted text", its size alone
+	Unknown  bool // a kind of attachment T3 doesn't know: its name alone
 }
 
 // EntryTone picks a work entry's heading colour.
@@ -171,9 +191,9 @@ type QuestionHistory struct {
 
 // EntryBody is what an open tool row shows (V2ItemInspector.tsx).
 type EntryBody struct {
-	Command  string      // a command, highlighted per shell word
-	Args     [][2]string // a tool call's arguments: name and value
-	ArgsText string      // arguments that aren't an object
+	Command  string    // a command, highlighted per shell word
+	Args     []ToolArg // a tool call's arguments, in the call's order
+	ArgsText string    // arguments that aren't an object
 	// Output is the tool's output; Pending while it loads, Missing when it
 	// came back empty, Err when it couldn't load.
 	Output  string
@@ -194,11 +214,20 @@ type EntryBody struct {
 	Value    string      // a prompt, a todo list, a notice: muted text
 }
 
+// ToolArg is one argument of a tool call.
+type ToolArg struct {
+	Key, Value string
+	// Lang is the value's code, highlighted under the key: "html",
+	// "typescript" or "json". A value without one runs on after the key.
+	Lang string
+}
+
 // SearchHit is one result of a file or web search.
 type SearchHit struct {
 	Title string // a file's path and line, or a page's title
 	Text  string // the matching line, or the snippet
 	Web   bool   // a page: the title in the foreground with its link mark
+	URL   string // a page's web address, which its title opens
 }
 
 // PendingApproval is an approval waiting on the user, as the timeline

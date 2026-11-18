@@ -3,6 +3,8 @@ package ui
 import (
 	"fmt"
 	"image"
+	"image/color"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,6 +38,11 @@ func TestTimelineRowHeights(t *testing.T) {
 		{"thinking row", TimelineRow{ID: "t", Kind: RowThinking, Label: "Thinking", Live: true}, 36},
 		{"compaction", TimelineRow{ID: "c", Kind: RowCompaction, Label: "Context compacted", Before: "180K", After: "12K"}, 40},
 		{"event divider", TimelineRow{ID: "d", Kind: RowDivider, Label: "Run interrupted", Icon: "circle-stop"}, 48},
+		// The bordered button is 26 tall, the row 42 (§3.9).
+		{"divider with an action", TimelineRow{ID: "d", Kind: RowDivider, Label: "Forked from conversation", Icon: "git-fork",
+			Action: "Open source conversation", Thread: "env/t"}, 42 + 8},
+		{"a detail that wraps", TimelineRow{ID: "d", Kind: RowDivider, Label: "Run interrupted", Icon: "circle-stop",
+			Detail: "first line\nsecond line", Wrap: true}, 40 + 16 + 8},
 	} {
 		var ops op.Ops
 		gtx := layout.Context{Ops: &ops, Metric: unit.Metric{PxPerDp: 4, PxPerSp: 4}, Constraints: layout.Constraints{Max: image.Pt(4*800, 4*2000)}, Now: time.Now()}
@@ -171,6 +178,12 @@ func TestHistoryControl(t *testing.T) {
 // timelineClicks lays s's timeline out in an 800x600 canvas at 1x, the
 // lane 32dp in, and returns a click at a point and the frame's actions.
 func timelineClicks(th *Theme, s *Scene) func(p image.Point) []Action {
+	click, _ := timelineRouter(th, s)
+	return click
+}
+
+// timelineRouter is timelineClicks with the router, for the clipboard.
+func timelineRouter(th *Theme, s *Scene) (func(p image.Point) []Action, *gioinput.Router) {
 	r := new(gioinput.Router)
 	var ops op.Ops
 	frame := func() []Action {
@@ -188,7 +201,7 @@ func timelineClicks(th *Theme, s *Scene) func(p image.Point) []Action {
 		r.Queue(pointer.Event{Kind: pointer.Press, Position: fp, Buttons: pointer.ButtonPrimary, Source: pointer.Mouse},
 			pointer.Event{Kind: pointer.Release, Position: fp, Source: pointer.Mouse})
 		return frame()
-	}
+	}, r
 }
 
 // A turn fold, a group's header and an entry that opens each send their
@@ -278,4 +291,293 @@ func TestShortTimelineStartsAtTheTop(t *testing.T) {
 	})
 	wantPixel(t, img, image.Pt(32+736-16, 24+4), P.MessageSurface, "the bubble under the header")
 	wantPixel(t, img, image.Pt(32+736-16, 600-40), P.Background, "the canvas's bottom")
+}
+
+// A table's copy menu copies the pick the frame it's clicked, then closes
+// (MarkdownTable.tsx:15-70).
+func TestTableCopyMenu(t *testing.T) {
+	click, r := markdownClicks("| A | B |\n|---|---|\n| 1 | 2 |", mdBody())
+	// The head row is 8.8 + 22.75 + 8.8 and its rule, the body row 7.2 +
+	// 22.75 + 7.2 and its; the button is 2dp under them, 4dp past the edge.
+	button := image.Pt(600+4-12, 41+1+37+1+2+12)
+	click(button)
+	// The menu hangs 4dp under the button by its top-right corner, its
+	// rows 28dp tall inside 4dp of padding.
+	csv := image.Pt(600-60, 41+1+37+1+2+24+4+4+28+14)
+	if acts := click(csv); len(acts) != 0 {
+		t.Fatalf("the pick reached core: %+v", acts)
+	}
+	if mime, data, ok := r.WriteClipboard(); !ok || mime != "application/text" || string(data) != "A,B\n1,2" {
+		t.Fatalf("clipboard = %q %q %v", mime, data, ok)
+	}
+	click(csv)
+	if _, data, ok := r.WriteClipboard(); ok {
+		t.Errorf("the menu stayed open: a second click copied %q", data)
+	}
+}
+
+// The plan card's menu copies the plan as T3 exports it, one line break
+// at its end, and downloads it under its heading's name
+// (ProposedPlanCard.tsx:41-140, proposedPlan.ts:56-63).
+func TestPlanCardMenu(t *testing.T) {
+	th := NewTheme()
+	plan := "# Retry the uploader!\n\nRetry each chunk.\n\n\n"
+	s := &Scene{Timeline: Timeline{ID: "plan", Rows: []TimelineRow{{ID: "plan-1", Kind: RowPlan, Plan: plan}}}}
+	click, r := timelineRouter(th, s)
+	// The ellipsis is the header's last, 24dp, the card padded 20.
+	menu := image.Pt(32+736-20-12, 24+20+12)
+	// The menu's top-right is 4dp under the header; rows 28dp, padded 4.
+	row := func(i int) image.Point { return image.Pt(32+736-20-80, 24+20+24+4+4+28*i+14) }
+	click(menu)
+	if acts := click(row(0)); len(acts) != 0 {
+		t.Fatalf("copy reached core: %+v", acts)
+	}
+	if _, data, ok := r.WriteClipboard(); !ok || string(data) != "# Retry the uploader!\n\nRetry each chunk.\n" {
+		t.Fatalf("clipboard = %q %v", data, ok)
+	}
+	click(menu)
+	want := Action{ID: "plan.download:retry-the-uploader.md", Kind: "click", Text: "# Retry the uploader!\n\nRetry each chunk.\n"}
+	if acts := click(row(1)); len(acts) != 1 || acts[0] != want {
+		t.Fatalf("download sent %+v", acts)
+	}
+}
+
+// T3's plan title needs white space after its hashes; a plan without a
+// heading downloads as plan.md, and an empty preview says so
+// (proposedPlanText.ts:1-4, proposedPlan.ts:3-59).
+func TestPlanTitle(t *testing.T) {
+	for _, c := range []struct{ md, title, file string }{
+		{"# Ship it\nwork", "Ship it", "ship-it.md"},
+		{"#hashtag\n\n## Real title", "Real title", "real-title.md"},
+		{"no heading", "Proposed plan", "plan.md"},
+		{"## It's (finally) done.", "It's (finally) done.", "its-finally-done.md"},
+	} {
+		if got := planTitle(c.md); got != c.title {
+			t.Errorf("planTitle(%q) = %q, want %q", c.md, got, c.title)
+		}
+		if got := planFile(c.md); got != c.file {
+			t.Errorf("planFile(%q) = %q, want %q", c.md, got, c.file)
+		}
+	}
+	if got := planPreview("# Only a title"); got != "Only a title" {
+		t.Errorf("a title-only preview is %q", got)
+	}
+	if got := planPreview("   \n"); got != "Plan preview unavailable." {
+		t.Errorf("an empty preview is %q", got)
+	}
+}
+
+// The working row asks for its next frame on its own, on the second, so
+// the window needn't redraw in between while a run works (§8 note 7).
+func TestWorkingRowTicksEachSecond(t *testing.T) {
+	th := NewTheme()
+	now := time.Now()
+	since := now.Add(-12300 * time.Millisecond)
+	s := &Scene{Timeline: Timeline{ID: "tick", Rows: []TimelineRow{{ID: "working-indicator-row", Kind: RowWorking, Since: since}}}}
+	var r gioinput.Router
+	var ops op.Ops
+	gtx := layout.Context{Ops: &ops, Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Exact(image.Pt(800, 600)), Source: r.Source(), Now: now}
+	th.timeline(gtx, s, 32, 736, 0)
+	r.Frame(&ops)
+	if at, ok := r.WakeupTime(); !ok || !at.Equal(since.Add(13*time.Second)) {
+		t.Fatalf("the next frame is at %v (%v), want %v", at, ok, since.Add(13*time.Second))
+	}
+}
+
+// A fork's divider is a button that opens the conversation on its other
+// side, with that in its tooltip (V2LifecycleRow.tsx:97-105).
+func TestForkDividerOpensThread(t *testing.T) {
+	th := NewTheme()
+	s := &Scene{Timeline: Timeline{ID: "fork", Rows: []TimelineRow{{ID: "fork-1", Kind: RowDivider, Label: "Forked from conversation",
+		Icon: "git-fork", Action: "Open source conversation", Thread: "env/source"}}}}
+	click := timelineClicks(th, s)
+	if acts := click(image.Pt(32+736/2, 24+21)); len(acts) != 1 || acts[0] != (Action{ID: "thread:env/source", Kind: "click"}) {
+		t.Fatalf("clicking the fork's button sent %+v", acts)
+	}
+}
+
+// A row's time shows its long form in a tooltip once the pointer rests on
+// it (TimelineRowParts.tsx:13-40).
+func TestTimestampTooltip(t *testing.T) {
+	defer SetDark(false)
+	SetDark(true)
+	th := NewTheme()
+	s := &Scene{Timeline: Timeline{ID: "stamp", Rows: []TimelineRow{{ID: "turn-fold:r", Kind: RowTurnFold, Group: "r",
+		Label: "Worked for 2m 14s", At: time.Now().Add(-time.Hour)}}}}
+	size := image.Pt(800, 600)
+	draw := func(gtx C) D {
+		fill(gtx, P.Background, image.Rectangle{Max: size}, 0)
+		th.timeline(gtx, s, 32, 736, 0)
+		return D{Size: size}
+	}
+	var r gioinput.Router
+	var ops op.Ops
+	at := time.Now().Add(-10 * time.Second)
+	frame := func() {
+		ops.Reset()
+		draw(layout.Context{Ops: &ops, Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Exact(size), Source: r.Source(), Now: at})
+		r.Frame(&ops)
+	}
+	frame()
+	// The time sits at the row's end, 2dp in, its 16dp line 3dp under the
+	// fold's 4dp top: rest on it.
+	r.Queue(pointer.Event{Kind: pointer.Move, Position: f32.Pt(32+736-2-20, 24+4+3+8), Source: pointer.Mouse})
+	frame()
+	frame()
+	at = at.Add(time.Second)
+	frame()
+	// The tooltip's bottom padding, 4dp over the time.
+	wantPixel(t, drawn(t, size, 1, draw), image.Pt(32+736-2-20, 24+4+3-4-2), P.Popover, "the tooltip over the time")
+}
+
+// "Show full message" ends at the text's edge, 12dp in from the bubble's,
+// so its label ends 20dp in (TimelineUserMessageRow.tsx:1181-1196).
+func TestShowFullMessageButton(t *testing.T) {
+	long := strings.Repeat("a line of the message\n", 20)
+	img := rowDrawn(t, NewTheme(), TimelineRow{ID: "u", Kind: RowUser, Message: &Message{ID: "u", Text: long}}, image.Pt(736, 300), 1)
+	// The footer: 12 + 176 + 6dp down, 24 tall.
+	surface := rgb(0xebebed)
+	for x := 736 - 18; x < 736-12; x++ {
+		for y := 12 + 176 + 6 + 4; y < 12+176+6+20; y++ {
+			if c := img.RGBAAt(x, y); !near(c.R, surface.R, 4) || !near(c.G, surface.G, 4) || !near(c.B, surface.B, 4) {
+				t.Fatalf("the label reaches x %d, under 18dp from the bubble's edge", x)
+			}
+		}
+	}
+	if firstInk(img, 736-60, 12+176+6+4, 12+176+6+20) < 0 {
+		t.Error("no label at the footer")
+	}
+}
+
+// An expanded command is coloured per shell word as T3's grammar has it:
+// the command's name a function, its arguments variables
+// (ShellCommandBlock.tsx; §3.6).
+func TestShellCommandColours(t *testing.T) {
+	th := NewTheme()
+	img := drawn(t, image.Pt(400, 40), 2, func(gtx C) D {
+		fill(gtx, P.Background, image.Rectangle{Max: gtx.Constraints.Max}, 0)
+		return D{Size: image.Pt(gtx.Constraints.Max.X, th.toolInspector(gtx, &EntryBody{Command: "go test ./upload/..."}, "e"))}
+	})
+	has := func(c color.NRGBA, x0, x1 int) bool {
+		for y := 0; y < 2*22; y++ {
+			for x := x0; x < x1; x++ {
+				p := img.RGBAAt(x, y)
+				if near(p.R, c.R, 12) && near(p.G, c.G, 12) && near(p.B, c.B, 12) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	// Mono 13 is 7.8dp a character: "go" ends at 15.6, "test" starts at 23.4.
+	if !has(rgb(0x693acf), 0, 2*16) {
+		t.Error("the command's name isn't #693acf")
+	}
+	if !has(rgb(0x8f4e17), 2*23, 2*55) || has(rgb(0x693acf), 2*23, 2*55) {
+		t.Error("its first argument isn't #8f4e17")
+	}
+}
+
+// An open group keeps its scrollbar's 6dp gutter, so its rows' chevrons
+// end 6dp further in than a standalone row's (§2.7, §3.7).
+func TestOpenGroupGutter(t *testing.T) {
+	entries := []WorkEntry{{ID: "e1", Icon: "terminal", Label: "ls", Expands: true}, {ID: "e2", Icon: "eye", Label: "Read go.mod"}}
+	img := rowDrawn(t, NewTheme(), TimelineRow{ID: "l", Kind: RowWork, Group: "g", Open: true, Entries: entries}, image.Pt(736, 60), 1)
+	ink := func(x0, x1 int) bool {
+		for y := 0; y < 24; y++ {
+			for x := x0; x < x1; x++ {
+				if c := img.RGBAAt(x, y); !near(c.R, P.Background.R, 6) || !near(c.G, P.Background.G, 6) || !near(c.B, P.Background.B, 6) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	if !ink(736-22, 736-10) {
+		t.Error("no chevron 10 to 22dp in from the lane's end")
+	}
+	if ink(736-9, 736) {
+		t.Error("the chevron reaches the scrollbar's gutter")
+	}
+}
+
+// Opening a fold while the end is followed keeps the fold where it is,
+// its rows growing below it, rather than pinning the end and pushing the
+// fold away; while the turn works the live end stays followed instead
+// (MessagesTimeline.tsx:534-556).
+func TestToggleKeepsTheRowInPlace(t *testing.T) {
+	for _, working := range []bool{false, true} {
+		th := NewTheme()
+		s := &Scene{Timeline: Timeline{ID: fmt.Sprint("anchor", working), Working: working}}
+		for i := 0; i < 20; i++ {
+			id := fmt.Sprintf("u%d", i)
+			s.Timeline.Rows = append(s.Timeline.Rows, TimelineRow{ID: id, Kind: RowUser, Message: &Message{ID: id, Text: "Hello"}})
+		}
+		fold := TimelineRow{ID: "turn-fold:run", Kind: RowTurnFold, Group: "run", Label: "Worked for 4m 12s"}
+		reply := TimelineRow{ID: "a", Kind: RowAssistant, Message: &Message{ID: "a", Text: "Done.", Meta: true, Copy: true}}
+		s.Timeline.Rows = append(s.Timeline.Rows, fold, reply)
+		size := image.Pt(800, 600)
+		draw := func(gtx C) D {
+			fill(gtx, P.Background, image.Rectangle{Max: size}, 0)
+			th.timeline(gtx, s, 32, 736, 0)
+			return D{Size: size}
+		}
+		rule := over(faded(P.Border, 0x99), P.Background)
+		ruleAt := func(img *image.RGBA) int {
+			for y := 599; y >= 0; y-- {
+				if c := img.RGBAAt(32+400, y); near(c.R, rule.R, 1) && near(c.G, rule.G, 1) && near(c.B, rule.B, 1) {
+					return y
+				}
+			}
+			return -1
+		}
+		var r gioinput.Router
+		var ops op.Ops
+		frame := func() {
+			ops.Reset()
+			draw(layout.Context{Ops: &ops, Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Exact(size), Source: r.Source(), Now: time.Now()})
+			r.Frame(&ops)
+			th.Actions()
+		}
+		frame()
+		before := ruleAt(drawn(t, size, 1, draw))
+		if before < 0 {
+			t.Fatal("no fold rule")
+		}
+		// The fold's button is 8dp over its rule, 22.75 tall.
+		at := f32.Pt(32+40, float32(before-8-11))
+		r.Queue(pointer.Event{Kind: pointer.Move, Position: at, Source: pointer.Mouse})
+		frame()
+		r.Queue(pointer.Event{Kind: pointer.Press, Position: at, Buttons: pointer.ButtonPrimary, Source: pointer.Mouse},
+			pointer.Event{Kind: pointer.Release, Position: at, Source: pointer.Mouse})
+		frame()
+		// Core opens the fold: its work shows under it.
+		var work []TimelineRow
+		for i := 0; i < 5; i++ {
+			id := fmt.Sprintf("w%d", i)
+			work = append(work, TimelineRow{ID: id, Kind: RowWork, Entries: []WorkEntry{{ID: id, Icon: "terminal", Label: "make"}}})
+		}
+		rows := s.Timeline.Rows
+		s.Timeline.Rows = append(append(append([]TimelineRow{}, rows[:21]...), work...), rows[21:]...)
+		s.Timeline.Rows[20].Open = true
+		frame()
+		frame()
+		after := ruleAt(drawn(t, size, 1, draw))
+		if !working && after != before {
+			t.Errorf("the fold moved from y %d to %d", before, after)
+		}
+		if working && after >= before {
+			t.Errorf("working: the fold stayed at y %d, the end unfollowed", after)
+		}
+	}
+}
+
+// A file sent without words is a 256 by 52dp card of --message-surface at
+// the lane's end, its icon in a box at background/60 (§3.3 file card).
+func TestFileCard(t *testing.T) {
+	img := rowDrawn(t, NewTheme(), TimelineRow{ID: "u", Kind: RowUser, Message: &Message{ID: "u",
+		Files: []File{{ID: "f", Name: "report.pdf", Size: 2516582}}}}, image.Pt(736, 100), 1)
+	wantPixel(t, img, image.Pt(736-40, 26), P.MessageSurface, "the card between its text and its button")
+	wantPixel(t, img, image.Pt(736-256+12, 26), over(faded(P.Background, 0x99), P.MessageSurface), "the icon's box")
+	wantPixel(t, img, image.Pt(736-260, 26), P.Background, "left of the card")
 }

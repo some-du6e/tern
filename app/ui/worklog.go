@@ -284,7 +284,7 @@ func (th *Theme) entryRow(gtx C, e *WorkEntry, grouped bool) int {
 	if e.Expands {
 		trailing = append(trailing, th.chevron(id, e.Open))
 	}
-	trailing = append(trailing, th.timestamp(e.At, hot))
+	trailing = append(trailing, th.timestamp(id, e.At, hot))
 	off := op.Offset(image.Pt(px, py)).Push(gtx.Ops)
 	line := th.workLine(within(gtx, w-2*px), workIcon(e.Icon, mutedIcon(entryIconColor(e))), label, trailing, false)
 	off.Pop()
@@ -309,7 +309,7 @@ func (th *Theme) entryDetails(gtx C, e *WorkEntry) int {
 	in := dp(gtx, 28)
 	switch {
 	case e.Thought != "":
-		return th.traceBox(within(gtx, w-in), "entry:"+e.ID, in, []string{e.Thought})
+		return th.traceBox(within(gtx, w-in), "entry:"+e.ID, in, []string{e.Thought}, e.Thinking)
 	case len(e.Answers) > 0:
 		// QuestionAnswerHistory: 8dp under the line, each question over its
 		// answer, 12dp further in.
@@ -342,11 +342,13 @@ func (th *Theme) entryDetails(gtx C, e *WorkEntry) int {
 	return 0
 }
 
-// traceBox is ReasoningTraceContent: thoughts as markdown in the
-// foreground, 12dp apart, in px in and padded 2 by 4, scrolling past 384dp.
-func (th *Theme) traceBox(gtx C, id string, in int, thoughts []string) int {
+// traceBox is ReasoningTraceContent: thoughts as a reply's markdown but in
+// the foreground with their line breaks kept, 12dp apart, in px in and
+// padded 2 by 4, scrolling past 384dp; while one streams the box keeps
+// to its live end, within 4dp (WorkLog.tsx:128-170).
+func (th *Theme) traceBox(gtx C, id string, in int, thoughts []string, live bool) int {
 	w := gtx.Constraints.Max.X
-	st := mdStyle{color: P.Foreground, on: P.Background, user: true}
+	st := mdStyle{color: P.Foreground, on: P.Background, breaks: true}
 	m := op.Record(gtx.Ops)
 	y := dp(gtx, 4)
 	for i, t := range thoughts {
@@ -354,33 +356,43 @@ func (th *Theme) traceBox(gtx C, id string, in int, thoughts []string) int {
 			y += dp(gtx, 12)
 		}
 		off := op.Offset(image.Pt(dp(gtx, 2), y)).Push(gtx.Ops)
+		st.owner = id + ":" + strconv.Itoa(i)
 		y += th.markdown(within(gtx, w-dp(gtx, 4)), t, st, nil).Size.Y
 		off.Pop()
 	}
 	y += dp(gtx, 4)
 	call := m.Stop()
 	defer op.Offset(image.Pt(in, 0)).Push(gtx.Ops).Pop()
-	return th.vscroll(gtx, id+":trace", image.Pt(w, min(y, dp(gtx, 384))), y, false, call)
+	follow := float32(0)
+	if live {
+		follow = 4
+	}
+	return th.vscroll(gtx, id+":trace", image.Pt(w, min(y, dp(gtx, 384))), y, follow, call)
 }
 
-// plainText draws s wrapped, its line breaks kept, lines lineH dp apart.
+// plainText draws s wrapped in t's font, UI's by default, its line breaks
+// kept, lines lineH dp apart.
 func (th *Theme) plainText(gtx C, s string, t Txt, lineH float32) int {
-	p := &inlineText{font: UI(font.Normal), size: float32(t.Size), lineH: lineH}
+	if t.Font.Typeface == "" {
+		t.Font = UI(font.Normal)
+	}
+	p := &inlineText{font: t.Font, size: float32(t.Size), lineH: lineH}
 	for i, line := range strings.Split(s, "\n") {
 		if i > 0 {
 			p.runs = append(p.runs, inlineRun{brk: true})
 		}
 		if line != "" {
-			p.runs = append(p.runs, inlineRun{text: line, font: UI(font.Normal), size: float32(t.Size), color: t.Color})
+			p.runs = append(p.runs, inlineRun{text: line, font: t.Font, size: float32(t.Size), color: t.Color})
 		}
 	}
 	return th.inline(gtx, th.keepText(s, t, p), nil).Size.Y
 }
 
 // keepText keeps a one-off paragraph for as long as its text is shown:
-// layouts are cached by their paragraph.
+// layouts are cached by their paragraph. s, with t's colour, size and
+// font, names it.
 func (th *Theme) keepText(s string, t Txt, p *inlineText) *inlineText {
-	k := plainKey{s, t.Color, float32(t.Size), p.lineH}
+	k := plainKey{s, t.Color, float32(t.Size), p.lineH, t.Font}
 	if old := th.tl.plain[k]; old != nil {
 		return old
 	}
@@ -396,27 +408,28 @@ type plainKey struct {
 	col   color.NRGBA
 	size  float32
 	lineH float32
+	font  font.Font
 }
 
 // vscroll draws a recorded block content px tall in a size box, scrolled
-// by the wheel when it's taller; follow keeps it at its end as it grows
-// while it was there (8dp of slack).
-func (th *Theme) vscroll(gtx C, id string, size image.Point, content int, follow bool, call op.CallOp) int {
+// by the wheel when it's taller. A follow of more than 0 keeps it at its
+// end as it grows while it was there, within follow dp.
+func (th *Theme) vscroll(gtx C, id string, size image.Point, content int, follow float32, call op.CallOp) int {
 	s := th.tl.scrolls[id]
 	if s == nil {
 		s = &hscroll{}
 		th.tl.scrolls[id] = s
-		if follow {
+		if follow > 0 {
 			s.x = content
 		}
 	}
 	most := max(0, content-size.Y)
-	if follow && s.atEnd {
+	if follow > 0 && s.atEnd {
 		s.x = most
 	}
 	d := s.g.Update(gtx.Metric, gtx.Source, gtx.Now, gesture.Vertical, pointer.ScrollRange{}, pointer.ScrollRange{Min: -s.x, Max: most - s.x})
 	s.x = max(0, min(most, s.x+d))
-	s.atEnd = most-s.x <= dp(gtx, 8)
+	s.atEnd = most-s.x <= dp(gtx, follow)
 	defer clip.Rect{Max: size}.Push(gtx.Ops).Pop()
 	if most > 0 {
 		s.g.Add(gtx.Ops)
@@ -435,7 +448,7 @@ func (th *Theme) groupHeader(gtx C, r *TimelineRow, hot bool) int {
 	off := op.Offset(image.Pt(px, py)).Push(gtx.Ops)
 	line := th.workLine(within(gtx, w-2*px), workIcon(r.Icon, mutedIcon(P.IconMuted)), func(gtx C) D {
 		return th.textLine(gtx, Txt{Size: 14, Color: P.SecondaryLabel}, 22.75, r.Label)
-	}, []W{th.timestamp(r.At, hot)}, false)
+	}, []W{th.timestamp(r.ID, r.At, hot)}, false)
 	off.Pop()
 	h := line + 2*py
 	th.hit(gtx, "group:"+r.Group, image.Pt(w, h))
@@ -443,12 +456,15 @@ func (th *Theme) groupHeader(gtx C, r *TimelineRow, hot bool) int {
 }
 
 // groupList is an open group's entries, 24dp each, in a list that scrolls
-// past min(18rem, 50% of the window) plus what its open entries add.
+// past min(18rem, 50% of the window) plus what its open entries add. The
+// list keeps its scrollbar's 6dp gutter whether or not it scrolls
+// (scrollbar-gutter: stable), so its rows end 6dp short of the lane.
 func (th *Theme) groupList(gtx C, r *TimelineRow) int {
 	w := gtx.Constraints.Max.X
-	thoughts := true
+	thoughts, live := true, false
 	for _, e := range r.Entries {
 		thoughts = thoughts && e.Thought != ""
+		live = live || e.Thinking
 	}
 	if thoughts {
 		// A group of only thoughts opens to their trace.
@@ -456,13 +472,14 @@ func (th *Theme) groupList(gtx C, r *TimelineRow) int {
 		for _, e := range r.Entries {
 			ts = append(ts, e.Thought)
 		}
-		return th.traceBox(within(gtx, w-dp(gtx, 28)), r.ID, dp(gtx, 28), ts)
+		return th.traceBox(within(gtx, w-dp(gtx, 28)), r.ID, dp(gtx, 28), ts, live)
 	}
+	gutter := dp(gtx, Metrics.AppScrollbarWidth)
 	m := op.Record(gtx.Ops)
 	y, extra := 0, 0
 	for i := range r.Entries {
 		off := op.Offset(image.Pt(0, y)).Push(gtx.Ops)
-		h := th.entryRow(gtx, &r.Entries[i], true)
+		h := th.entryRow(within(gtx, w-gutter), &r.Entries[i], true)
 		off.Pop()
 		y += h
 		extra += max(0, h-dp(gtx, 24))
@@ -477,7 +494,14 @@ func (th *Theme) groupList(gtx C, r *TimelineRow) int {
 		call.Add(gtx.Ops)
 		return y
 	}
-	return th.vscroll(gtx, r.ID, image.Pt(w, limit), y, false, call)
+	h := th.vscroll(gtx, r.ID, image.Pt(w, limit), y, 0, call)
+	// The 6dp bar in the gutter, its thumb in --app-scrollbar-thumb.
+	if s := th.tl.scrolls[r.ID]; s != nil {
+		length := max(dp(gtx, 16), limit*limit/y)
+		ty := (limit - length) * s.x / max(1, y-limit)
+		fill(gtx, over(P.AppScrollbarThumb, P.Background), image.Rect(w-gutter, ty, w, ty+length), gutter/2)
+	}
+	return h
 }
 
 // liveRow is the running tool (LiveWorkEntryTimelineRow): the newest
@@ -619,10 +643,10 @@ func (th *Theme) errorRow(gtx C, e *WorkEntry) int {
 	}
 	off := op.Offset(image.Pt(px, py)).Push(gtx.Ops)
 	line := th.workLine(within(gtx, w-2*px), LucideW("circle-alert", col, 16), func(gtx C) D {
-		p := th.keepText(e.Error.Label, Txt{Size: 14, Color: col}, &inlineText{font: UI(font.Medium), size: 14, lineH: 20,
+		p := th.keepText(e.Error.Label, Txt{Size: 14, Font: UI(font.Medium), Color: col}, &inlineText{font: UI(font.Medium), size: 14, lineH: 20,
 			runs: []inlineRun{{text: e.Error.Label, font: UI(font.Medium), size: 14, color: col}}})
 		return th.inline(gtx, p, nil)
-	}, []W{th.timestamp(e.At, true)}, true)
+	}, []W{th.timestamp("entry:"+e.ID, e.At, true)}, true)
 	off.Pop()
 	h := py + line
 	if e.Error.Message != "" {
@@ -659,7 +683,7 @@ func (th *Theme) approvalRow(gtx C, a *PendingApproval) D {
 	line := th.workLine(within(gtx, w-2*px), workIcon(icon, mutedIcon(P.IconMuted)), func(gtx C) D {
 		cl := th.codeText(gtx, detail, "", P.Foreground, 12, 20, gtx.Constraints.Max.X)
 		h := min(cl.size.Y, dp(gtx, 160))
-		th.vscroll(gtx, "approval:"+a.ID, image.Pt(gtx.Constraints.Max.X, h), cl.size.Y, false, cl.call)
+		th.vscroll(gtx, "approval:"+a.ID, image.Pt(gtx.Constraints.Max.X, h), cl.size.Y, 0, cl.call)
 		return D{Size: image.Pt(cl.size.X, h)}
 	}, nil, true)
 	off.Pop()
@@ -692,7 +716,10 @@ var defaultApprovalOptions = []ApprovalOption{{Decision: "cancel", Label: "Cance
 
 // approvalActions is the approval's 12/16 line: the warning shield and
 // "Waiting for approval", then Decline and Approve as inline buttons and
-// the rest under More (ComposerPendingApprovalActions, inline).
+// the rest under More, a menu above it (ComposerPendingApprovalActions,
+// inline). Their click targets are "timeline.approval:<decision>", apart
+// from the composer's own. A risky answer has a triangle-alert, its
+// warning in a tooltip.
 func (th *Theme) approvalActions(gtx C, a *PendingApproval) D {
 	if !a.Live {
 		return th.textLine(gtx, Txt{Size: 12, Color: P.Warning}, 16, "Provider process is gone. Interrupt or restart the run to respond.")
@@ -708,26 +735,30 @@ func (th *Theme) approvalActions(gtx C, a *PendingApproval) D {
 		layout.Rigid(Spacer(8, 0)),
 		layout.Rigid(func(gtx C) D { return th.textLine(gtx, Txt{Size: 12, Color: P.MutedForeground}, 16, "·") }),
 	}
-	var more []string
+	var more []menuChoice
 	var moreIDs []string
 	for _, o := range opts {
-		id := "approval:" + o.Decision
+		id := "timeline.approval:" + o.Decision
 		if o.Decision != "decline" && o.Decision != "accept" {
-			more, moreIDs = append(more, o.Label), append(moreIDs, id)
+			more, moreIDs = append(more, menuChoice{o.Label, o.Warning}), append(moreIDs, id)
 			continue
 		}
-		muted := o.Decision != "accept"
-		label := o.Label
-		kids = append(kids, layout.Rigid(Spacer(8, 0)), layout.Rigid(th.inlineButton(id, label, muted)))
+		o := o
+		kids = append(kids, layout.Rigid(Spacer(8, 0)), layout.Rigid(func(gtx C) D {
+			d := th.inlineButton(id, o.Label, o.Decision != "accept", o.Warning != "")(gtx)
+			th.tipAt(gtx, id, o.Warning, d.Size, true, 0)
+			return d
+		}))
 	}
 	menuID := "approval.more:" + a.ID
 	if len(more) > 0 {
 		kids = append(kids, layout.Rigid(Spacer(8, 0)), layout.Rigid(func(gtx C) D {
-			d := th.inlineButton(menuID, "More", true)(gtx)
+			d := th.inlineButton(menuID, "More", true, false)(gtx)
 			if th.clicked(menuID) {
 				th.toggleMenu(menuID)
 			}
-			if i := th.rowMenu(gtx, menuID, image.Pt(d.Size.X, d.Size.Y+dp(gtx, 4)), more); i >= 0 {
+			// side=top align=end, 4dp over the trigger.
+			if i := th.rowMenu(gtx, menuID, image.Pt(d.Size.X, -dp(gtx, 4)), true, more); i >= 0 {
 				th.push(Action{ID: moreIDs[i], Kind: "click"})
 			}
 			return d
@@ -737,27 +768,39 @@ func (th *Theme) approvalActions(gtx C, a *PendingApproval) D {
 }
 
 // inlineButton is InlineButton: medium text, underlined on hover; the
-// muted tone brightens to the foreground.
-func (th *Theme) inlineButton(id, label string, muted bool) W {
+// muted tone brightens to the foreground. warn puts a 12dp triangle-alert
+// 2dp before the label.
+func (th *Theme) inlineButton(id, label string, muted, warn bool) W {
 	return func(gtx C) D {
 		c, _ := th.events(gtx, id)
 		col := P.Foreground
 		if muted && !c.Hovered() {
 			col = P.MutedForeground
 		}
+		x := 0
+		if warn {
+			io := op.Offset(image.Pt(0, (dp(gtx, 16)-dp(gtx, 12))/2)).Push(gtx.Ops)
+			LucideW("triangle-alert", col, 12)(gtx)
+			io.Pop()
+			x = dp(gtx, 12+2)
+		}
+		off := op.Offset(image.Pt(x, 0)).Push(gtx.Ops)
 		d := th.textLine(gtx, Txt{Size: 12, Font: UI(font.Medium), Color: col}, 16, label)
 		if c.Hovered() {
 			// underline-offset-2 under the baseline.
 			y := d.Size.Y - d.Baseline + dp(gtx, 2)
 			hline(gtx, col, y, 0, d.Size.X)
 		}
+		off.Pop()
+		d.Size.X += x
 		th.hit(gtx, id, d.Size)
 		return d
 	}
 }
 
-// toolInspector is V2ItemInspector: an open tool's call and its result, 12/16
-// with mono 13/21.125 blocks.
+// toolInspector is V2ItemInspector (V2ItemInspector.tsx:197-416): an open
+// tool's call and its result, 12/16 with mono 13/21.125 blocks. Its
+// sections are 8dp apart; a call's command, arguments and output 6.
 func (th *Theme) toolInspector(gtx C, b *EntryBody, id string) int {
 	w := gtx.Constraints.Max.X
 	mono := func(gtx C, s string, col color.NRGBA, lang string, key string, tall bool) int {
@@ -766,53 +809,67 @@ func (th *Theme) toolInspector(gtx C, b *EntryBody, id string) int {
 			cl.call.Add(gtx.Ops)
 			return cl.size.Y
 		}
-		// StructuredValue and the command output: 320dp, then it scrolls.
-		return th.vscroll(gtx, id+":"+key, image.Pt(gtx.Constraints.Max.X, min(cl.size.Y, dp(gtx, 320))), cl.size.Y, key == "output", cl.call)
+		// StructuredValue and the command output: 320dp, then it scrolls;
+		// the output follows its end within 8dp.
+		follow := float32(0)
+		if key == "output" {
+			follow = 8
+		}
+		return th.vscroll(gtx, id+":"+key, image.Pt(gtx.Constraints.Max.X, min(cl.size.Y, dp(gtx, 320))), cl.size.Y, follow, cl.call)
 	}
 	fg85 := over(faded(P.Foreground, 0xd9), P.Background)
-	var parts []func(gtx C) int
-	add := func(f func(gtx C) int) { parts = append(parts, f) }
+	type part struct {
+		gap  float32 // dp above it
+		draw func(gtx C) int
+	}
+	var parts []part
+	add := func(gap float32, f func(gtx C) int) { parts = append(parts, part{gap, f}) }
 	status := func(s string, col color.NRGBA, italic bool) {
-		add(func(gtx C) int {
-			p := th.keepText(s, Txt{Size: 13, Color: col}, &inlineText{font: Mono(), size: 13, lineH: 21.125,
+		add(6, func(gtx C) int {
+			p := th.keepText(s, Txt{Size: 13, Font: Mono(), Color: col}, &inlineText{font: Mono(), size: 13, lineH: 21.125,
 				runs: []inlineRun{{text: s, font: Mono(), size: 13, color: col, italic: italic}}})
 			return th.inline(gtx, p, nil).Size.Y
 		})
 	}
 	if b.Command != "" {
-		add(func(gtx C) int { return mono(gtx, b.Command, fg85, "bash", "command", false) })
+		add(6, func(gtx C) int { return th.inline(gtx, th.shellCommand(b.Command, fg85), nil).Size.Y })
 	}
-	for _, arg := range b.Args {
+	for i, arg := range b.Args {
 		arg := arg
-		add(func(gtx C) int {
-			lang := ""
-			if jsonText(arg[1]) {
-				lang = "json"
+		gap := float32(6)
+		if i > 0 {
+			gap = 0 // one block, a line each
+		}
+		add(gap, func(gtx C) int {
+			if arg.Lang == "" {
+				// The value runs on after "key ", wrapping (pre-wrap).
+				p := &inlineText{font: Mono(), size: 13, lineH: 21.125}
+				p.runs = append(p.runs, inlineRun{text: arg.Key + " ", font: Mono(), size: 13, color: P.MutedForeground})
+				for i, line := range strings.Split(expandTabs(arg.Value), "\n") {
+					if i > 0 {
+						p.runs = append(p.runs, inlineRun{brk: true})
+					}
+					if line != "" {
+						p.runs = append(p.runs, inlineRun{text: line, font: Mono(), size: 13, color: fg85})
+					}
+				}
+				return th.inline(gtx, th.keepText("arg\x00"+arg.Key+"\x00"+arg.Value, Txt{Size: 13, Font: Mono(), Color: fg85}, p), nil).Size.Y
 			}
-			key := th.recorded(gtx, func(gtx C) D {
-				cl := th.codeText(gtx, arg[0]+" ", "", P.MutedForeground, 13, 21.125, 0)
-				cl.call.Add(gtx.Ops)
-				return D{Size: cl.size}
-			})
+			// Code goes under its key, highlighted (StructuredValue).
+			key := th.codeText(gtx, arg.Key+" ", "", P.MutedForeground, 13, 21.125, 0)
 			key.call.Add(gtx.Ops)
-			if lang == "" && !strings.Contains(arg[1], "\n") {
-				off := op.Offset(image.Pt(key.Size.X, 0)).Push(gtx.Ops)
-				h := mono(within(gtx, w-key.Size.X), arg[1], fg85, "", "arg:"+arg[0], false)
-				off.Pop()
-				return max(h, key.Size.Y)
-			}
-			off := op.Offset(image.Pt(0, key.Size.Y)).Push(gtx.Ops)
-			h := mono(gtx, arg[1], P.MutedForeground, lang, "arg:"+arg[0], true)
+			off := op.Offset(image.Pt(0, key.size.Y)).Push(gtx.Ops)
+			h := mono(gtx, arg.Value, P.MutedForeground, arg.Lang, "arg:"+arg.Key, true)
 			off.Pop()
-			return key.Size.Y + h
+			return key.size.Y + h
 		})
 	}
 	if b.ArgsText != "" {
-		add(func(gtx C) int { return mono(gtx, b.ArgsText, P.MutedForeground, jsonLang(b.ArgsText), "args", true) })
+		add(6, func(gtx C) int { return mono(gtx, b.ArgsText, P.MutedForeground, jsonLang(b.ArgsText), "args", true) })
 	}
 	switch {
 	case b.Output != "":
-		add(func(gtx C) int { return mono(gtx, b.Output, P.MutedForeground, jsonLang(b.Output), "output", true) })
+		add(6, func(gtx C) int { return mono(gtx, b.Output, P.MutedForeground, jsonLang(b.Output), "output", true) })
 	case b.Pending:
 		status("Loading output…", P.MutedForeground, true)
 	case b.Err != "":
@@ -824,7 +881,7 @@ func (th *Theme) toolInspector(gtx C, b *EntryBody, id string) int {
 		status("exit "+strconv.Itoa(b.Exit), P.Destructive, false)
 	}
 	if b.File != "" {
-		add(func(gtx C) int {
+		add(8, func(gtx C) int {
 			kids := []layout.FlexChild{layout.Rigid(func(gtx C) D {
 				return th.textLine(gtx, Txt{Size: 12, Font: Mono(), Color: P.MutedForeground}, 16, b.File)
 			})}
@@ -842,53 +899,242 @@ func (th *Theme) toolInspector(gtx C, b *EntryBody, id string) int {
 		})
 	}
 	if b.Failure != "" {
-		add(func(gtx C) int { return mono(gtx, b.Failure, P.MutedForeground, "", "failure", true) })
+		add(8, func(gtx C) int { return mono(gtx, b.Failure, P.MutedForeground, "", "failure", true) })
 	}
-	for _, c := range b.Changes {
+	// The operations: mono 12/16 muted, 4dp apart.
+	for i, c := range b.Changes {
 		c := c
-		add(func(gtx C) int { return th.plainText(gtx, c, Txt{Size: 12, Color: P.MutedForeground}, 16) })
+		gap := float32(8)
+		if i > 0 {
+			gap = 4
+		}
+		add(gap, func(gtx C) int {
+			return th.plainText(gtx, c, Txt{Size: 12, Font: Mono(), Color: P.MutedForeground}, 16)
+		})
 	}
-	for _, s := range b.Searches {
-		s := s
-		add(func(gtx C) int { return mono(gtx, s, fg85, "", "search:"+s, false) })
+	if len(b.Searches) > 0 {
+		patterns := strings.Join(b.Searches, "\n")
+		add(8, func(gtx C) int { return mono(gtx, patterns, fg85, "", "search", false) })
 	}
-	for _, hit := range b.Hits {
+	for i, hit := range b.Hits {
 		hit := hit
-		add(func(gtx C) int {
-			title := Txt{Size: 12, Font: Mono(), Color: over(faded(P.Foreground, 0xcc), P.Background)}
+		// File hits are 4dp apart, a page's 6.
+		gap := float32(8)
+		switch {
+		case i > 0 && hit.Web:
+			gap = 6
+		case i > 0:
+			gap = 4
+		}
+		add(gap, func(gtx C) int {
+			var h int
 			if hit.Web {
-				title = Txt{Size: 12, Font: UI(font.Medium), Color: P.Foreground}
+				h = th.webHit(gtx, hit)
+			} else {
+				h = th.plainText(gtx, hit.Title, Txt{Size: 12, Font: Mono(), Color: over(faded(P.Foreground, 0xcc), P.Background)}, 16)
 			}
-			h := th.plainText(gtx, hit.Title, title, 16)
 			if hit.Text != "" {
-				off := op.Offset(image.Pt(0, h+dp(gtx, 2))).Push(gtx.Ops)
-				h += dp(gtx, 2) + th.plainText(gtx, hit.Text, Txt{Size: 12, Color: P.MutedForeground}, 16)
+				// A file's matching line 2dp under it; a page's snippet
+				// right under.
+				if !hit.Web {
+					h += dp(gtx, 2)
+				}
+				off := op.Offset(image.Pt(0, h)).Push(gtx.Ops)
+				h += th.plainText(gtx, hit.Text, Txt{Size: 12, Color: P.MutedForeground}, 16)
 				off.Pop()
 			}
 			return h
 		})
 	}
 	if b.Plain != "" {
-		add(func(gtx C) int { return mono(gtx, b.Plain, P.SecondaryLabel, "", "plain", true) })
+		add(8, func(gtx C) int { return mono(gtx, b.Plain, P.SecondaryLabel, "", "plain", true) })
 	}
 	if b.Value != "" {
-		add(func(gtx C) int { return mono(gtx, b.Value, P.MutedForeground, "", "value", true) })
+		add(8, func(gtx C) int { return mono(gtx, b.Value, P.MutedForeground, "", "value", true) })
 	}
 	y := 0
 	for i, p := range parts {
 		if i > 0 {
-			y += dp(gtx, 6)
+			y += dp(gtx, p.gap)
 		}
 		off := op.Offset(image.Pt(0, y)).Push(gtx.Ops)
-		y += p(within(gtx, w))
+		y += p.draw(within(gtx, w))
 		off.Pop()
 	}
 	return y
 }
 
-// jsonText is T3's isJsonToolText: JSON, or JSON documents a blank line
+// webHit is a web search result's title: medium 12/16 in the foreground
+// with a 12dp external-link 4dp after it. With a web address it opens the
+// page, underlined on hover (V2ItemInspector.tsx:355-372).
+func (th *Theme) webHit(gtx C, hit SearchHit) int {
+	id := "link:" + hit.URL
+	hovered := false
+	if hit.URL != "" {
+		c, _ := th.events(gtx, id)
+		hovered = c.Hovered()
+	}
+	key := "web\x00" + hit.Title
+	if hovered {
+		key = "web.hover\x00" + hit.Title
+	}
+	t := Txt{Size: 12, Font: UI(font.Medium), Color: P.Foreground}
+	p := &inlineText{font: t.Font, size: 12, lineH: 16}
+	p.runs = append(p.runs, inlineRun{text: hit.Title, font: t.Font, size: 12, color: t.Color, underline: hovered})
+	if hit.URL != "" {
+		p.runs = append(p.runs, inlineRun{gap: 4}, inlineRun{icon: "external-link", size: 12, color: t.Color})
+	}
+	d := th.inline(gtx, th.keepText(key, t, p), nil)
+	if hit.URL != "" {
+		th.hit(gtx, id, d.Size)
+	}
+	return d.Size.Y
+}
+
+// shellCommand is an expanded command row's command, highlighted per shell
+// word as T3's shellscript grammar colours it (ShellCommandBlock.tsx):
+// each command's name a function, its arguments variables, numbers,
+// quoted strings, operators and comments their own, the rest in the
+// editor's colour; control characters shown as their symbols. The block
+// itself is foreground at 85%.
+func (th *Theme) shellCommand(cmd string, col color.NRGBA) *inlineText {
+	cmd = visibleControls(strings.TrimSpace(cmd))
+	p := &inlineText{font: Mono(), size: 13, lineH: 21.125}
+	pal := syntax()
+	for _, tok := range shellTokens(cmd) {
+		if tok.brk {
+			p.runs = append(p.runs, inlineRun{brk: true})
+			continue
+		}
+		c, ok := pal[tok.scope]
+		if !ok {
+			c = pal["fg"]
+		}
+		p.runs = append(p.runs, inlineRun{text: tok.text, font: Mono(), size: 13, color: c})
+	}
+	return th.keepText("shell\x00"+cmd, Txt{Size: 13, Font: Mono(), Color: col}, p)
+}
+
+// shellToken is a stretch of a command in one scope, or a line break.
+type shellToken struct {
+	text, scope string
+	brk         bool
+}
+
+// shellTokens splits a command into the words and marks the shellscript
+// grammar tells apart: a command's first word is a function, the words
+// after it are arguments; a quoted string is a string, a word of digits a
+// number, | || && ; & and redirections operators, # to the line's end a
+// comment.
+func shellTokens(cmd string) []shellToken {
+	var out []shellToken
+	first := true // the next word names a command
+	rs := []rune(cmd)
+	for i := 0; i < len(rs); {
+		r := rs[i]
+		switch {
+		case r == '\n':
+			out = append(out, shellToken{brk: true})
+			first = true
+			i++
+		case r == ' ' || r == '\t':
+			j := i
+			for j < len(rs) && (rs[j] == ' ' || rs[j] == '\t') {
+				j++
+			}
+			out = append(out, shellToken{text: string(rs[i:j])})
+			i = j
+		case r == '#' && (i == 0 || rs[i-1] == ' ' || rs[i-1] == '\t'):
+			j := i
+			for j < len(rs) && rs[j] != '\n' {
+				j++
+			}
+			out = append(out, shellToken{text: string(rs[i:j]), scope: "comment"})
+			i = j
+		case strings.ContainsRune("|&;<>()", r):
+			j := i
+			for j < len(rs) && strings.ContainsRune("|&;<>()", rs[j]) {
+				j++
+			}
+			op := string(rs[i:j])
+			out = append(out, shellToken{text: op, scope: "operator"})
+			// After a pipe, a list or a subshell another command starts;
+			// a redirection's target is still an argument.
+			first = !strings.ContainsAny(op, "<>")
+			i = j
+		case r == ',':
+			out = append(out, shellToken{text: ","})
+			i++
+		default:
+			j := i
+			quote := rune(0)
+			for j < len(rs) {
+				c := rs[j]
+				if quote != 0 {
+					if c == '\\' && quote == '"' && j+1 < len(rs) {
+						j += 2
+						continue
+					}
+					if c == quote {
+						quote = 0
+					}
+					j++
+					continue
+				}
+				if c == '\'' || c == '"' {
+					quote = c
+					j++
+					continue
+				}
+				if c == '\\' && j+1 < len(rs) {
+					j += 2
+					continue
+				}
+				if c == ' ' || c == '\t' || c == '\n' || c == ',' || strings.ContainsRune("|&;<>()", c) {
+					break
+				}
+				j++
+			}
+			word := string(rs[i:j])
+			scope := "variable"
+			switch {
+			case word[0] == '\'' || word[0] == '"':
+				scope = "string"
+			case first:
+				scope = "function"
+			case strings.Trim(word, "0123456789") == "":
+				scope = "number"
+			}
+			// A leading NAME=value is an assignment, and a command follows.
+			if first && strings.Contains(word, "=") && !strings.ContainsAny(word[:strings.Index(word, "=")], "'\"$/") {
+				scope = "variable"
+			} else {
+				first = false
+			}
+			out = append(out, shellToken{text: word, scope: scope})
+			i = j
+		}
+	}
+	return out
+}
+
+// visibleControls is T3's withVisibleControlCharacters: control characters
+// other than tabs and line breaks drawn as their Control Pictures.
+func visibleControls(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r == 0x7f:
+			return '␡'
+		case r < 0x20 && r != '\t' && r != '\n' && r != '\r':
+			return 0x2400 + r
+		}
+		return r
+	}, s)
+}
+
+// JSONText is T3's isJsonToolText: JSON, or JSON documents a blank line
 // apart.
-func jsonText(s string) bool {
+func JSONText(s string) bool {
 	t := strings.TrimSpace(s)
 	if t == "" || !strings.ContainsAny(t[:1], "{[\"") && t != "true" && t != "false" && t != "null" {
 		return false
@@ -897,7 +1143,7 @@ func jsonText(s string) bool {
 }
 
 func jsonLang(s string) string {
-	if jsonText(s) {
+	if JSONText(s) {
 		return "json"
 	}
 	return ""

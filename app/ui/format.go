@@ -140,6 +140,35 @@ func FormatTokens(n int) string {
 	return groupDigits(n)
 }
 
+// FormatBytes is T3's formatBytes (formatBytes.ts): "512 B", then KB, MB,
+// GB and TB at base 1024 with 2, 1 or no decimals, the unit picked after
+// rounding.
+func FormatBytes(n int) string {
+	if n < 1024 {
+		return strconv.Itoa(n) + " B"
+	}
+	scaled := func(v float64) string {
+		digits := 2
+		switch {
+		case v >= 100:
+			digits = 0
+		case v >= 10:
+			digits = 1
+		}
+		return strconv.FormatFloat(v, 'f', digits, 64)
+	}
+	units := []string{"KB", "MB", "GB", "TB"}
+	v, u := float64(n)/1024, 0
+	for u < len(units)-1 {
+		if r, _ := strconv.ParseFloat(scaled(v), 64); r < 1024 {
+			break
+		}
+		v /= 1024
+		u++
+	}
+	return scaled(v) + " " + units[u]
+}
+
 // groupDigits is n with thousands separators, as en-US writes it.
 func groupDigits(n int) string {
 	s := strconv.Itoa(n)

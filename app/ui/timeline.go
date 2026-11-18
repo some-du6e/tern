@@ -3,8 +3,10 @@ package ui
 import (
 	"image"
 	"image/color"
+	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"gioui.org/font"
 	"gioui.org/gesture"
@@ -40,6 +42,11 @@ type timelineState struct {
 	plain     map[plainKey]*inlineText
 	previews  map[string]string // thoughts' one-line previews
 	menuClose gesture.Click     // the open menu's outside
+	// tails are the streaming messages' last blocks as parsed, by owner,
+	// and blockSeq numbers the code blocks and tables of the message
+	// being drawn.
+	tails    map[string]mdKey
+	blockSeq int
 	// canvasH is the canvas's height, which caps an open group's list
 	// (min(18rem, 50dvh)).
 	canvasH int
@@ -59,6 +66,12 @@ type follow struct {
 	// overflows: the rows are taller than the canvas, so following pins
 	// the list's end; until then they start at the top.
 	overflows bool
+	// reveal is a row a disclosure just opened, to bring into view above
+	// the composer once it's laid out, from the top of the row before it
+	// when fromPrev; for revealFrames more frames at most.
+	reveal       string
+	fromPrev     bool
+	revealFrames int
 }
 
 // endBand is how close to the end counts as the end (MessagesTimeline.logic.ts:324-336).
@@ -170,6 +183,8 @@ func (th *Theme) timeline(gtx C, s *Scene, laneX, laneW, composer int) {
 	}
 	call.Add(gtx.Ops)
 	f.first = ids(l.Position.First)
+	th.revealDisclosure(gtx, f, n, ids, size.Y-composer)
+	th.anchorToggles(gtx, f, tl)
 
 	// Where the end is: within the band counts as there.
 	dist := 1 << 30
@@ -200,6 +215,70 @@ func (th *Theme) timeline(gtx C, s *Scene, laneX, laneW, composer int) {
 	if th.clicked("timeline.end") {
 		f.released, l.Position.BeforeEnd = false, false
 		gtx.Execute(op.InvalidateCmd{})
+	}
+}
+
+// anchorToggles keeps a row the reader opens or closes where it is: like
+// T3's preserveDisclosurePosition it ends following the end, unless the
+// turn is working, and the list then stays put by its top row as the row
+// grows below. Opening a group or a standalone entry brings what it shows
+// into view (MessagesTimeline.tsx:482-594).
+func (th *Theme) anchorToggles(gtx C, f *follow, tl *Timeline) {
+	for _, a := range th.in.actions {
+		verb, arg, _ := strings.Cut(a.ID, ":")
+		if a.Kind != "click" || verb != "fold" && verb != "group" && verb != "entry" {
+			continue
+		}
+		if tl.Working && !f.released {
+			return
+		}
+		if !f.released {
+			f.released, f.atEnd, f.leftAt = true, true, gtx.Now
+		}
+		f.reveal = ""
+		for _, r := range tl.Rows {
+			switch {
+			case verb == "group" && r.Group == arg && (r.Kind == RowWorkToggle || r.Kind == RowWorkLive || r.Kind == RowThinking) && !r.Open:
+				f.reveal, f.fromPrev, f.revealFrames = arg+":details", true, 10
+			case verb == "entry" && r.ID == arg && r.Kind == RowWork && len(r.Entries) == 1 && !r.Entries[0].Open:
+				f.reveal, f.fromPrev, f.revealFrames = arg, false, 10
+			}
+		}
+	}
+}
+
+// revealDisclosure scrolls a just-opened row's new content into view above
+// the composer, bottom px down the canvas, as far as the room above the
+// opened row's top allows, 24dp under the canvas's top
+// (resolveDisclosureRevealScrollDelta).
+func (th *Theme) revealDisclosure(gtx C, f *follow, n int, ids func(int) string, bottom int) {
+	if f.reveal == "" {
+		return
+	}
+	if f.revealFrames--; f.revealFrames < 0 {
+		f.reveal = ""
+		return
+	}
+	p := f.list.Position
+	y := -p.Offset
+	prevTop := y
+	for i := p.First; i < n && i < p.First+p.Count; i++ {
+		h := f.heights[ids(i)]
+		if ids(i) == f.reveal {
+			top := y
+			if f.fromPrev {
+				top = prevTop
+			}
+			hidden, room := y+h-bottom, top-dp(gtx, 24)
+			if d := min(hidden, room); d > 0 {
+				f.list.Position.Offset += d
+				gtx.Execute(op.InvalidateCmd{})
+			}
+			f.reveal = ""
+			return
+		}
+		prevTop = y
+		y += h
 	}
 }
 
@@ -359,7 +438,7 @@ func (th *Theme) timelineRow(gtx C, s *Scene, r *TimelineRow, laneX, laneW int) 
 	case RowUser:
 		h = th.userRow(g, r, hot)
 	case RowAssistant, RowAssistantMeta:
-		h = th.assistantRow(g, r, hot)
+		h = th.assistantRow(g, r, hot, s.Timeline.CanRun)
 	case RowTurnFold:
 		h = th.turnFold(g, r, hot)
 	case RowWork, RowWorkToggle, RowWorkLive, RowThinking:
@@ -406,16 +485,51 @@ func (th *Theme) rowHotArea(gtx C, id string, size image.Point) {
 }
 
 // timestamp is TimelineRowTimestamp: the row's time, 12/16 muted, taking
-// space at the row's end only while the row is hovered.
-func (th *Theme) timestamp(at time.Time, show bool) W {
+// space at the row's end only while the row is hovered, its long form in a
+// tooltip. id names the row.
+func (th *Theme) timestamp(id string, at time.Time, show bool) W {
 	return func(gtx C) D {
 		if !show || at.IsZero() {
 			return D{}
 		}
-		return pad(0, 4, 0, 0).Layout(gtx, func(gtx C) D {
-			return th.textLine(gtx, Txt{Size: 12, Color: P.MutedForeground}, 16, dayAwareTimestamp(at, gtx.Now))
-		})
+		return pad(0, 4, 0, 0).Layout(gtx, th.stampText(id, at, 16))
 	}
+}
+
+// stampText is a timestamp's text on a lineH dp line, 12dp muted, with
+// T3's tooltip over it: "4:44 PM, 17th November 2026"
+// (formatChatTimestampTooltip).
+func (th *Theme) stampText(id string, at time.Time, lineH float32) W {
+	return func(gtx C) D {
+		d := th.textLine(gtx, Txt{Size: 12, Color: P.MutedForeground}, lineH, dayAwareTimestamp(at, gtx.Now))
+		th.tipArea(gtx, "stamp:"+id, timestampTooltip(at), d.Size)
+		return d
+	}
+}
+
+// tipArea shows tip once the pointer rests on a size-sized area at the
+// current offset. The area only watches: its clicks go on to what's
+// under it, such as the row that holds it.
+func (th *Theme) tipArea(gtx C, id, tip string, size image.Point) {
+	if th.in.clicks == nil {
+		th.in.clicks = map[string]*gesture.Click{}
+	}
+	c := th.in.clicks[id]
+	if c == nil {
+		c = new(gesture.Click)
+		th.in.clicks[id] = c
+	}
+	for {
+		if _, ok := c.Update(gtx.Source); !ok {
+			break
+		}
+	}
+	func() {
+		defer clip.Rect{Max: size}.Push(gtx.Ops).Pop()
+		defer pointer.PassOp{}.Push(gtx.Ops).Pop()
+		c.Add(gtx.Ops)
+	}()
+	th.tipAt(gtx, id, tip, size, true, 0)
 }
 
 // turnFold is "Worked for 2m 14s": a muted 22.75dp button that brightens
@@ -434,7 +548,7 @@ func (th *Theme) turnFold(gtx C, r *TimelineRow, hot bool) int {
 	if r.Open {
 		icon = "chevron-down"
 	}
-	stamp := th.recorded(gtx, th.timestamp(r.At, hot))
+	stamp := th.recorded(gtx, th.timestamp(r.ID, r.At, hot))
 	m := op.Record(gtx.Ops)
 	d := layout.Flex{Alignment: layout.Middle}.Layout(within(gtx, w-stamp.Size.X-dp(gtx, 12)),
 		layout.Rigid(Spacer(4, 0)),
@@ -472,13 +586,20 @@ func (th *Theme) recorded(gtx C, w W) recording {
 
 // workingRow is "Working for 12s", the live turn's header: muted 14dp on a
 // 24dp line, the timer ticking each second, over a rule at border/60
-// (TimelineWorkGroupRows.tsx:291-330).
+// (TimelineWorkGroupRows.tsx:291-330). A compaction that holds the turn
+// back says "Compacting for 4s" after a minimize-2, shimmering.
 func (th *Theme) workingRow(gtx C, r *TimelineRow) int {
 	w := gtx.Constraints.Max.X
 	top, line := dp(gtx, 4), dp(gtx, 24)
 	label := "Working..."
+	if r.Compacting {
+		label = "Compacting…"
+	}
 	if !r.Since.IsZero() {
 		label = "Working for " + workingTimer(r.Since, gtx.Now)
+		if r.Compacting {
+			label = "Compacting for " + workingTimer(r.Since, gtx.Now)
+		}
 		next := r.Since.Add(gtx.Now.Sub(r.Since).Truncate(time.Second) + time.Second)
 		gtx.Execute(op.InvalidateCmd{At: next})
 	}
@@ -492,11 +613,7 @@ func (th *Theme) workingRow(gtx C, r *TimelineRow) int {
 					return pad(0, 6, 0, 0).Layout(gtx, LucideW("minimize-2", col, 12))
 				}),
 				layout.Rigid(func(gtx C) D {
-					text := label
-					if r.Compacting {
-						text = strings.Replace(label, "Working", "Compacting", 1)
-					}
-					return th.textLine(gtx, Txt{Size: 14, Color: col}, 22.75, text)
+					return th.textLine(gtx, Txt{Size: 14, Color: col}, 22.75, label)
 				}),
 			)
 		}
@@ -628,36 +745,94 @@ func (th *Theme) compactionRow(gtx C, r *TimelineRow) int {
 	return h
 }
 
-// dividerRow is TimelineSystemDivider: an 11/16 muted pill, its label
-// medium after a 12dp icon and its detail at 70%, between rules at
-// border/70.
+// dividerRow is TimelineSystemDivider: an 11/16 muted pill, padded 8 by
+// 4, its label medium after a 12dp icon and its detail at 70%, between
+// rules at border/70 8dp from it. A detail that wraps does so under the
+// label, each line centred; an action makes the pill a bordered button,
+// padded 10, that opens a thread (TimelineSystemDivider.tsx:7-85).
 func (th *Theme) dividerRow(gtx C, r *TimelineRow) int {
 	w := gtx.Constraints.Max.X
-	h := dp(gtx, 40)
 	col := P.MutedForeground
-	content := th.recorded(within(gtx, w-dp(gtx, 64)), func(gtx C) D {
-		kids := []layout.FlexChild{}
-		if r.Icon != "" {
-			kids = append(kids, layout.Rigid(LucideW(r.Icon, col, 12)), layout.Rigid(Spacer(6, 0)))
+	id := "thread:" + r.Thread
+	hovered := false
+	if r.Action != "" {
+		c, _ := th.events(gtx, id)
+		if hovered = c.Hovered(); hovered {
+			col = P.Foreground
 		}
-		kids = append(kids, layout.Rigid(func(gtx C) D {
-			return th.textLine(gtx, Txt{Size: 11, Font: UI(font.Medium), Color: col}, 16, r.Label)
-		}))
-		if r.Detail != "" {
-			kids = append(kids, layout.Rigid(Spacer(6, 0)), layout.Flexed(1, func(gtx C) D {
-				return th.textLine(gtx, Txt{Size: 11, Color: over(alpha(col, 0xb3), P.Background)}, 16, "· "+r.Detail)
+	}
+	padX, bw := dp(gtx, 8), 0
+	if r.Action != "" {
+		padX, bw = dp(gtx, 10), max(1, dp(gtx, 1))
+	}
+	gap := dp(gtx, 8)
+	avail := w - 2*gap - 2*padX - 2*bw
+	var content recording
+	if r.Wrap {
+		t := th.dividerText(r, col)
+		nw := th.layoutInline(gtx, t, avail).size.X
+		content = th.recorded(within(gtx, nw), func(gtx C) D { return th.inline(gtx, t, nil) })
+	} else {
+		content = th.recorded(within(gtx, avail), func(gtx C) D {
+			kids := []layout.FlexChild{}
+			if r.Icon != "" {
+				kids = append(kids, layout.Rigid(LucideW(r.Icon, col, 12)), layout.Rigid(Spacer(6, 0)))
+			}
+			kids = append(kids, layout.Rigid(func(gtx C) D {
+				return th.textLine(gtx, Txt{Size: 11, Font: UI(font.Medium), Color: col}, 16, r.Label)
 			}))
-		}
-		return layout.Flex{Alignment: layout.Middle}.Layout(gtx, kids...)
-	})
-	pw := content.Size.X + dp(gtx, 16)
-	x := (w - pw) / 2
+			if r.Detail != "" {
+				kids = append(kids, layout.Rigid(Spacer(6, 0)), layout.Flexed(1, func(gtx C) D {
+					return th.textLine(gtx, Txt{Size: 11, Color: over(faded(col, 0xb3), P.Background)}, 16, "· "+r.Detail)
+				}))
+			}
+			return layout.Flex{Alignment: layout.Middle}.Layout(gtx, kids...)
+		})
+	}
+	pill := image.Pt(content.Size.X+2*padX+2*bw, content.Size.Y+2*dp(gtx, 4)+2*bw)
+	h := pill.Y + 2*dp(gtx, 8)
+	x, y := (w-pill.X)/2, dp(gtx, 8)
 	rule := over(faded(P.Border, 0xb3), P.Background)
-	hline(gtx, rule, h/2, 0, x-dp(gtx, 8))
-	hline(gtx, rule, h/2, x+pw+dp(gtx, 8), w)
-	defer op.Offset(image.Pt(x+dp(gtx, 8), (h-content.Size.Y)/2)).Push(gtx.Ops).Pop()
+	hline(gtx, rule, h/2, 0, x-gap)
+	hline(gtx, rule, h/2, x+pill.X+gap, w)
+	defer op.Offset(image.Pt(x, y)).Push(gtx.Ops).Pop()
+	if r.Action != "" {
+		box := image.Rectangle{Max: pill}
+		bg := P.Background
+		if hovered {
+			bg = over(P.Accent, P.Background)
+		}
+		fill(gtx, bg, box, pill.Y/2)
+		strokeRect(gtx, over(faded(P.Border, 0xb3), P.Background), box, pill.Y/2, float32(bw))
+	}
+	co := op.Offset(image.Pt(bw+padX, bw+dp(gtx, 4))).Push(gtx.Ops)
 	content.call.Add(gtx.Ops)
+	co.Pop()
+	if r.Action != "" {
+		th.hit(gtx, id, pill)
+		th.tipAt(gtx, id, r.Action, pill, true, 0)
+	}
 	return h
+}
+
+// dividerText is a divider whose detail wraps, as one centred paragraph:
+// the icon and the medium label, 6dp, then "· " and the detail at 70%.
+func (th *Theme) dividerText(r *TimelineRow, col color.NRGBA) *inlineText {
+	p := &inlineText{font: UI(font.Normal), size: 11, lineH: 16, align: textCenter}
+	if r.Icon != "" {
+		p.runs = append(p.runs, inlineRun{icon: r.Icon, size: 12, color: col}, inlineRun{gap: 6})
+	}
+	p.runs = append(p.runs, inlineRun{text: r.Label, font: UI(font.Medium), size: 11, color: col}, inlineRun{gap: 6})
+	detail := over(faded(col, 0xb3), P.Background)
+	for i, line := range strings.Split("·\u00a0"+r.Detail, "\n") {
+		if i > 0 {
+			p.runs = append(p.runs, inlineRun{brk: true})
+		}
+		if line != "" {
+			p.runs = append(p.runs, inlineRun{text: line, font: UI(font.Normal), size: 11, color: detail})
+		}
+	}
+	return th.keepText("divider\x00"+r.Icon+"\x00"+r.Label+"\x00"+r.Detail, Txt{Size: 11, Color: col}, p)
 }
 
 // planCard is ProposedPlanCard: a card at 70% with a 1dp border at 80%,
@@ -672,7 +847,7 @@ func (th *Theme) planCard(gtx C, r *TimelineRow) int {
 	collapsible := len(r.Plan) > 900 || strings.Count(r.Plan, "\n")+1 > 20
 	id := r.ID
 	open := th.tl.full[id]
-	st := mdStyle{color: over(faded(P.Foreground, 0xe6), surface), on: surface}
+	st := mdStyle{color: over(faded(P.Foreground, 0xe6), surface), on: surface, owner: r.ID}
 	m := op.Record(gtx.Ops)
 	inner := w - 2*p
 	// The header: the badge, the title, the actions menu.
@@ -691,10 +866,17 @@ func (th *Theme) planCard(gtx C, r *TimelineRow) int {
 	if th.clicked(id + ":menu") {
 		th.toggleMenu(id + ":menu")
 	}
-	// The menu's "Copy to clipboard"; T3's download and save to the
-	// workspace aren't here.
-	if th.rowMenu(gtx, id+":menu", image.Pt(inner, hh+dp(gtx, 4)), []string{"Copy to clipboard"}) == 0 {
-		th.copyNow(gtx, "copy:"+id, r.Plan)
+	// The menu: copy, or download to a file, the plan as T3 exports it.
+	// T3's "Save to workspace" isn't here.
+	copyLabel := "Copy to clipboard"
+	if th.copiedFor(gtx, "copy:"+id, 2000) {
+		copyLabel = "Copied!"
+	}
+	switch th.rowMenu(gtx, id+":menu", image.Pt(inner, hh+dp(gtx, 4)), false, []menuChoice{{label: copyLabel}, {label: "Download as markdown"}}) {
+	case 0:
+		th.copyNow(gtx, "copy:"+id, planExport(r.Plan))
+	case 1:
+		th.push(Action{ID: "plan.download:" + planFile(r.Plan), Kind: "click", Text: planExport(r.Plan)})
 	}
 	y := hh + dp(gtx, 16)
 	src := body
@@ -713,9 +895,10 @@ func (th *Theme) planCard(gtx C, r *TimelineRow) int {
 		defer clip.Rect{Max: image.Pt(inner, shown)}.Push(gtx.Ops).Pop()
 		bcall.Add(gtx.Ops)
 		if collapsible && !open {
-			// The 96dp fade into the card: card/95 through card/80.
+			// The 96dp fade into the card: card/95 through card/80, over
+			// the card's own card/70.
 			fadeH := dp(gtx, 96)
-			fadeUp(gtx, image.Rect(0, shown-fadeH, inner, shown), surface)
+			fadeUp(gtx, image.Rect(0, shown-fadeH, inner, shown), P.Card)
 		}
 	}()
 	y += shown
@@ -760,18 +943,43 @@ func fadeUp(gtx C, r image.Rectangle, col color.NRGBA) {
 	}
 }
 
-// planTitle is T3's proposedPlanTitle: the plan's first heading, or
-// "Proposed plan".
+// planTitle is the card's title: the plan's heading, or "Proposed plan".
 func planTitle(md string) string {
-	for _, line := range strings.Split(md, "\n") {
-		if t := strings.TrimLeft(line, " "); len(line)-len(t) <= 3 && strings.HasPrefix(t, "#") {
-			if h := strings.TrimSpace(strings.TrimLeft(t, "#")); h != "" && strings.TrimLeft(t, "#") != t {
-				return h
-			}
-		}
+	if t := planHeadingText(md); t != "" {
+		return t
 	}
 	return "Proposed plan"
 }
+
+// planHeadingText is T3's proposedPlanTitle: the plan's first heading, one
+// to six hashes and white space before its words, or "".
+func planHeadingText(md string) string {
+	if h := planHeading.FindStringSubmatch(md); h != nil {
+		return strings.TrimSpace(h[1])
+	}
+	return ""
+}
+
+// planFile is T3's buildProposedPlanMarkdownFilename: the heading in
+// lower-case words joined by dashes, "plan" without one, and ".md".
+func planFile(md string) string {
+	s := strings.ToLower(planHeadingText(md))
+	s = strings.Trim(planNonWord.ReplaceAllString(planMarks.ReplaceAllString(s, ""), "-"), "-")
+	if s == "" {
+		s = "plan"
+	}
+	return s + ".md"
+}
+
+var (
+	planHeading = regexp.MustCompile(`(?m)^\s{0,3}#{1,6}\s+(.+)$`)
+	planMarks   = regexp.MustCompile("[`'\".,!?()\\[\\]{}]+")
+	planNonWord = regexp.MustCompile(`[^a-z0-9]+`)
+)
+
+// planExport is T3's normalizePlanMarkdownForExport: the plan with one
+// line break at its end, as copied and downloaded.
+func planExport(md string) string { return strings.TrimRightFunc(md, unicode.IsSpace) + "\n" }
 
 // stripPlanTitle is T3's stripDisplayedPlanMarkdown: the plan without the
 // heading the card shows, nor a "Summary" heading after it.
@@ -828,7 +1036,10 @@ func planPreview(md string) string {
 		out = out[:len(out)-1]
 	}
 	if len(out) == 0 {
-		return planTitle(md)
+		if t := planHeadingText(md); t != "" {
+			return t
+		}
+		return "Plan preview unavailable."
 	}
 	if more {
 		out = append(out, "", "...")

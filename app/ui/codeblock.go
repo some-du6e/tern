@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"fmt"
 	"image"
 	"image/color"
 	"strings"
@@ -271,7 +270,7 @@ func (th *Theme) codeText(gtx C, code, lang string, col color.NRGBA, size, lineH
 // codeBlock draws a fenced code block and returns its height.
 func (th *Theme) codeBlock(gtx C, n *mdNode, st mdStyle) int {
 	w := gtx.Constraints.Max.X
-	id := fmt.Sprintf("code:%p", n)
+	id := th.blockID(st)
 	wrapped := !th.tl.unwrapped[id]
 	rad := dp(gtx, 8)
 	frame, border := P.Secondary, over(faded(P.Border, 0xb3), st.on)
@@ -279,6 +278,9 @@ func (th *Theme) codeBlock(gtx C, n *mdNode, st mdStyle) int {
 		frame, border = over(faded(P.Input, 0x52), st.on), color.NRGBA{}
 	}
 	frame = over(frame, st.on)
+	// The 1dp border takes its room in the layout, transparent or not:
+	// everything inside sits 1dp in.
+	bw := max(1, dp(gtx, 1))
 	m := op.Record(gtx.Ops)
 	// The header: 6dp in at the top and right, 12dp at the left.
 	header := dp(gtx, 30)
@@ -286,8 +288,8 @@ func (th *Theme) codeBlock(gtx C, n *mdNode, st mdStyle) int {
 	if n.title != "" {
 		title = n.title
 	}
-	to := op.Offset(image.Pt(dp(gtx, 12), dp(gtx, 6))).Push(gtx.Ops)
-	th.textLine(within(gtx, w-dp(gtx, 12+6+3*24+8)), Txt{Size: 11, Font: Mono(), Color: over(faded(P.ContrastForeground, 0xb8), frame)}, 24, title)
+	to := op.Offset(image.Pt(bw+dp(gtx, 12), bw+dp(gtx, 6))).Push(gtx.Ops)
+	th.textLine(within(gtx, w-2*bw-dp(gtx, 12+6+3*24+8)), Txt{Size: 11, Font: Mono(), Color: over(faded(P.ContrastForeground, 0xb8), frame)}, 24, title)
 	to.Pop()
 	// The toolbar: wrap (pressed while wrapped), run, copy; 24dp, 2dp apart.
 	type tool struct {
@@ -299,22 +301,22 @@ func (th *Theme) codeBlock(gtx C, n *mdNode, st mdStyle) int {
 		wrap.tip, wrap.b.Variant = "Disable line wrap", BtnSecondary
 	}
 	tools := []tool{wrap}
-	if !st.streaming && runnable(n) {
+	if st.run && !st.streaming && runnable(n) {
 		rid := "run:" + id
 		th.runTarget(rid, strings.TrimSpace(n.code))
 		tools = append(tools, tool{rid, "Run in terminal", Button{Variant: BtnGhostMuted, Size: BtnSizeIconXs, Icon: "play", IconSize: 12, On: frame}})
 	}
 	cp := tool{"copy:" + id, "Copy code", Button{Variant: BtnGhostMuted, Size: BtnSizeIconXs, Icon: "copy", IconSize: 12, On: frame}}
-	th.copyTarget(cp.id, n.code)
+	th.copyTarget(cp.id, n.copyText())
 	if th.copiedFor(gtx, cp.id, 1200) {
 		cp.tip, cp.b.Icon = "Copied", "check"
 	}
 	tools = append(tools, cp)
-	x := w - dp(gtx, 6)
+	x := w - bw - dp(gtx, 6)
 	for i := len(tools) - 1; i >= 0; i-- {
 		t := tools[i]
 		x -= dp(gtx, 24)
-		bo := op.Offset(image.Pt(x, dp(gtx, 6))).Push(gtx.Ops)
+		bo := op.Offset(image.Pt(x, bw+dp(gtx, 6))).Push(gtx.Ops)
 		th.T3Button(t.id, t.b)(gtx)
 		th.tipAt(gtx, t.id, t.tip, image.Pt(dp(gtx, 24), dp(gtx, 24)), true, 0)
 		bo.Pop()
@@ -325,7 +327,7 @@ func (th *Theme) codeBlock(gtx C, n *mdNode, st mdStyle) int {
 	}
 	// The code: padded 12.8 by 14.4, in the highlighter's colours.
 	padX, padY := dp(gtx, 14.4), dp(gtx, 12.8)
-	inner := w - 2*padX
+	inner := w - 2*bw - 2*padX
 	codeCol := syntax()["fg"]
 	if plainLanguages[strings.ToLower(n.lang)] {
 		codeCol = st.color
@@ -336,13 +338,13 @@ func (th *Theme) codeBlock(gtx C, n *mdNode, st mdStyle) int {
 	}
 	cl := th.codeText(gtx, n.code, n.lang, codeCol, 13, 17.875, maxW)
 	body := cl.size.Y + 2*padY
-	co := op.Offset(image.Pt(0, header)).Push(gtx.Ops)
+	co := op.Offset(image.Pt(bw, bw+header)).Push(gtx.Ops)
 	if wrapped {
 		po := op.Offset(image.Pt(padX, padY)).Push(gtx.Ops)
 		cl.call.Add(gtx.Ops)
 		po.Pop()
 	} else {
-		th.hscroll(gtx, id, image.Pt(w, body), cl.size.X+2*padX, func(gtx C) {
+		th.hscroll(gtx, id, image.Pt(w-2*bw, body), cl.size.X+2*padX, func(gtx C) {
 			po := op.Offset(image.Pt(padX, padY)).Push(gtx.Ops)
 			cl.call.Add(gtx.Ops)
 			po.Pop()
@@ -350,7 +352,7 @@ func (th *Theme) codeBlock(gtx C, n *mdNode, st mdStyle) int {
 	}
 	co.Pop()
 	call := m.Stop()
-	h := header + body
+	h := bw + header + body + bw
 	r := image.Rect(0, 0, w, h)
 	fill(gtx, frame, r, rad)
 	if border.A != 0 {
@@ -366,20 +368,32 @@ func (th *Theme) codeBlock(gtx C, n *mdNode, st mdStyle) int {
 // runShells are the fences T3 offers "Run in terminal" for.
 var runShells = map[string]bool{"sh": true, "bash": true, "zsh": true, "fish": true, "shell": true, "powershell": true, "pwsh": true}
 
-// runnable: a shell fence, not empty, not continued by a trailing \, and
-// with no control or invisible format characters that would make what
-// shows differ from what runs (MarkdownCodeBlock.tsx:166-176).
+// runnable is T3's canRun (MarkdownCodeBlock.tsx:166-176,
+// ChatMarkdown.tsx:1721-1723): a shell fence that was closed, so a reply
+// cut off mid-command never runs, of one line that isn't empty or
+// continued by a trailing \, with no control or invisible format
+// characters that would make what shows differ from what runs. A line
+// break is a control character, so a second line rules it out.
 func runnable(n *mdNode) bool {
 	cmd := strings.TrimSpace(n.code)
-	if !runShells[n.lang] || cmd == "" || strings.HasSuffix(cmd, `\`) {
+	if !n.closed || !runShells[n.lang] || cmd == "" || strings.HasSuffix(cmd, `\`) {
 		return false
 	}
 	for _, r := range n.code {
-		if r != '\n' && r != '\t' && (unicode.Is(unicode.Cc, r) || unicode.Is(unicode.Cf, r)) {
+		if unicode.Is(unicode.Cc, r) || unicode.Is(unicode.Cf, r) {
 			return false
 		}
 	}
 	return true
+}
+
+// copyText is what the copy button copies: the code as T3's code element
+// holds it, its last line ended by a line break.
+func (n *mdNode) copyText() string {
+	if n.code == "" {
+		return ""
+	}
+	return n.code + "\n"
 }
 
 // hscroll draws content wide px across a size box, scrolled sideways by

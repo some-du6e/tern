@@ -71,7 +71,10 @@ func threadRows() []ui.TimelineRow {
 			{ID: "e3", Icon: "square-pen", Label: "upload/send.go", Expands: true, Open: true,
 				Body: &ui.EntryBody{File: "upload/send.go", Add: 48, Del: 6, Counts: true}},
 			{ID: "e4", Icon: "terminal", Label: "go test ./upload/...", Expands: true, Open: true,
-				Body: &ui.EntryBody{Command: "go test ./upload/...", Output: "ok  \texample.com/acme/upload\t0.412s"}},
+				Body: &ui.EntryBody{Command: "go test -run 'TestRetry' -count 3 ./upload/... | tee test.log", Output: "ok  \texample.com/acme/upload\t0.412s"}},
+			{ID: "e8", Icon: "globe", Label: "Searched the web for exponential backoff jitter", Expands: true, Open: true,
+				Body: &ui.EntryBody{Searches: []string{"exponential backoff jitter"}, Hits: []ui.SearchHit{{Title: "Exponential backoff and jitter",
+					Text: "Adding randomness to retries spreads load.", Web: true, URL: "https://example.com/backoff"}}}},
 			{ID: "e5", Icon: "terminal", Label: "go vet ./...", Failed: true, Expands: true},
 			{ID: "e6", Icon: "brain", Label: "Checking where the logger comes from", Expands: true,
 				Thought: "Checking where the logger comes from. `Send` takes a `*slog.Logger`, so each retry can log at debug level."},
@@ -98,10 +101,13 @@ func screenshot(w, h int) ui.Picture {
 	return p
 }
 
-// approvalRow is a command waiting for approval, in the timeline.
+// approvalRow is a command waiting for approval, in the timeline, one of
+// its answers risky.
 func approvalRow() ui.TimelineRow {
 	return ui.TimelineRow{ID: "ap1", Kind: ui.RowWork, Entries: []ui.WorkEntry{{ID: "ap1", Icon: "terminal",
-		Approval: &ui.PendingApproval{ID: "req-1", Kind: "command", Detail: "git push -u origin feature/retries", Live: true}}}}
+		Approval: &ui.PendingApproval{ID: "req-1", Kind: "command", Detail: "git push -u origin feature/retries", Live: true,
+			Options: []ui.ApprovalOption{{Decision: "decline", Label: "Decline"}, {Decision: "acceptForSession", Label: "Always allow this session",
+				Warning: "Every later push in this session runs without asking."}, {Decision: "accept", Label: "Approve"}}}}}}
 }
 
 // markdownReply has every kind of block T3's markdown draws.
@@ -111,9 +117,11 @@ const markdownReply = "## Two ways in\n\n" +
 	"1. **A callback.** `Send` takes `OnProgress func(sent, total int64)` and calls it after each chunk.\n" +
 	"2. **A channel.** `Send` returns a `<-chan Progress` that closes when the upload ends.\n" +
 	"   - simpler to cancel\n   - but the caller must drain it\n\n" +
-	"| Option | Allocates | Cancels with ctx |\n|---|---|---|\n| Callback | no | yes |\n| Channel | one per upload | yes |\n\n" +
+	"| Option | Allocates | Cancels with ctx |\n|:---|:---:|---:|\n| Callback | no | yes |\n| Channel | one per upload | yes |\n\n" +
 	"> Both keep *Send's* signature small.\n\n" +
 	"> [!TIP]\n> Start with the callback: a channel is easy to build on top of it.\n\n" +
+	"★ Insight ─────────────────────────────────────\nA callback runs on the uploader's goroutine,\nso it must not block.\n" +
+	"─────────────────────────────────────────────────\n\n" +
 	"```go\ntype Progress struct {\n\tSent, Total int64 // bytes\n}\n```\n\n" +
 	"- [x] chunked writes\n- [ ] resumable uploads\n"
 
@@ -133,7 +141,7 @@ var longPrompt = strings.Repeat("The uploader drops the connection when a chunk 
 // fold open, an error, and a steer.
 func settledRows() []ui.TimelineRow {
 	return []ui.TimelineRow{
-		{ID: "fork", Kind: ui.RowDivider, Label: "Forked from conversation", Icon: "git-fork"},
+		{ID: "fork", Kind: ui.RowDivider, Label: "Forked from conversation", Icon: "git-fork", Action: "Open source conversation", Thread: "env/source"},
 		{ID: "s1", Kind: ui.RowUser, Message: &ui.Message{ID: "s1", Text: longPrompt}},
 		{ID: "turn-fold:run-s1", Kind: ui.RowTurnFold, Group: "run-s1", Label: "Worked for 34m 10s"},
 		{ID: "plan", Kind: ui.RowPlan, Plan: planText},
@@ -145,7 +153,10 @@ func settledRows() []ui.TimelineRow {
 		{ID: "x2", Kind: ui.RowWork, Entries: []ui.WorkEntry{{ID: "x2", Icon: "circle-alert",
 			Error: &ui.EntryError{Label: "Provider error", Message: "The connection to the model was reset. Try again."}}}},
 		{ID: "a2", Kind: ui.RowAssistant, Message: &ui.Message{ID: "a2", Text: markdownReply, Meta: true, Copy: true, Badge: "interrupted"}},
-		{ID: "interrupt", Kind: ui.RowDivider, Label: "Run interrupted", Icon: "circle-stop"},
+		{ID: "interrupt", Kind: ui.RowDivider, Label: "Run interrupted", Icon: "circle-stop", Wrap: true,
+			Detail: "The provider stopped answering while the upload's tests ran, so the run was interrupted before it finished."},
+		{ID: "s4", Kind: ui.RowUser, Message: &ui.Message{ID: "s4", Files: []ui.File{{ID: "f1", Name: "upload-trace.pdf", Size: 2516582},
+			{ID: "f2", Name: "pasted.txt", Size: 900, Pasted: true}}}},
 		{ID: "live-activity-row", Kind: ui.RowThinking, Live: true, Label: "Thinking"},
 	}
 }

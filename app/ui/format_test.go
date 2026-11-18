@@ -78,3 +78,15 @@ func TestFormatTokens(t *testing.T) {
 		t.Errorf("groupDigits = %q", got)
 	}
 }
+
+// T3's formatBytes (formatBytes.ts): the unit is picked after rounding.
+func TestFormatBytes(t *testing.T) {
+	for _, c := range []struct {
+		n    int
+		want string
+	}{{512, "512 B"}, {1024, "1.00 KB"}, {2516582, "2.40 MB"}, {1048166, "1.00 MB"}, {150 * 1024, "150 KB"}, {15 * 1024 * 1024, "15.0 MB"}} {
+		if got := FormatBytes(c.n); got != c.want {
+			t.Errorf("FormatBytes(%d) = %q, want %q", c.n, got, c.want)
+		}
+	}
+}

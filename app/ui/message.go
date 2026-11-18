@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"image"
 	"image/color"
+	"regexp"
+	"strings"
 	"time"
 
 	"gioui.org/f32"
@@ -160,7 +162,23 @@ func (th *Theme) userRow(gtx C, r *TimelineRow, hot bool) int {
 	if len(m.Pictures) > 0 {
 		body = place(th.recorded(within(gtx, maxW), func(gtx C) D { return th.media(gtx, m, words) }), 0)
 	}
-	if words {
+	switch {
+	case !words && len(m.Pictures) == 0 && len(m.Files) > 0:
+		// Files sent without words are cards, not a bubble.
+		cards := th.recorded(within(gtx, maxW), func(gtx C) D {
+			y := 0
+			for i, f := range m.Files {
+				if i > 0 {
+					y += gap
+				}
+				off := op.Offset(image.Pt(0, y)).Push(gtx.Ops)
+				y += th.fileCard(gtx, f).Size.Y
+				off.Pop()
+			}
+			return D{Size: image.Pt(min(gtx.Constraints.Max.X, dp(gtx, 256)), y)}
+		})
+		body = place(cards, 0)
+	case words || len(m.Files) > 0:
 		body = place(th.recorded(within(gtx, maxW), func(gtx C) D { return th.bubble(gtx, r, len(m.Pictures) > 0) }), 0)
 	}
 	if m.Status != "" {
@@ -176,9 +194,7 @@ func (th *Theme) userRow(gtx C, r *TimelineRow, hot bool) int {
 		cid := "copy:" + r.ID
 		th.copyTarget(cid, StripChips(m.Text))
 		return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-			layout.Rigid(func(gtx C) D {
-				return th.textLine(gtx, Txt{Size: 12, Color: P.MutedForeground}, 16, dayAwareTimestamp(m.At, gtx.Now))
-			}),
+			layout.Rigid(th.stampText(r.ID, m.At, 16)),
 			layout.Rigid(Spacer(8, 0)),
 			layout.Rigid(th.messageCopy(cid, P.Background)),
 		)
@@ -255,6 +271,123 @@ func (th *Theme) statusPill(gtx C, status string) D {
 	return D{Size: size}
 }
 
+// fileLabel is T3's userMessageFileLabel.
+func fileLabel(f File) string {
+	if f.Pasted {
+		return "Pasted text"
+	}
+	return f.Name
+}
+
+// fileCard is UserFileCard (TimelineUserMessageRow.tsx:104-178): 256dp of
+// --message-surface, radius 16, padded 8 by 8 4 by 8; a 36dp box at
+// background/60 holding the file's icon, then its name medium 14/20 over
+// "PDF · 2.40 MB" 12/16 muted, then its download button.
+func (th *Theme) fileCard(gtx C, f File) D {
+	w, h := min(gtx.Constraints.Max.X, dp(gtx, 256)), dp(gtx, 52)
+	surface := P.MessageSurface
+	fill(gtx, surface, image.Rect(0, 0, w, h), dp(gtx, 16))
+	in := dp(gtx, 8)
+	box := image.Rect(in, in, in+dp(gtx, 36), in+dp(gtx, 36))
+	fill(gtx, over(faded(P.Background, 0x99), surface), box, dp(gtx, 8))
+	io := op.Offset(box.Min.Add(image.Pt((box.Dx()-dp(gtx, 16))/2, (box.Dy()-dp(gtx, 16))/2))).Push(gtx.Ops)
+	LucideW("file", P.MutedForeground, 16)(gtx)
+	io.Pop()
+	label := fileLabel(f)
+	meta := FormatBytes(f.Size)
+	if !f.Pasted {
+		ext := "File"
+		if m := fileExt.FindStringSubmatch(f.Name); m != nil {
+			ext = strings.ToUpper(m[1])
+		}
+		meta = ext + " · " + meta
+	}
+	tx := box.Max.X + dp(gtx, 12)
+	tw := w - tx - dp(gtx, 4+24+4)
+	to := op.Offset(image.Pt(tx, in)).Push(gtx.Ops)
+	th.textLine(within(gtx, tw), Txt{Size: 14, Font: UI(font.Medium), Color: P.MessageForeground}, 20, label)
+	mo := op.Offset(image.Pt(0, dp(gtx, 20))).Push(gtx.Ops)
+	th.textLine(within(gtx, tw), Txt{Size: 12, Color: P.MutedForeground}, 16, meta)
+	mo.Pop()
+	to.Pop()
+	if !f.Unknown {
+		id := "file.download:" + f.ID
+		bo := op.Offset(image.Pt(w-dp(gtx, 4+24), (h-dp(gtx, 24))/2)).Push(gtx.Ops)
+		d := th.T3Button(id, Button{Variant: BtnGhostMuted, Size: BtnSizeIconXs, Icon: "download", On: surface})(gtx)
+		th.tipAt(gtx, id, "Download "+label, d.Size, true, 0)
+		bo.Pop()
+	}
+	return D{Size: image.Pt(w, h)}
+}
+
+// fileExt is a file name's extension, as a file card names its kind.
+var fileExt = regexp.MustCompile(`(?i)\.([a-z0-9]{1,8})$`)
+
+// fileRows are a message's files inside its bubble, over its words, 4dp
+// apart: each its icon, its label (a pasted text's size under it) and an
+// eye, then its download button (TimelineUserMessageRow.tsx:954-1023).
+func (th *Theme) fileRows(gtx C, files []File) D {
+	w := gtx.Constraints.Max.X
+	y := 0
+	for i, f := range files {
+		if i > 0 {
+			y += dp(gtx, 4)
+		}
+		label := fileLabel(f)
+		lh := dp(gtx, 20)
+		if f.Pasted {
+			lh += dp(gtx, 16)
+		}
+		rowH := lh + 2*dp(gtx, 4) // py-1
+		off := op.Offset(image.Pt(0, y)).Push(gtx.Ops)
+		io := op.Offset(image.Pt(0, (rowH-dp(gtx, 16))/2)).Push(gtx.Ops)
+		LucideW("file", P.MutedForeground, 16)(gtx)
+		io.Pop()
+		tx := dp(gtx, 16+8)
+		tail := dp(gtx, 8+16)
+		if !f.Unknown {
+			tail += dp(gtx, 4+24)
+		}
+		to := op.Offset(image.Pt(tx, dp(gtx, 4))).Push(gtx.Ops)
+		d := th.textLine(within(gtx, w-tx-tail), Txt{Size: 14, Color: P.MessageForeground}, 20, label)
+		if f.Pasted {
+			so := op.Offset(image.Pt(0, dp(gtx, 20))).Push(gtx.Ops)
+			th.textLine(within(gtx, w-tx-tail), Txt{Size: 12, Color: P.MutedForeground}, 16, FormatBytes(f.Size))
+			so.Pop()
+		}
+		to.Pop()
+		if !f.Unknown {
+			eo := op.Offset(image.Pt(tx+d.Size.X+dp(gtx, 8), (rowH-dp(gtx, 16))/2)).Push(gtx.Ops)
+			LucideW("eye", P.MessageForeground, 16)(gtx)
+			eo.Pop()
+			id := "file.download:" + f.ID
+			bo := op.Offset(image.Pt(w-dp(gtx, 24), (rowH-dp(gtx, 24))/2)).Push(gtx.Ops)
+			bd := th.T3Button(id, Button{Variant: BtnGhostMuted, Size: BtnSizeIconXs, Icon: "download", On: P.MessageSurface})(gtx)
+			th.tipAt(gtx, id, "Download "+label, bd.Size, true, 0)
+			bo.Pop()
+		}
+		off.Pop()
+		y += rowH
+	}
+	return D{Size: image.Pt(w, y)}
+}
+
+// fileRowsWidth is how wide a message's file rows would be, at most maxW.
+func (th *Theme) fileRowsWidth(gtx C, files []File, maxW int) int {
+	w := 0
+	for _, f := range files {
+		lw := th.recorded(within(gtx, maxW), func(gtx C) D {
+			return th.textLine(gtx, Txt{Size: 14, Color: P.MessageForeground}, 20, fileLabel(f))
+		}).Size.X
+		row := dp(gtx, 16+8) + lw + dp(gtx, 8+16)
+		if !f.Unknown {
+			row += dp(gtx, 4+24)
+		}
+		w = max(w, row)
+	}
+	return min(w, maxW)
+}
+
 // collapseAt and collapsedH are T3's long message fold: a body 2 × 11rem
 // tall or more shows 11rem of itself, fading out over its last 28dp
 // (useTallEnoughToFold.ts, CollapsibleUserMessageBody).
@@ -268,10 +401,22 @@ func (th *Theme) bubble(gtx C, r *TimelineRow, mediaAbove bool) D {
 	maxW := gtx.Constraints.Max.X
 	surface := P.MessageSurface
 	p := dp(gtx, 12)
-	st := mdStyle{color: P.Foreground, on: surface, user: true}
+	st := mdStyle{color: P.Foreground, on: surface, user: true, owner: r.ID}
 	doc := th.parsed(m.Text, st, m.Chips)
 	textW := min(maxW-2*p, th.mdNatural(gtx, doc, doc.blocks, maxW-2*p))
+	// Its files over its words, 8dp above them (mb-2).
+	filesH := 0
+	var files recording
+	if len(m.Files) > 0 {
+		textW = max(textW, th.fileRowsWidth(gtx, m.Files, maxW-2*p))
+		files = th.recorded(within(gtx, textW), func(gtx C) D { return th.fileRows(gtx, m.Files) })
+		filesH = files.Size.Y
+		if m.Text != "" {
+			filesH += dp(gtx, 8)
+		}
+	}
 	bm := op.Record(gtx.Ops)
+	th.tl.blockSeq = 0
 	bh := th.mdStack(within(gtx, textW), doc, doc.blocks, st)
 	body := bm.Stop()
 	full := th.tl.full[r.ID]
@@ -280,7 +425,7 @@ func (th *Theme) bubble(gtx C, r *TimelineRow, mediaAbove bool) D {
 	if tall && !full {
 		shown = dp(gtx, collapsedH)
 	}
-	h := shown + 2*p
+	h := filesH + shown + 2*p
 	var foot recording
 	if tall {
 		label := "Show full message"
@@ -305,8 +450,13 @@ func (th *Theme) bubble(gtx C, r *TimelineRow, mediaAbove bool) D {
 	}
 	rr := clip.RRect{Rect: image.Rect(0, 0, w, h), NW: int(rad), NE: int(tr), SE: int(br), SW: int(rad)}
 	paint.FillShape(gtx.Ops, surface, rr.Op(gtx.Ops))
+	if len(m.Files) > 0 {
+		fo := op.Offset(image.Pt(p, p)).Push(gtx.Ops)
+		files.call.Add(gtx.Ops)
+		fo.Pop()
+	}
 	func() {
-		defer op.Offset(image.Pt(p, p)).Push(gtx.Ops).Pop()
+		defer op.Offset(image.Pt(p, p+filesH)).Push(gtx.Ops).Pop()
 		defer clip.Rect{Max: image.Pt(textW, shown)}.Push(gtx.Ops).Pop()
 		body.Add(gtx.Ops)
 		if tall && !full {
@@ -316,8 +466,9 @@ func (th *Theme) bubble(gtx C, r *TimelineRow, mediaAbove bool) D {
 		}
 	}()
 	if tall {
-		// The footer, right-aligned, its button 4dp into the padding.
-		off := op.Offset(image.Pt(w-p-foot.Size.X+dp(gtx, 4), p+shown+dp(gtx, 6))).Push(gtx.Ops)
+		// The footer, its button's right edge on the text's (justify-end;
+		// its -ml-1 only lets it reach 4dp past the text's left).
+		off := op.Offset(image.Pt(w-p-foot.Size.X, p+filesH+shown+dp(gtx, 6))).Push(gtx.Ops)
 		foot.call.Add(gtx.Ops)
 		off.Pop()
 	}
@@ -428,8 +579,8 @@ func (th *Theme) media(gtx C, m *Message, words bool) D {
 
 // assistantRow is an assistant's message, padded 4 by 2: its markdown at
 // foreground 90%, then its status or its meta row; or the meta row alone,
-// moved below the response's tool groups.
-func (th *Theme) assistantRow(gtx C, r *TimelineRow, hot bool) int {
+// moved below the response's tool groups. run lets its shell blocks run.
+func (th *Theme) assistantRow(gtx C, r *TimelineRow, hot, run bool) int {
 	m := r.Message
 	w := gtx.Constraints.Max.X
 	px := dp(gtx, 4)
@@ -441,7 +592,7 @@ func (th *Theme) assistantRow(gtx C, r *TimelineRow, hot bool) int {
 	}
 	y := dp(gtx, 2)
 	st := mdBody()
-	st.streaming = m.Streaming
+	st.streaming, st.run, st.owner = m.Streaming, run, r.ID
 	off := op.Offset(image.Pt(px, y)).Push(gtx.Ops)
 	y += th.markdown(within(gtx, w-2*px), m.Text, st, nil).Size.Y
 	off.Pop()
@@ -483,9 +634,7 @@ func (th *Theme) assistantMeta(gtx C, r *TimelineRow, a float32) {
 		gap()
 	}
 	if !m.Streaming {
-		kids = append(kids, layout.Rigid(func(gtx C) D {
-			return th.textLine(gtx, Txt{Size: 12, Color: P.MutedForeground}, 24, dayAwareTimestamp(m.At, gtx.Now))
-		}))
+		kids = append(kids, layout.Rigid(th.stampText(r.ID, m.At, 24)))
 	}
 	layout.Flex{Alignment: layout.Middle}.Layout(gtx, kids...)
 }

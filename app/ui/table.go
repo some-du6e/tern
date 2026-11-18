@@ -3,14 +3,18 @@ package ui
 import (
 	"fmt"
 	"image"
+	"io"
 	"strings"
+	"time"
 	"unicode"
 
 	"gioui.org/gesture"
+	"gioui.org/io/clipboard"
 	"gioui.org/io/pointer"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
+	"gioui.org/op/paint"
 )
 
 // T3's markdown tables (MarkdownTable.tsx, index.css .chat-markdown table;
@@ -24,6 +28,7 @@ import (
 
 func (th *Theme) mdTable(gtx C, doc *mdDoc, n *mdNode, st mdStyle) int {
 	w := gtx.Constraints.Max.X
+	id := th.blockID(st)
 	cols := 0
 	for _, r := range n.rows {
 		cols = max(cols, len(r))
@@ -31,7 +36,7 @@ func (th *Theme) mdTable(gtx C, doc *mdDoc, n *mdNode, st mdStyle) int {
 	if cols == 0 {
 		return 0
 	}
-	padX, capW := dp(gtx, 12), dp(gtx, 384)
+	padX := dp(gtx, 12)
 	pads := func(c int) int {
 		p := 2 * padX
 		if c == 0 {
@@ -42,17 +47,9 @@ func (th *Theme) mdTable(gtx C, doc *mdDoc, n *mdNode, st mdStyle) int {
 		}
 		return p
 	}
-	minW, maxW := make([]int, cols), make([]int, cols)
-	for _, r := range n.rows {
-		for c, cell := range r {
-			minW[c] = max(minW[c], th.longestWord(gtx, cell))
-			maxW[c] = max(maxW[c], min(capW, th.layoutInline(gtx, cell, 1<<20).size.X))
-		}
-	}
+	minW, maxW := th.tableColumns(gtx, n, cols, pads)
 	sumMin, sumMax := 0, 0
 	for c := range cols {
-		minW[c] += pads(c)
-		maxW[c] = max(maxW[c]+pads(c), minW[c])
 		sumMin += minW[c]
 		sumMax += maxW[c]
 	}
@@ -106,13 +103,13 @@ func (th *Theme) mdTable(gtx C, doc *mdDoc, n *mdNode, st mdStyle) int {
 	}
 	call := m.Stop()
 	if total > w {
-		th.hscroll(gtx, fmt.Sprintf("table:%p", n), image.Pt(w, y+dp(gtx, 15)), total, func(gtx C) { call.Add(gtx.Ops) })
+		th.hscroll(gtx, id, image.Pt(w, y+dp(gtx, 15)), total, func(gtx C) { call.Add(gtx.Ops) })
 		y += dp(gtx, 15)
 	} else {
 		call.Add(gtx.Ops)
 	}
 	// The copy button, 2dp under the table, reaching 4dp past its edge.
-	id := fmt.Sprintf("table:%p:copy", n)
+	id += ":copy"
 	b := Button{Variant: BtnGhostMuted, Size: BtnSizeIconXs, Icon: "copy", IconSize: 12, On: st.on}
 	if th.copiedFor(gtx, "copy:"+id, 1200) {
 		b.Icon = "check"
@@ -132,13 +129,42 @@ func (th *Theme) mdTable(gtx C, doc *mdDoc, n *mdNode, st mdStyle) int {
 	if th.clicked(id) {
 		th.toggleMenu(id)
 	}
-	switch th.rowMenu(gtx, id, at.Add(image.Pt(dp(gtx, 24), dp(gtx, 28))), []string{"Copy as Markdown", "Copy as CSV"}) {
+	switch th.rowMenu(gtx, id, at.Add(image.Pt(dp(gtx, 24), dp(gtx, 28))), false, []menuChoice{{label: "Copy as Markdown"}, {label: "Copy as CSV"}}) {
 	case 0:
 		th.copyNow(gtx, "copy:"+id, tableMarkdown(n))
 	case 1:
 		th.copyNow(gtx, "copy:"+id, tableCSV(n))
 	}
 	return y + dp(gtx, 24)
+}
+
+// tableColumns is each column's least and most width, its cells' padding
+// in: its longest word and its widest line, capped at 24rem. They're
+// measured once for the table at a scale.
+func (th *Theme) tableColumns(gtx C, n *mdNode, cols int, pads func(int) int) (minW, maxW []int) {
+	if c := n.cols; c != nil && c.scale == gtx.Metric.PxPerDp {
+		return c.min, c.max
+	}
+	capW := dp(gtx, 384)
+	minW, maxW = make([]int, cols), make([]int, cols)
+	for _, r := range n.rows {
+		for c, cell := range r {
+			minW[c] = max(minW[c], th.longestWord(gtx, cell))
+			maxW[c] = max(maxW[c], min(capW, th.layoutInline(gtx, cell, 1<<20).size.X))
+		}
+	}
+	for c := range cols {
+		minW[c] += pads(c)
+		maxW[c] = max(maxW[c]+pads(c), minW[c])
+	}
+	n.cols = &tableCols{gtx.Metric.PxPerDp, minW, maxW}
+	return minW, maxW
+}
+
+// tableCols is a table's measured columns, at a scale.
+type tableCols struct {
+	scale    float32
+	min, max []int
 }
 
 // longestWord is a cell's min-content width: its widest word, since
@@ -217,8 +243,10 @@ func tableCSV(n *mdNode) string {
 
 // copyNow puts s on the clipboard and shows copy button id's check.
 func (th *Theme) copyNow(gtx C, id, s string) {
-	th.copyTarget(id, s)
-	th.in.clipOut = &s
+	gtx.Execute(clipboard.WriteCmd{Type: "application/text", Data: io.NopCloser(strings.NewReader(s))})
+	if th.in.copied == nil {
+		th.in.copied = map[string]time.Time{}
+	}
 	th.in.copied[id] = gtx.Now
 	gtx.Execute(op.InvalidateCmd{})
 }
@@ -232,16 +260,25 @@ func (th *Theme) toggleMenu(id string) {
 	th.tl.menu = id
 }
 
+// menuChoice is a timeline menu's row: its label, and the warning a risky
+// one carries, as a triangle-alert before it and its tooltip.
+type menuChoice struct{ label, warning string }
+
 // rowMenu is the open timeline menu id: T3's menu with its top-right
-// corner at at, one row per choice, over a layer that closes it on any
-// other click. It returns the row picked this frame, or -1.
-func (th *Theme) rowMenu(gtx C, id string, at image.Point, choices []string) int {
+// corner at at, or its bottom-right there when up, one row per choice,
+// over a layer that closes it on any other click. It returns the row
+// picked this frame, or -1.
+func (th *Theme) rowMenu(gtx C, id string, at image.Point, up bool, choices []menuChoice) int {
 	if th.tl.menu != id {
 		return -1
 	}
+	// The rows' clicks are taken before the rows are drawn, so a pick is
+	// this frame's and never reaches core.
 	picked := -1
 	for i := range choices {
-		if th.clicked(fmt.Sprintf("%s:%d", id, i)) {
+		row := fmt.Sprintf("%s:%d", id, i)
+		th.events(gtx, row)
+		if th.clicked(row) {
 			picked = i
 		}
 	}
@@ -266,24 +303,51 @@ func (th *Theme) rowMenu(gtx C, id string, at image.Point, choices []string) int
 			return pad(4, 4, 4, 4).Layout(gtx, func(gtx C) D {
 				var rows []layout.FlexChild
 				for i, c := range choices {
-					rows = append(rows, layout.Rigid(th.menuItem(fmt.Sprintf("%s:%d", id, i), func(gtx C) D {
-						gtx.Constraints.Min.X = max(gtx.Constraints.Min.X, dp(gtx, 160)-dp(gtx, 8))
-						return pad(4, 8, 4, 8).Layout(gtx, func(gtx C) D {
-							return th.textLine(gtx, Txt{Size: 14, Color: P.PopoverForeground}, 20, c)
-						})
-					})))
+					row := fmt.Sprintf("%s:%d", id, i)
+					rows = append(rows, layout.Rigid(func(gtx C) D {
+						d := th.menuItem(row, func(gtx C) D {
+							gtx.Constraints.Min.X = max(gtx.Constraints.Min.X, dp(gtx, 160)-dp(gtx, 8))
+							return pad(4, 8, 4, 8).Layout(gtx, func(gtx C) D {
+								label := func(gtx C) D {
+									return th.textLine(gtx, Txt{Size: 14, Color: P.PopoverForeground}, 20, c.label)
+								}
+								if c.warning == "" {
+									return label(gtx)
+								}
+								// The 12dp icon at 80%, its -2dp margins, then the 8dp gap.
+								return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+									layout.Rigid(func(gtx C) D {
+										defer op.Offset(image.Pt(-dp(gtx, 2), 0)).Push(gtx.Ops).Pop()
+										defer paint.PushOpacity(gtx.Ops, 0.8).Pop()
+										d := LucideW("triangle-alert", P.Warning, 12)(gtx)
+										d.Size.X -= dp(gtx, 4)
+										return d
+									}),
+									layout.Rigid(Spacer(8, 0)),
+									layout.Rigid(label),
+								)
+							})
+						})(gtx)
+						th.tipAt(gtx, row, c.warning, d.Size, true, 0)
+						return d
+					}))
 				}
 				return layout.Flex{Axis: layout.Vertical}.Layout(gtx, rows...)
 			})
 		})
 	})
-	// A click anywhere else closes the menu without doing anything else.
+	// A click anywhere else closes the menu without doing anything else:
+	// the layer is deferred with the menu, so it covers the whole window.
 	far := image.Rect(-1<<15, -1<<15, 1<<15, 1<<15)
 	cl := clip.Rect(far).Push(gtx.Ops)
 	th.tl.menuClose.Add(gtx.Ops)
 	pointer.CursorDefault.Add(gtx.Ops)
 	cl.Pop()
-	off := op.Offset(image.Pt(at.X-menu.Size.X, at.Y)).Push(gtx.Ops)
+	y := at.Y
+	if up {
+		y -= menu.Size.Y
+	}
+	off := op.Offset(image.Pt(at.X-menu.Size.X, y)).Push(gtx.Ops)
 	menu.call.Add(gtx.Ops)
 	off.Pop()
 	op.Defer(gtx.Ops, m.Stop())

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"bytes"
 	"image"
 	"image/color"
 	"regexp"
@@ -24,9 +25,9 @@ import (
 // .chat-markdown; docs/ui/06-timeline.md §2.5, §3.5): CommonMark with
 // GitHub's tables, strikethrough, task lists and autolinks, parsed by
 // goldmark and laid out with .chat-markdown's rules, margins collapsing
-// between blocks as CSS's do. GitHub's > [!NOTE] alerts are T3's too.
-// Footnotes, <details>, math, Mermaid, images, file and thread chips are
-// drawn as their text.
+// between blocks as CSS's do. GitHub's > [!NOTE] alerts are T3's too, and
+// so is Claude's "★ Insight" callout. Footnotes, <details>, math,
+// Mermaid, images, file and thread chips are drawn as their text.
 
 type mdKind int
 
@@ -47,20 +48,25 @@ type mdNode struct {
 	kind  mdKind
 	tight bool // a tight list item's paragraph, without margins
 	level int  // a heading's level; a list's depth, from 1
-	// A list: ordered, its first number and its markers' width in digits.
+	// A list: ordered, its first number and its markers' width in digits;
+	// an item's number.
 	ordered bool
 	start   int
 	digits  int
+	number  int
 	task    int    // a task item: 1 open, 2 done
 	alert   string // an alert's kind: note, tip, important, warning, caution
-	// A code block: its language, its title and its code.
+	// A code block: its language, its title and its code, and whether its
+	// closing fence came.
 	lang, title, code string
+	closed            bool
 	text              *inlineText // a paragraph's or heading's text
 	kids              []*mdNode
-	// A table: its rows, the first header ones of them, and each column's
-	// alignment.
+	// A table: its rows, the first header ones of them, and its columns'
+	// widths once measured.
 	rows   [][]*inlineText
 	header int
+	cols   *tableCols
 }
 
 // mdDoc is a parsed message.
@@ -74,10 +80,17 @@ type mdStyle struct {
 	color color.NRGBA // body text, painted on on
 	on    color.NRGBA // the surface under it
 	// user is a user's message: full foreground, line breaks kept, raw
-	// HTML as written, decimal markers at every depth.
-	user bool
+	// HTML as written, decimal markers at every depth. breaks keeps line
+	// breaks alone, as a thought's trace does.
+	user, breaks bool
 	// streaming: a reply still arriving, whose code blocks can't run yet.
 	streaming bool
+	// run: its shell blocks can run in the thread's terminal, which needs a
+	// project (ChatView.tsx:3416-3418).
+	run bool
+	// owner names the message: its code blocks' and tables' state, such
+	// as a block's wrapping, is kept by it and their place in it.
+	owner string
 }
 
 // mdBody is an assistant's body text: foreground at 90%, on the canvas.
@@ -87,10 +100,15 @@ func mdBody() mdStyle {
 
 var mdParser = goldmark.New(goldmark.WithExtensions(extension.GFM))
 
-// alertMarker is GitHub's alert syntax (markdownGithubAlerts.ts).
-var alertMarker = regexp.MustCompile(`(?i)^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\][ \t]*(?:\r?\n|$)`)
+// alertMarker is GitHub's alert syntax (markdownGithubAlerts.ts), and
+// INSIGHT the mark an insight callout's quote starts with.
+var (
+	alertMarker   = regexp.MustCompile(`(?i)^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\][ \t]*(?:\r?\n|$)`)
+	insightMarker = regexp.MustCompile(`^\[!(INSIGHT)\][ \t]*(?:\r?\n|$)`)
+)
 
-// parsed is src parsed for style st, cached.
+// parsed is src parsed for style st, cached. A reply's insight callouts
+// are quotes by then.
 func (th *Theme) parsed(src string, st mdStyle, chips []string) *mdDoc {
 	key := mdKey{src: src, chips: strings.Join(chips, "\x00"), st: st, dark: dark}
 	if d := th.tl.docs[key]; d != nil {
@@ -101,11 +119,123 @@ func (th *Theme) parsed(src string, st mdStyle, chips []string) *mdDoc {
 		th.tl.docs, th.tl.layouts = map[mdKey]*mdDoc{}, nil
 	}
 	b := &mdBuilder{src: []byte(src), st: st, chips: chips}
+	if !st.user {
+		var text string
+		if text, b.insights = insights(src); b.insights {
+			b.src = []byte(text)
+		}
+	}
 	doc := &mdDoc{blocks: b.blocks(mdParser.Parser().Parse(gtext.NewReader(b.src)), 0)}
 	doc.links = b.links
 	th.tl.docs[key] = doc
 	return doc
 }
+
+var (
+	insightOpen  = regexp.MustCompile("^( {0,3})(`?)★ Insight[ \t]+─{3,}`?[ \t]*$")
+	insightClose = regexp.MustCompile("^( {0,3})(`?)─{3,}`?[ \t]*$")
+	insightLine  = regexp.MustCompile(`(?m)^★ Insight[\s─]`)
+	fenceLine    = regexp.MustCompile("^ {0,3}(`{3,}|~{3,})")
+)
+
+// insights is T3's remarkAssistantInsights (markdownPipeline.ts:743-818):
+// a "★ Insight ───" line opens a callout and a "───" line as far in closes
+// it, the lines between a quote marked [!INSIGHT]. Lines in code fences
+// neither open nor close one.
+func insights(src string) (string, bool) {
+	if !strings.Contains(src, "★ Insight") {
+		return src, false
+	}
+	var out strings.Builder
+	found, open, indent, fence := false, false, "", ""
+	for _, line := range strings.SplitAfter(src, "\n") {
+		value := strings.TrimRight(line, "\r\n")
+		end := line[len(value):]
+		inFence := fence != ""
+		if m := fenceLine.FindStringSubmatch(value); m != nil {
+			switch {
+			case fence == "":
+				fence = m[1]
+			case m[1][0] == fence[0] && len(m[1]) >= len(fence) && strings.TrimSpace(value) == m[1]:
+				fence = ""
+			}
+		}
+		switch {
+		case !open && !inFence && insightOpen.MatchString(value):
+			open, found, indent = true, true, insightOpen.FindStringSubmatch(value)[1]
+			out.WriteString("> [!INSIGHT]" + end)
+		case open && !inFence && insightClose.MatchString(value) && insightClose.FindStringSubmatch(value)[1] == indent:
+			open = false
+			out.WriteString(end)
+		case open:
+			out.WriteString("> " + line)
+		default:
+			out.WriteString(line)
+		}
+	}
+	return out.String(), found
+}
+
+// splitMarkdownBlocks is T3's: a streaming reply cut at the blank lines
+// that close every open block, so each piece renders as it would in the
+// whole, or nil when the text uses syntax that spans blocks
+// (markdownStreamBlocks.ts:14-60).
+func splitMarkdownBlocks(text string) []string {
+	if strings.Contains(text, "\r") || documentWide.MatchString(text) {
+		return nil
+	}
+	var blocks []string
+	blockStart, lineStart := 0, 0
+	fence, fenceIndent := "", 0
+	afterBlank, insight := false, ""
+	inInsight := false
+	for _, line := range strings.Split(text, "\n") {
+		opener := ""
+		if m := fenceLine.FindStringSubmatch(line); m != nil {
+			opener = m[1]
+		}
+		switch {
+		case fence != "":
+			// A line left of an indented fence may end the list item
+			// holding it, which isn't tracked.
+			if strings.TrimSpace(line[:min(len(line), fenceIndent)]) != "" {
+				return append(blocks, text[blockStart:])
+			}
+			if opener != "" && opener[0] == fence[0] && len(opener) >= len(fence) && strings.TrimSpace(line) == opener {
+				fence = ""
+			}
+		case inInsight && insightClose.MatchString(line) && insightClose.FindStringSubmatch(line)[1] == insight:
+			inInsight, afterBlank = false, false
+		case strings.TrimSpace(line) == "":
+			afterBlank = true
+		default:
+			if afterBlank && !inInsight && lineStart > blockStart && !continuation.MatchString(line) {
+				blocks = append(blocks, text[blockStart:lineStart])
+				blockStart = lineStart
+			}
+			afterBlank = false
+			if !inInsight {
+				if m := insightOpen.FindStringSubmatch(line); m != nil {
+					inInsight, insight = true, m[1]
+				}
+			}
+			fence = opener
+			if opener != "" {
+				fenceIndent = strings.Index(line, opener)
+			}
+		}
+		lineStart += len(line) + 1
+	}
+	return append(blocks, text[blockStart:])
+}
+
+var (
+	// Definitions, footnotes, raw HTML, container directives and display
+	// math can tie blocks together; list items and indented content after
+	// a blank line still continue the block before.
+	documentWide = regexp.MustCompile(`(?m)^ {0,3}(?:\[[^\]\n]+\]:|<[A-Za-z!?/]|:::|\$\$)|\[\^`)
+	continuation = regexp.MustCompile(`^(?:[ \t]|(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$))`)
+)
 
 type mdKey struct {
 	src, chips string
@@ -119,6 +249,8 @@ type mdBuilder struct {
 	st    mdStyle
 	chips []string
 	links []string
+	// insights: the text has insight callouts, quotes marked [!INSIGHT].
+	insights bool
 }
 
 func (b *mdBuilder) blocks(n ast.Node, depth int) []*mdNode {
@@ -144,16 +276,24 @@ func (b *mdBuilder) blocks(n ast.Node, depth int) []*mdNode {
 			l := &mdNode{kind: mdList, level: depth + 1, ordered: c.IsOrdered(), start: c.Start}
 			n := l.start
 			for it := c.FirstChild(); it != nil; it = it.NextSibling() {
-				item := &mdNode{kind: mdItem, kids: b.blocks(it, depth+1)}
+				item := &mdNode{kind: mdItem, kids: b.blocks(it, depth+1), number: n}
+				if w, ok := b.writtenNumber(it); ok && l.ordered && b.st.user {
+					item.number = w
+				}
 				if box := taskBox(it); box != nil {
 					item.task = 1
 					if box.IsChecked {
 						item.task = 2
 					}
+					// The checkbox sits in the gutter, 0.35em before the text,
+					// so the first line starts 2.1dp before the others.
+					if len(item.kids) > 0 && item.kids[0].text != nil {
+						item.kids[0].text.indent = -2.1
+					}
 				}
 				l.kids = append(l.kids, item)
-				l.digits = max(l.digits, len(strconv.Itoa(n)))
-				n++
+				l.digits = max(l.digits, len(strconv.Itoa(item.number)))
+				n = item.number + 1
 			}
 			out = append(out, l)
 		case *ast.Blockquote:
@@ -172,7 +312,7 @@ func (b *mdBuilder) blocks(n ast.Node, depth int) []*mdNode {
 			if c.Info != nil {
 				info = strings.TrimSpace(strings.TrimPrefix(string(c.Info.Segment.Value(b.src)), lang))
 			}
-			out = append(out, &mdNode{kind: mdCode, lang: fenceLanguage(lang), title: fenceTitle(info), code: b.lines(c)})
+			out = append(out, &mdNode{kind: mdCode, lang: fenceLanguage(lang), title: fenceTitle(info), code: b.lines(c), closed: b.closedFence(c)})
 		case *ast.CodeBlock:
 			out = append(out, &mdNode{kind: mdCode, lang: "text", code: b.lines(c)})
 		case *ast.ThematicBreak:
@@ -186,7 +326,12 @@ func (b *mdBuilder) blocks(n ast.Node, depth int) []*mdNode {
 					if _, head := r.(*east.TableHeader); head {
 						w = font.SemiBold
 					}
-					cells = append(cells, b.paragraph(cell, 14, UI(w), b.st.color, 22.75))
+					p := b.paragraph(cell, 14, UI(w), b.st.color, 22.75)
+					// A column's :---: or ---: is the cells' text-align.
+					if tc, ok := cell.(*east.TableCell); ok {
+						p.align = map[east.Alignment]textAlign{east.AlignCenter: textCenter, east.AlignRight: textEnd}[tc.Alignment]
+					}
+					cells = append(cells, p)
 				}
 				if _, head := r.(*east.TableHeader); head {
 					t.header++
@@ -232,6 +377,9 @@ func (b *mdBuilder) alert(q *ast.Blockquote) string {
 	}
 	seg := p.Lines().At(0)
 	m := alertMarker.FindSubmatch(seg.Value(b.src))
+	if m == nil && b.insights {
+		m = insightMarker.FindSubmatch(seg.Value(b.src))
+	}
 	if m == nil {
 		return ""
 	}
@@ -253,15 +401,80 @@ func (b *mdBuilder) alert(q *ast.Blockquote) string {
 	return strings.ToLower(string(m[1]))
 }
 
-// lines is a code or HTML block's text.
+// lines is a code or HTML block's text, its lines ended by line breaks
+// as CommonMark's are, a CR before them dropped.
 func (b *mdBuilder) lines(n ast.Node) string {
 	var sb strings.Builder
 	ls := n.Lines()
 	for i := 0; i < ls.Len(); i++ {
 		seg := ls.At(i)
-		sb.Write(seg.Value(b.src))
+		line := string(seg.Value(b.src))
+		if strings.HasSuffix(line, "\r\n") {
+			line = line[:len(line)-2] + "\n"
+		}
+		sb.WriteString(line)
 	}
 	return strings.TrimSuffix(sb.String(), "\n")
+}
+
+// closingFence is a code fence's closing line, in a quote or a list or
+// not (MarkdownCodeBlock.logic.ts isClosedCodeFence).
+var closingFence = regexp.MustCompile("^[ \t>]*(`{3,}|~{3,})[ \t\r]*$")
+
+// closedFence is T3's isClosedCodeFence: the line after the code closes
+// the fence with its opening's character, at least as many of them.
+// A reply cut off mid-block hasn't one.
+func (b *mdBuilder) closedFence(c *ast.FencedCodeBlock) bool {
+	if c.Info == nil {
+		return false
+	}
+	// The opening fence: the run of ` or ~ before the info string.
+	end := c.Info.Segment.Start
+	for end > 0 && (b.src[end-1] == ' ' || b.src[end-1] == '\t') {
+		end--
+	}
+	start := end
+	for start > 0 && (b.src[start-1] == '`' || b.src[start-1] == '~') && b.src[start-1] == b.src[end-1] {
+		start--
+	}
+	if end-start < 3 {
+		return false
+	}
+	// The closing line follows the code's last line, or the opening's.
+	at := c.Info.Segment.Stop
+	if n := c.Lines().Len(); n > 0 {
+		at = c.Lines().At(n - 1).Stop
+	} else if i := bytes.IndexByte(b.src[at:], '\n'); i >= 0 {
+		at += i + 1
+	} else {
+		return false
+	}
+	line := b.src[at:]
+	if i := bytes.IndexByte(line, '\n'); i >= 0 {
+		line = line[:i]
+	}
+	m := closingFence.FindSubmatch(line)
+	return m != nil && m[1][0] == b.src[start] && len(m[1]) >= end-start
+}
+
+// writtenMarker is an ordered list item's number as written.
+var writtenMarker = regexp.MustCompile(`(\d{1,9})[.)]`)
+
+// writtenNumber is the number a list item's marker was written with, read
+// off the line its text starts on (T3's keepOrderedListNumbers).
+func (b *mdBuilder) writtenNumber(item ast.Node) (int, bool) {
+	first := item.FirstChild()
+	if first == nil || first.Kind() != ast.KindParagraph && first.Kind() != ast.KindTextBlock || first.Lines().Len() == 0 {
+		return 0, false
+	}
+	at := first.Lines().At(0).Start
+	from := bytes.LastIndexByte(b.src[:at], '\n') + 1
+	m := writtenMarker.FindAllSubmatch(b.src[from:at], -1)
+	if m == nil {
+		return 0, false
+	}
+	n, err := strconv.Atoi(string(m[len(m)-1][1]))
+	return n, err == nil
 }
 
 // codeBg is inline code's fill: the foreground at 10% on the surface.
@@ -294,7 +507,7 @@ func (b *mdBuilder) inlines(t *inlineText, n ast.Node, st runStyle) {
 			switch {
 			case c.HardLineBreak():
 				t.runs = append(t.runs, inlineRun{brk: true})
-			case c.SoftLineBreak() && b.st.user:
+			case c.SoftLineBreak() && (b.st.user || b.st.breaks || b.insights):
 				t.runs = append(t.runs, inlineRun{brk: true})
 			case c.SoftLineBreak():
 				b.addText(t, " ", st)
@@ -308,11 +521,10 @@ func (b *mdBuilder) inlines(t *inlineText, n ast.Node, st runStyle) {
 					sb.Write(tx.Segment.Value(b.src))
 				}
 			}
+			// Code is --contrast-foreground, in a link too.
 			cs := st
 			cs.code, cs.font, cs.size = true, Mono(), 0.85*st.size
-			if st.link == 0 {
-				cs.color = over(P.ContrastForeground, b.st.on)
-			}
+			cs.color = over(P.ContrastForeground, b.st.on)
 			b.addText(t, strings.ReplaceAll(sb.String(), "\n", " "), cs)
 		case *ast.Emphasis:
 			es := st
@@ -526,10 +738,60 @@ func fenceTitle(meta string) string {
 
 // ---------- layout ----------
 
-// markdown draws src in style st, as wide as it may be.
+// markdown draws src in style st, as wide as it may be. A reply with an
+// insight callout keeps its line breaks throughout
+// (shouldPreserveAssistantLineBreaks). While it streams it's cut into
+// blocks, each parsed on its own, so only the last parses again as text
+// arrives; the block it replaces goes (ChatMarkdown.tsx:1821-1827).
 func (th *Theme) markdown(gtx C, src string, st mdStyle, chips []string) D {
-	doc := th.parsed(src, st, chips)
-	return D{Size: image.Pt(gtx.Constraints.Max.X, th.mdStack(gtx, doc, doc.blocks, st))}
+	if !st.user && insightLine.MatchString(src) {
+		st.breaks = true
+	}
+	parts := []string{src}
+	if st.streaming {
+		if b := splitMarkdownBlocks(src); b != nil {
+			parts = b
+		}
+		if st.owner != "" {
+			key := mdKey{src: parts[len(parts)-1], chips: strings.Join(chips, "\x00"), st: st, dark: dark}
+			if old, ok := th.tl.tails[st.owner]; ok && old != key {
+				delete(th.tl.docs, old)
+			}
+			if th.tl.tails == nil {
+				th.tl.tails = map[string]mdKey{}
+			}
+			th.tl.tails[st.owner] = key
+		}
+	}
+	th.tl.blockSeq = 0
+	y := 0
+	var prev float32
+	started := false
+	for _, part := range parts {
+		doc := th.parsed(part, st, chips)
+		if len(doc.blocks) == 0 {
+			continue
+		}
+		// Blocks of one message: the larger of their facing margins apart.
+		top, _ := doc.blocks[0].margins()
+		if started {
+			y += dp(gtx, max(prev, top))
+		}
+		off := op.Offset(image.Pt(0, y)).Push(gtx.Ops)
+		y += th.mdStack(gtx, doc, doc.blocks, st)
+		off.Pop()
+		_, prev = doc.blocks[len(doc.blocks)-1].margins()
+		started = true
+	}
+	return D{Size: image.Pt(gtx.Constraints.Max.X, y)}
+}
+
+// blockID names the next code block or table drawn of the message being
+// drawn, by its owner and its place among them: re-parsing the message as
+// it streams, or for a new theme, keeps it.
+func (th *Theme) blockID(st mdStyle) string {
+	th.tl.blockSeq++
+	return st.owner + ":block:" + strconv.Itoa(th.tl.blockSeq)
 }
 
 // margins are a block's collapsed top and bottom margins, in dp: its own,
@@ -651,6 +913,7 @@ var alertLooks = map[string]struct {
 	label, icon          string
 	rule, title, titleDk string
 }{
+	"insight":   {"Insight", "star", "", "", ""}, // --info, its rule at full strength
 	"note":      {"Note", "info", "blue-500", "blue-600", "blue-400"},
 	"tip":       {"Tip", "lightbulb", "emerald-500", "emerald-600", "emerald-400"},
 	"important": {"Important", "message-square-warning", "purple-500", "purple-600", "purple-400"},
@@ -664,9 +927,12 @@ func (th *Theme) mdAlert(gtx C, doc *mdDoc, n *mdNode, st mdStyle) int {
 	look := alertLooks[n.alert]
 	rule := dp(gtx, 2)
 	w := gtx.Constraints.Max.X
-	titleCol := Tailwind[look.title]
+	ruleCol, titleCol := alpha(Tailwind[look.rule], 0xb3), Tailwind[look.title]
 	if dark {
 		titleCol = Tailwind[look.titleDk]
+	}
+	if n.alert == "insight" {
+		ruleCol, titleCol = P.Info, P.Info
 	}
 	g := within(gtx, w-rule-dp(gtx, 12))
 	off := op.Offset(image.Pt(rule+dp(gtx, 12), 0)).Push(gtx.Ops)
@@ -688,7 +954,7 @@ func (th *Theme) mdAlert(gtx C, doc *mdDoc, n *mdNode, st mdStyle) int {
 		ko.Pop()
 	}
 	off.Pop()
-	fill(gtx, over(alpha(Tailwind[look.rule], 0xb3), st.on), image.Rect(0, 0, rule, h), 0)
+	fill(gtx, over(ruleCol, st.on), image.Rect(0, 0, rule, h), 0)
 	return h
 }
 
@@ -712,7 +978,7 @@ func (th *Theme) mdList(gtx C, doc *mdDoc, n *mdNode, st mdStyle) int {
 		h := th.mdStack(g, doc, item.kids, st)
 		off.Pop()
 		mo := op.Offset(image.Pt(0, y)).Push(gtx.Ops)
-		th.listMarker(gtx, n, item, i, gutter, st)
+		th.listMarker(gtx, n, item, gutter, st)
 		mo.Pop()
 		y += h
 		prev = bottom
@@ -722,7 +988,7 @@ func (th *Theme) mdList(gtx C, doc *mdDoc, n *mdNode, st mdStyle) int {
 
 // listMarker draws an item's marker on its first line: a 13dp checkbox
 // for a task, else the bullet or number, ending before the gutter's edge.
-func (th *Theme) listMarker(gtx C, n, item *mdNode, i, gutter int, st mdStyle) {
+func (th *Theme) listMarker(gtx C, n, item *mdNode, gutter int, st mdStyle) {
 	line := dp(gtx, 22.75)
 	switch {
 	case item.task > 0:
@@ -736,16 +1002,17 @@ func (th *Theme) listMarker(gtx C, n, item *mdNode, i, gutter int, st mdStyle) {
 		}
 		// The number and its ". ", tabular, ending where the text starts.
 		m := op.Record(gtx.Ops)
-		d := th.textLine(within(gtx, gutter), Txt{Size: 14, Color: st.color}, 22.75, listNumber(n.start+i, style)+". ")
+		d := th.textLine(within(gtx, gutter), Txt{Size: 14, Color: st.color}, 22.75, listNumber(item.number, style)+". ")
 		call := m.Stop()
 		off := op.Offset(image.Pt(gutter-d.Size.X, 0)).Push(gtx.Ops)
 		call.Add(gtx.Ops)
 		off.Pop()
 	default:
-		// Chrome's symbol markers: 5dp at 14dp text, ending 7dp before the
-		// text, on the x-height's middle; discs, then circles, then squares.
-		d := dp(gtx, 5)
-		x0, y0 := gutter-dp(gtx, 7)-d, (line-d)/2+dp(gtx, 1)
+		// Chrome's outside symbol markers: 4.5dp at 14dp text, ending 11.5dp
+		// before the text, on the x-height's middle; discs, then circles,
+		// then squares.
+		d := dp(gtx, 4.5)
+		x0, y0 := gutter-dp(gtx, 11.5)-d, (line-d)/2+dp(gtx, 1)
 		r := image.Rect(x0, y0, x0+d, y0+d)
 		switch (n.level - 1) % 3 {
 		case 0:

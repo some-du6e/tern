@@ -3,6 +3,7 @@ package ui
 import (
 	"image"
 	"image/color"
+	"math"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -26,16 +27,21 @@ import (
 
 // inlineRun is a stretch of text in one style.
 type inlineRun struct {
-	text   string
-	font   font.Font
-	size   float32 // the font size in dp
-	color  color.NRGBA
-	code   bool // inline code: padded 0.1em by 0.35em in a 1dp border, radius 4
-	strike bool
-	italic bool // Inter has no italic, so Chrome slants the roman: so does this
-	link   int  // 1 + the index of its link in the paragraph, or 0
-	chip   int  // a picture chip's number, or 0
-	brk    bool // a hard line break
+	text      string
+	font      font.Font
+	size      float32 // the font size in dp
+	color     color.NRGBA
+	code      bool // inline code: padded 0.1em by 0.35em in a 1dp border, radius 4
+	strike    bool
+	underline bool
+	italic    bool // Inter has no italic, so Chrome slants the roman: so does this
+	link      int  // 1 + the index of its link in the paragraph, or 0
+	chip      int  // a picture chip's number, or 0
+	brk       bool // a hard line break
+	// gap is a fixed space of gap dp, a margin between inline boxes; icon
+	// a lucide icon size dp square, centred on the line.
+	gap  float32
+	icon string
 }
 
 // inlineText is one paragraph: its runs, and the block's own font and line
@@ -49,7 +55,21 @@ type inlineText struct {
 	chips []string
 	// codeBg is inline code's fill, composited on the surface it sits on.
 	codeBg color.NRGBA
+	// indent is where the first line starts, in dp: a task's checkbox
+	// pulls it into the list's gutter.
+	indent float32
+	// align places each line: textStart, textCenter or textEnd.
+	align textAlign
 }
+
+// textAlign is CSS's text-align.
+type textAlign int
+
+const (
+	textStart textAlign = iota
+	textCenter
+	textEnd
+)
 
 // linkBox is where a link's text landed, for the pointer.
 type linkBox struct {
@@ -151,16 +171,28 @@ func (th *Theme) layoutInline(gtx C, t *inlineText, maxW int) *inlineLayout {
 	px := func(dp float32) int { return int(dp*gtx.Metric.PxPerDp + 0.5) }
 	var lines [][]piece
 	var line []piece
-	x := 0
+	x := int(math.Round(float64(t.indent * gtx.Metric.PxPerDp)))
+	start := x // where the line being filled starts
 	newLine := func() {
 		lines = append(lines, line)
-		line, x = nil, 0
+		line, x, start = nil, 0, 0
 	}
 	for i := range t.runs {
 		r := &t.runs[i]
 		switch {
 		case r.brk:
 			newLine()
+			continue
+		case r.icon != "" || r.gap > 0:
+			w := px(r.gap)
+			if r.icon != "" {
+				w = px(r.size)
+			}
+			if x > start && x+w > maxW {
+				newLine()
+			}
+			line = append(line, piece{run: r, x: x, w: w})
+			x += w
 			continue
 		case r.chip > 0:
 			label := ImageLabel(r.chip)
@@ -169,7 +201,7 @@ func (th *Theme) layoutInline(gtx C, t *inlineText, maxW int) *inlineLayout {
 			}
 			_, _, lw := th.shapeLine(r.font, px(r.size), label, 1<<20, false)
 			w := px(r.size) + px(0.2*r.size) + lw
-			if x > 0 && x+w > maxW {
+			if x > start && x+w > maxW {
 				newLine()
 			}
 			m := th.metrics(r.font, px(r.size))
@@ -183,7 +215,7 @@ func (th *Theme) layoutInline(gtx C, t *inlineText, maxW int) *inlineLayout {
 		}
 		rest := r.text
 		for rest != "" {
-			if x == 0 {
+			if x == start {
 				// Spaces at the start of a wrapped line collapse away.
 				rest = strings.TrimLeftFunc(rest, unicode.IsSpace)
 				if rest == "" {
@@ -193,7 +225,7 @@ func (th *Theme) layoutInline(gtx C, t *inlineText, maxW int) *inlineLayout {
 			avail := maxW - x - 2*pad
 			gs, n, w := th.shapeLine(r.font, px(r.size), rest, max(1, avail), false)
 			if n == 0 {
-				if x > 0 {
+				if x > start {
 					newLine()
 					continue
 				}
@@ -227,7 +259,8 @@ func (th *Theme) layoutInline(gtx C, t *inlineText, maxW int) *inlineLayout {
 	return l
 }
 
-// paintInline records the laid-out lines' drawing.
+// paintInline records the laid-out lines' drawing, each line placed by the
+// text's alignment within maxW. Its size is the widest line's.
 func (th *Theme) paintInline(gtx C, t *inlineText, lines [][]piece, maxW int) (op.CallOp, image.Point, []linkBox) {
 	ops := new(op.Ops)
 	g := gtx
@@ -241,10 +274,32 @@ func (th *Theme) paintInline(gtx C, t *inlineText, lines [][]piece, maxW int) (o
 	for i, ln := range lines {
 		top := float32(i) * lineH
 		base := int(top + half + strut.ascent + 0.5)
+		lineW := 0
 		for _, p := range ln {
-			width = max(width, p.x+p.w)
+			lineW = max(lineW, p.x+p.w)
+		}
+		width = max(width, lineW)
+		dx := 0
+		switch t.align {
+		case textCenter:
+			dx = (maxW - lineW) / 2
+		case textEnd:
+			dx = maxW - lineW
+		}
+		lo := op.Offset(image.Pt(dx, 0)).Push(ops)
+		for _, p := range ln {
 			r := p.run
 			col := r.color
+			if r.icon != "" {
+				s := int(r.size*gtx.Metric.PxPerDp + 0.5)
+				off := op.Offset(image.Pt(p.x, int(top+(lineH-float32(s))/2+0.5))).Push(ops)
+				LucideW(r.icon, col, r.size)(g)
+				off.Pop()
+				continue
+			}
+			if r.gap > 0 {
+				continue
+			}
 			if r.code {
 				em := r.size * gtx.Metric.PxPerDp
 				padY := 0.1*em + float32(max(1, dp(gtx, 1)))
@@ -252,7 +307,7 @@ func (th *Theme) paintInline(gtx C, t *inlineText, lines [][]piece, maxW int) (o
 				fill(g, t.codeBg, box, dp(gtx, 4))
 			}
 			if r.link > 0 {
-				links = append(links, linkBox{r.link - 1, image.Rect(p.x, base-p.ascent, p.x+p.w, base+p.descent)})
+				links = append(links, linkBox{r.link - 1, image.Rect(dx+p.x, base-p.ascent, dx+p.x+p.w, base+p.descent)})
 			}
 			if p.chip != "" {
 				em := int(r.size*gtx.Metric.PxPerDp + 0.5)
@@ -270,7 +325,12 @@ func (th *Theme) paintInline(gtx C, t *inlineText, lines [][]piece, maxW int) (o
 				y := base - int(0.27*em+0.5)
 				fill(g, col, image.Rect(p.x, y, p.x+p.w, y+max(1, dp(gtx, 1))), 0)
 			}
+			if r.underline {
+				y := base + dp(gtx, 1.5)
+				fill(g, col, image.Rect(p.x, y, p.x+p.w, y+max(1, dp(gtx, 1))), 0)
+			}
 		}
+		lo.Pop()
 	}
 	call := rec.Stop()
 	h := int(float32(len(lines))*lineH + 0.5)
