@@ -72,6 +72,9 @@ type App struct {
 	view     *threadView
 	draft    string // project id while composing a new thread
 	draftEnv string // and its environment
+	// What the user opened in each thread's timeline, for the last 100.
+	disclosures     map[string]*disclosure
+	disclosureOrder []string
 
 	choices map[string]*choice       // per thread ref, or "draft"
 	images  map[string][]pastedImage // pasted and not sent yet, same keys
@@ -174,6 +177,7 @@ func NewWithStore(store *t3.Store, redraw func()) (*App, error) {
 		browsers: map[string]*browser{},
 		answers:  map[string]map[int]bool{},
 	}
+	a.disclosures = map[string]*disclosure{}
 	_ = store.Delete("env-filter") // from when a machine's chip filtered the inbox
 	a.detailsCard = true
 	_, _ = store.Get("details-card", &a.detailsCard)
@@ -687,34 +691,57 @@ func (a *App) saveShellCacheLocked(e *envState) {
 
 // ---------- the open thread ----------
 
-// HIDDEN carries nothing worth a row of its own.
-var hidden = map[string]bool{"checkpoint": true, "notification": true, "approval_request": true, "user_input_request": true, "run_interrupt_request": true}
-
-var toolTypes = map[string]bool{"command_execution": true, "file_change": true, "file_search": true, "web_search": true, "dynamic_tool": true, "subagent": true}
-
 type threadView struct {
-	id       string // the thread's own id
-	env      *envState
-	raw      map[string]map[string]json.RawMessage // row key -> merged item fields
-	items    map[string]*t3.TurnItem
-	runs     map[string]t3.Run
-	messages map[string]t3.Message
-	cursor   string
-	more     bool
-	loading  bool
-	loaded   bool
-	unfolded map[string]bool
-	open     map[string]bool // tool and thought rows the user expanded
-	full     map[string]*t3.TurnItem
-	cancel   func()
+	id         string // the thread's own id
+	env        *envState
+	raw        map[string]map[string]json.RawMessage // row key -> merged item fields
+	items      map[string]*t3.TurnItem
+	runs       map[string]t3.Run
+	messages   map[string]t3.Message
+	cursor     string
+	more       bool
+	loading    bool
+	loaded     bool
+	historyErr string // why the last page of history didn't load
+	// What the user opened in the timeline: folds by run, work groups and
+	// entries by id, kept per thread (disclosureFor).
+	unfolded, groups, open map[string]bool
+	full                   map[string]*t3.TurnItem
+	fetchErr               map[string]string // why an open entry's output didn't load
+	cancel                 func()
 }
 
-func newView(e *envState, id string) *threadView {
+func newView(e *envState, id string, d *disclosure) *threadView {
 	return &threadView{
 		id: id, env: e, raw: map[string]map[string]json.RawMessage{}, items: map[string]*t3.TurnItem{},
 		runs: map[string]t3.Run{}, messages: map[string]t3.Message{},
-		unfolded: map[string]bool{}, open: map[string]bool{}, full: map[string]*t3.TurnItem{},
+		unfolded: d.unfolded, groups: d.groups, open: d.open, full: map[string]*t3.TurnItem{}, fetchErr: map[string]string{},
 	}
+}
+
+// disclosure is what the user opened in one thread's timeline. Like T3,
+// tern keeps it for the session for the last 100 threads, so switching
+// back finds the timeline as it was (timelineScrollAnchoring.ts:131-151).
+type disclosure struct {
+	unfolded, groups, open map[string]bool
+}
+
+// disclosureFor is thread ref's disclosure. Call with the lock held.
+func (a *App) disclosureFor(ref string) *disclosure {
+	for i, r := range a.disclosureOrder {
+		if r == ref {
+			a.disclosureOrder = append(append(a.disclosureOrder[:i:i], a.disclosureOrder[i+1:]...), ref)
+			return a.disclosures[ref]
+		}
+	}
+	d := &disclosure{unfolded: map[string]bool{}, groups: map[string]bool{}, open: map[string]bool{}}
+	a.disclosures[ref] = d
+	a.disclosureOrder = append(a.disclosureOrder, ref)
+	if len(a.disclosureOrder) > 100 {
+		delete(a.disclosures, a.disclosureOrder[0])
+		a.disclosureOrder = a.disclosureOrder[1:]
+	}
+	return d
 }
 
 func rowKey(it *t3.TurnItem) string {
@@ -807,7 +834,7 @@ func (a *App) subscribeThread(e *envState, conn *t3.Conn, gen int, r string) {
 		return
 	}
 	if a.view == nil || a.view.id != id || a.view.env != e {
-		a.view = newView(e, id)
+		a.view = newView(e, id, a.disclosureFor(r))
 	}
 	if a.view.cancel != nil {
 		a.view.cancel()
@@ -893,6 +920,12 @@ func mergeRun(dst *t3.Run, src t3.Run) {
 	if src.UserMessageID != "" {
 		dst.UserMessageID = src.UserMessageID
 	}
+	if src.Ordinal != 0 {
+		dst.Ordinal = src.Ordinal
+	}
+	if src.RequestedAt != "" {
+		dst.RequestedAt = src.RequestedAt
+	}
 	dst.QueuePosition, dst.QueueHeld = src.QueuePosition, src.QueueHeld
 }
 
@@ -907,7 +940,7 @@ func (a *App) loadEarlier() {
 		a.mu.Unlock()
 		return
 	}
-	v.loading = true
+	v.loading, v.historyErr = true, ""
 	cursor := v.cursor
 	a.mu.Unlock()
 	a.changed()
@@ -918,7 +951,8 @@ func (a *App) loadEarlier() {
 		defer a.mu.Unlock()
 		v.loading = false
 		if err != nil {
-			a.fail(err)
+			// The history control says so under its button, as T3's does.
+			v.historyErr = err.Error()
 			return
 		}
 		for _, row := range page.Items {
@@ -928,8 +962,8 @@ func (a *App) loadEarlier() {
 	}()
 }
 
-// loadTool fetches a tool row's full item: the socket strips command output
-// and diffs.
+// loadTool fetches an open entry's full item when the socket left its
+// output out (T3's turnItemNeedsDetailFetch).
 func (a *App) loadTool(item *t3.TurnItem) {
 	a.mu.Lock()
 	v := a.view
@@ -937,7 +971,7 @@ func (a *App) loadTool(item *t3.TurnItem) {
 	if v != nil {
 		conn = v.env.conn
 	}
-	if v == nil || conn == nil || !toolTypes[item.Type] {
+	if v == nil || conn == nil || !needsDetailFetch(item) {
 		a.mu.Unlock()
 		return
 	}
@@ -945,6 +979,7 @@ func (a *App) loadTool(item *t3.TurnItem) {
 		a.mu.Unlock()
 		return
 	}
+	delete(v.fetchErr, item.ID)
 	a.mu.Unlock()
 	go func() {
 		var out struct {
@@ -955,11 +990,15 @@ func (a *App) loadTool(item *t3.TurnItem) {
 		defer a.changed()
 		defer a.mu.Unlock()
 		if err != nil {
-			a.fail(err)
+			// The open row says "Couldn't load output: …".
+			v.fetchErr[item.ID] = err.Error()
 			return
 		}
 		var full t3.TurnItem
-		if json.Unmarshal(out.Item, &full) == nil {
+		switch {
+		case len(out.Item) == 0 || string(out.Item) == "null":
+			v.fetchErr[item.ID] = "Output is no longer available."
+		case json.Unmarshal(out.Item, &full) == nil:
 			full.UpdatedAt = item.UpdatedAt
 			v.full[item.ID] = &full
 		}

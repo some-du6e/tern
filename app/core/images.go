@@ -220,9 +220,9 @@ func mergeMap(dst, src map[string]any) map[string]any {
 	return dst
 }
 
-// sentThumb is a sent picture's thumbnail, loaded once per attachment.
+// sentThumb is a sent picture, loaded once per attachment.
 type sentThumb struct {
-	thumb   ui.Thumb
+	picture ui.Picture
 	loading bool
 	failed  bool
 }
@@ -230,10 +230,10 @@ type sentThumb struct {
 // fetchSlots caps how many sent pictures download at once.
 var fetchSlots = make(chan struct{}, 3)
 
-// attachmentThumbs is the thumbnails of a message's pictures, starting the
-// download of any not loaded yet. Call with the lock held.
-func (a *App) attachmentThumbs(e *envState, raws []json.RawMessage) []ui.Thumb {
-	var out []ui.Thumb
+// attachmentPictures is a message's pictures, starting the download of any
+// not loaded yet. Call with the lock held.
+func (a *App) attachmentPictures(e *envState, raws []json.RawMessage) []ui.Picture {
+	var out []ui.Picture
 	for _, raw := range raws {
 		var at t3.Attachment
 		if json.Unmarshal(raw, &at) != nil || at.Type != "image" || at.ID == "" {
@@ -244,27 +244,28 @@ func (a *App) attachmentThumbs(e *envState, raws []json.RawMessage) []ui.Thumb {
 		if st == nil && e.conn != nil {
 			st = &sentThumb{loading: true}
 			a.sent[key] = st
-			go a.fetchThumb(e.conn, at.ID, st)
+			go a.fetchPicture(e.conn, at.ID, st)
 		}
-		if st == nil {
-			out = append(out, ui.Thumb{})
-			continue
+		var p ui.Picture
+		if st != nil {
+			p = st.picture
 		}
-		out = append(out, st.thumb)
+		p.Name = at.Name
+		out = append(out, p)
 	}
 	return out
 }
 
-func (a *App) fetchThumb(conn *t3.Conn, id string, st *sentThumb) {
+func (a *App) fetchPicture(conn *t3.Conn, id string, st *sentThumb) {
 	fetchSlots <- struct{}{}
 	data, err := conn.FetchAttachment(id)
 	<-fetchSlots
-	var th ui.Thumb
+	var p ui.Picture
 	if err == nil {
-		th = ui.NewThumb(data)
+		p = ui.NewPicture(data)
 	}
 	a.mu.Lock()
-	st.thumb, st.loading, st.failed = th, false, err != nil
+	st.picture, st.loading, st.failed = p, false, err != nil
 	a.mu.Unlock()
 	a.changed()
 }

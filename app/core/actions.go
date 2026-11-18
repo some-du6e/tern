@@ -234,14 +234,18 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		a.stop()
 	case "more":
 		a.loadEarlier()
-	case "fold":
+	case "fold", "group":
+		// A "Worked for" fold by its run, a work group by its id.
 		a.mu.Lock()
-		if a.view != nil {
-			k := "fold:" + arg
-			a.view.unfolded[k] = !a.view.unfolded[k]
+		if v := a.view; v != nil {
+			m := v.unfolded
+			if verb == "group" {
+				m = v.groups
+			}
+			m[arg] = !m[arg]
 		}
 		a.mu.Unlock()
-	case "tool":
+	case "entry":
 		a.mu.Lock()
 		var item *t3.TurnItem
 		if a.view != nil {
@@ -258,12 +262,8 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		if item != nil {
 			a.loadTool(item)
 		}
-	case "thought":
-		a.mu.Lock()
-		if a.view != nil {
-			a.view.open[arg] = !a.view.open[arg]
-		}
-		a.mu.Unlock()
+	case "terminal.run":
+		a.runInTerminal(act.Text)
 	case "approval":
 		a.respond(map[string]any{"decision": arg})
 	case "q":
