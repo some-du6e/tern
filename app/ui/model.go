@@ -53,6 +53,7 @@ type Sidebar struct {
 	Ticking     bool           // a row shows a run timer, which moves each second
 	Undo        string         // the footer's undo notice: "Settled", "Settled 2"…
 	UndoClaim   bool           // mod+Z undoes it even in a text field
+	JumpHints   bool           // a mockup draws the rows' jump keys, as holding mod shows them
 }
 
 // SidebarItem is one entry in the thread list: a thread's row, the new
@@ -146,6 +147,7 @@ type ThreadRow struct {
 	CanSettle bool // Settle (or Un-settle, Wake) is offered
 	CanSnooze bool // the snooze clock is offered
 	CanUnpin  bool // the pin is a button
+	Jump      int  // the n of its jump key, mod+n (thread.jump.n), 1 to 9; 0 for none
 	Hover     bool // a mockup draws it hovered
 }
 

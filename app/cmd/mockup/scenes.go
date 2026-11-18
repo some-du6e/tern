@@ -420,6 +420,20 @@ func sidebarDraftScene() *ui.Scene {
 	return s
 }
 
+// sidebarJumpScene has mod held: the first nine rows show their jump keys.
+func sidebarJumpScene() *ui.Scene {
+	s := runningScene()
+	n := 0
+	for _, it := range s.Sidebar.Items {
+		if it.Row != nil && n < 9 {
+			n++
+			it.Row.Jump = n
+		}
+	}
+	s.Sidebar.JumpHints = true
+	return s
+}
+
 // sidebarEmptyScene is the list scoped to a project with nothing in it.
 func sidebarEmptyScene() *ui.Scene {
 	s := runningScene()

@@ -376,6 +376,33 @@ func TestHoverCardMotion(t *testing.T) {
 	wantPixel(t, at(700*time.Millisecond), edge, SP.Sidebar, "the card, closed")
 }
 
+// Holding mod on its own for 200ms puts each of the first rows' jump keys,
+// T3's Kbd, in its slot; letting go takes them away (§4, §5.12).
+func TestJumpHints(t *testing.T) {
+	th := NewTheme()
+	s := &Scene{Live: true, Sidebar: Sidebar{Items: []SidebarItem{{Row: &ThreadRow{ID: "e/1", Title: "One", Jump: 1}}}}}
+	lw := newLiveWindow(t, image.Pt(1440, 900))
+	t0 := time.Now()
+	at := func(d time.Duration) *image.RGBA {
+		return lw.frame(t, t0.Add(d), func(gtx C) D { return th.Desktop(gtx, s) })
+	}
+	mod := key.NameCtrl
+	if key.ModShortcut == key.ModCommand {
+		mod = key.NameCommand
+	}
+	// The card's first line is 110..130 and its slot ends at 237, which
+	// the Kbd's right padding reaches.
+	kbd := over(alpha(P.Foreground, 0x12), SP.Sidebar)
+	probe := image.Pt(235, 120)
+	at(0)
+	lw.r.Queue(key.Event{Name: mod, State: key.Press, Modifiers: key.ModShortcut})
+	at(10 * time.Millisecond)
+	wantPixel(t, at(100*time.Millisecond), probe, SP.Sidebar, "before the hold is up")
+	wantPixel(t, at(250*time.Millisecond), probe, kbd, "the jump key, held")
+	lw.r.Queue(key.Event{Name: mod, State: key.Release})
+	wantPixel(t, at(300*time.Millisecond), probe, SP.Sidebar, "let go")
+}
+
 // A click on a card's pull request is the badge's: it opens the pull
 // request, not the thread.
 func TestPullRequestIsntARowClick(t *testing.T) {

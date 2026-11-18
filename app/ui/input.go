@@ -96,6 +96,11 @@ type input struct {
 	undoText  string
 	undoFade  *fade
 	undoClaim bool
+	// The modifier keys held and since when, and whether the rows show
+	// their jump keys for it.
+	heldMods  key.Modifiers
+	heldSince time.Time
+	jumping   bool
 	// The hover card: the row it's for, when the pointer came to rest there,
 	// whether it opened at once (within 400ms of the last one closing) and
 	// when the last one closed; tipBusy is a control's tooltip in the row

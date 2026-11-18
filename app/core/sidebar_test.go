@@ -378,6 +378,26 @@ func TestDraftRowAndUndo(t *testing.T) {
 	}
 }
 
+// The list's first nine rows carry their jump keys, mod+1 to mod+9, in the
+// order the keys open them (§5.12).
+func TestJumpNumbers(t *testing.T) {
+	now := time.Now()
+	var threads []t3.Thread
+	for i := range 11 {
+		threads = append(threads, t3.Thread{ID: fmt.Sprint(i), Title: fmt.Sprint("t", i), CreatedAt: ago(now, time.Duration(i+1)*time.Minute)})
+	}
+	a := sideApp(t, threads...)
+	for i, r := range rows(a.build(now)) {
+		want := 0
+		if i < 9 {
+			want = i + 1
+		}
+		if r.Jump != want {
+			t.Errorf("%s: jump %d, want %d", r.Title, r.Jump, want)
+		}
+	}
+}
+
 // Undoing a park puts the thread back as T3 does (planThreadUndo): a
 // snooze is woken; a settle is un-settled, then pinned again in its place
 // and snoozed again, as settling undid both.

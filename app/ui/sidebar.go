@@ -48,6 +48,7 @@ const (
 func (th *Theme) sidebar(gtx C, s *Scene) D {
 	size := gtx.Constraints.Max
 	th.in.undoClaim = s.Live && s.Sidebar.UndoClaim
+	th.in.jumping = th.jumpHints(gtx, s)
 	at := func(y, h int, draw func(gtx C)) {
 		defer op.Offset(image.Pt(0, y)).Push(gtx.Ops).Pop()
 		g := gtx
@@ -59,6 +60,29 @@ func (th *Theme) sidebar(gtx C, s *Scene) D {
 	at(size.Y-foot, foot, func(gtx C) { th.sidebarFooter(gtx, s) })
 	at(0, top, func(gtx C) { th.searchRow(gtx, s) })
 	return D{Size: size}
+}
+
+// jumpHints reports whether the rows show their jump keys: once the jump
+// modifier has been held on its own for 200ms, and not for the terminal or
+// the model picker, which have keys of their own
+// (useThreadJumpHintsVisible).
+func (th *Theme) jumpHints(gtx C, s *Scene) bool {
+	if !s.Live {
+		return s.Sidebar.JumpHints
+	}
+	if th.in.heldMods != key.ModShortcut || gtx.Focused(&th.in.term) || s.Picker != nil {
+		return false
+	}
+	if left := 200*time.Millisecond - gtx.Now.Sub(th.in.heldSince); left > 0 {
+		gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(left)})
+		return false
+	}
+	return true
+}
+
+// jumpKey is a row's jump hint: T3's Kbd with mod+n on the row's surface.
+func (th *Theme) jumpKey(r *ThreadRow, in rowInk) W {
+	return th.T3Kbd(Shortcut(strconv.Itoa(r.Jump)), in.bg)
 }
 
 // ---------- the search and filter row ----------
@@ -1136,15 +1160,21 @@ func statusColor(st RowStatus) color.NRGBA {
 // statusSlot is the end of a card's first line: at least 32dp, right
 // aligned. It shows the status label, or the age; hovered (or while its
 // snooze menu is open) it shows the controls instead, beside a Woke label,
-// which stays. end is the line's top right corner in the window.
+// which stays. While the jump keys show, it shows only the row's. end is
+// the line's top right corner in the window.
 func (th *Theme) statusSlot(gtx C, s *Scene, r *ThreadRow, in rowInk, hot bool, end image.Point) D {
 	var kids []layout.FlexChild
 	woke := r.Status == StatusWoke
-	if !hot || woke {
-		kids = append(kids, rigid(func(gtx C) D { return th.statusLabel(gtx, s, r, in) }))
-	}
-	if hot && (r.CanSettle || r.CanSnooze || r.Draft) {
-		kids = append(kids, rigid(func(gtx C) D { return th.rowControls(gtx, s, r, in, end) }))
+	menuOpen := s.Sidebar.Snooze != nil && s.Sidebar.Snooze.Row == r.ID
+	if th.in.jumping && r.Jump > 0 && !menuOpen {
+		kids = append(kids, rigid(th.jumpKey(r, in)))
+	} else {
+		if !hot || woke {
+			kids = append(kids, rigid(func(gtx C) D { return th.statusLabel(gtx, s, r, in) }))
+		}
+		if hot && (r.CanSettle || r.CanSnooze || r.Draft) {
+			kids = append(kids, rigid(func(gtx C) D { return th.rowControls(gtx, s, r, in, end) }))
+		}
 	}
 	m := op.Record(gtx.Ops)
 	g := gtx
@@ -1519,8 +1549,20 @@ func (th *Theme) slimRow(gtx C, s *Scene, r *ThreadRow, top int) D {
 // slimSlot is a slim row's trailing slot: 24dp, at least 32 wide, right
 // aligned. Its age, wake time or Woke label fades out on hover (Woke
 // stays), as the Wake or Un-settle button fades in, 4dp into the padding.
+// While the jump keys show, it shows only the row's.
 func (th *Theme) slimSlot(gtx C, s *Scene, r *ThreadRow, in rowInk, rest func(color.NRGBA) color.NRGBA, hot bool, shown float32) D {
 	h := dp(gtx, 24)
+	if th.in.jumping && r.Jump > 0 {
+		g := gtx
+		g.Constraints.Min = image.Point{}
+		m := op.Record(gtx.Ops)
+		d := th.jumpKey(r, in)(g)
+		call := m.Stop()
+		w := max(d.Size.X, dp(gtx, 32))
+		defer op.Offset(image.Pt(w-d.Size.X, (h-d.Size.Y)/2)).Push(gtx.Ops).Pop()
+		call.Add(gtx.Ops)
+		return D{Size: image.Pt(w, h)}
+	}
 	t := Txt{Size: 12, LineH: 16.0 / 12, Color: in.of(rest(SP.SecondaryLabel)), MaxLines: 1}
 	fade := func(c color.NRGBA, k float32) color.NRGBA { return over(alpha(c, uint8(k*255+0.5)), in.bg) }
 	label := func(gtx C) D {

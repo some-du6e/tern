@@ -53,6 +53,7 @@ func main() {
 		{"8e-sidebar-search", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, sidebarSearchScene()) }},
 		{"8f-sidebar-empty", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, sidebarEmptyScene()) }},
 		{"8h-sidebar-draft", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, sidebarDraftScene()) }},
+		{"8i-sidebar-jump", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, sidebarJumpScene()) }},
 		{"8g-sidebar-dark", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions {
 			ui.SetDark(true)
 			defer ui.SetDark(false)

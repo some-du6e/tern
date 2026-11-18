@@ -728,8 +728,14 @@ func (a *App) sidebar(s *ui.Scene, now time.Time) {
 	if draft != nil {
 		sb.Items = append(sb.Items, ui.SidebarItem{Draft: draft}, ui.SidebarItem{Divider: true})
 	}
+	// mod+1…9 open the list's first nine rows, which show their keys.
+	jump := map[string]int{}
+	for i, r := range l.ordered[:min(9, len(l.ordered))] {
+		jump[r] = i + 1
+	}
 	add := func(t sideThread, shelf string) {
 		r := a.row(t, shelf, now)
+		r.Jump = jump[t.ref]
 		sb.Items = append(sb.Items, ui.SidebarItem{Row: &r})
 		sb.Ticking = sb.Ticking || r.Timer != ""
 	}

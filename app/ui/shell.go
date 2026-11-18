@@ -105,12 +105,19 @@ func (th *Theme) Desktop(gtx C, s *Scene) D {
 	return D{Size: size}
 }
 
+// modifierKeys are the modifier keys as keys, and the modifier each holds.
+var modifierKeys = map[key.Name]key.Modifiers{
+	key.NameCtrl: key.ModCtrl, key.NameShift: key.ModShift, key.NameAlt: key.ModAlt,
+	key.NameSuper: key.ModSuper, key.NameCommand: key.ModCommand,
+}
+
 // shellKeys handles T3's shell shortcuts (keybindings.ts): mod+B the
 // sidebar, mod+J the terminal, mod+Alt+B the right panel, mod+Shift+B the
 // thread details; and the sidebar's: mod+N a new thread, mod+Shift+[ and ]
 // the thread before and after, mod+1…9 the nth thread, mod+Shift+S settle,
 // mod+Shift+P pin and mod+Z undo the last park. The last four leave a
-// focused terminal alone; a focused text field keeps its own mod+Z.
+// focused terminal alone; a focused text field keeps its own mod+Z. It
+// also keeps which modifier keys are held, for the rows' jump hints.
 func (th *Theme) shellKeys(gtx C, s *Scene) {
 	filters := []event.Filter{
 		key.Filter{Name: "B", Required: key.ModShortcut, Optional: key.ModShift | key.ModAlt},
@@ -125,12 +132,26 @@ func (th *Theme) shellKeys(gtx C, s *Scene) {
 	for n := 1; n <= 9; n++ {
 		filters = append(filters, key.Filter{Name: key.Name(strconv.Itoa(n)), Required: key.ModShortcut})
 	}
+	// The modifier keys themselves, for the jump keys' hints.
+	mods := key.ModCtrl | key.ModShift | key.ModAlt | key.ModSuper | key.ModCommand
+	for name := range modifierKeys {
+		filters = append(filters, key.Filter{Name: name, Optional: mods})
+	}
 	for {
 		ev, ok := gtx.Event(filters...)
 		if !ok {
 			return
 		}
 		ke, ok := ev.(key.Event)
+		if m, mod := modifierKeys[ke.Name]; ok && mod {
+			if ke.State == key.Press {
+				th.in.heldMods |= m
+			} else {
+				th.in.heldMods &^= m
+			}
+			th.in.heldSince = gtx.Now
+			continue
+		}
 		if !ok || ke.State != key.Press {
 			continue
 		}
