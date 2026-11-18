@@ -189,7 +189,7 @@ func (a *App) cardScene(s *ui.Scene, e *envState, t *t3.Thread, p t3.Project, ha
 	}
 
 	if !isRepo {
-		d.InitGit = show("gitActions")
+		d.InitGit, d.Initing = show("gitActions"), v.initing
 		return
 	}
 	busy := v.running != nil

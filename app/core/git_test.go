@@ -178,16 +178,22 @@ func TestPullAndInit(t *testing.T) {
 	})
 
 	a, f = liveApp(t, &t3.VcsStatus{})
-	f.on("vcs.init", func(f *fakeEnv, r fakeReq) { f.failWith(r, "permission denied") })
-	if s := built(a, time.Now()); !s.Card.InitGit {
+	f.on("vcs.init", func(f *fakeEnv, r fakeReq) {})
+	if s := built(a, time.Now()); !s.Card.InitGit || s.Card.Initing {
 		t.Fatal("no Initialize Git row")
 	}
 	a.handle(ui.NewTheme(), ui.Action{ID: "card.initgit", Kind: "click"})
-	if r := f.wait("vcs.init", 1); r.Payload["cwd"] != "/root/code/goog" {
+	r := f.wait("vcs.init", 1)
+	if r.Payload["cwd"] != "/root/code/goog" {
 		t.Fatalf("init payload %v", r.Payload)
 	}
-	eventually(t, "the failure shows", func() bool {
-		return built(a, time.Now()).Error == "Git initialization failed: permission denied"
+	if !built(a, time.Now()).Card.Initing {
+		t.Fatal("the row should say it's initializing while vcs.init runs")
+	}
+	f.failWith(r, "permission denied")
+	eventually(t, "the failure shows, and the row offers to try again", func() bool {
+		s := built(a, time.Now())
+		return s.Error == "Git initialization failed: permission denied" && !s.Card.Initing
 	})
 }
 

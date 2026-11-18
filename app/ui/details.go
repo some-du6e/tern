@@ -228,7 +228,7 @@ func (th *Theme) cardContent(gtx C, s *Scene, dn density) D {
 		vcs = append(vcs, row{th.branchRow(d), "branch"})
 	}
 	if d.InitGit {
-		vcs = append(vcs, row{th.initGitRow(), ""})
+		vcs = append(vcs, row{th.initGitRow(d), ""})
 	}
 	// Compact density drops the Git actions row unless it's showing an
 	// action at work or its result.
@@ -627,10 +627,15 @@ func (th *Theme) branchRow(d *ThreadDetails) W {
 	}
 }
 
-// initGitRow offers to make the folder a repository.
-func (th *Theme) initGitRow() W {
+// initGitRow offers to make the folder a repository, and says so while
+// it does.
+func (th *Theme) initGitRow(d *ThreadDetails) W {
 	return func(gtx C) D {
-		return th.row(gtx, ctl{id: "card.initgit"}, "git-branch-plus", 14, "Initialize Git")
+		label := "Initialize Git"
+		if d.Initing {
+			label = "Initializing..."
+		}
+		return th.row(gtx, ctl{id: "card.initgit", disabled: d.Initing}, "git-branch-plus", 14, label)
 	}
 }
 

@@ -244,6 +244,7 @@ type ThreadDetails struct {
 	Branch  *BranchRow
 	Git     *GitActions
 	InitGit bool // "Initialize Git", for a folder that isn't a repository
+	Initing bool // vcs.init is running: "Initializing...", and it can't be pressed again
 	Changes *Changes
 
 	Menu   *CardMenu     // the menu open off a row
