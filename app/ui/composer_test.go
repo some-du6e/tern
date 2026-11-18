@@ -137,7 +137,7 @@ func TestComposerTriggers(t *testing.T) {
 	if w := 687 - left; w < 60 {
 		t.Errorf("open chip: %d wide, want its icon and label", w)
 	}
-	if n := count(img, 87, 45, left-2, accent); n != 0 {
+	if n := count(img, 77, 45, left-2, accent); n != 0 {
 		t.Errorf("the trigger is filled too: %d pixels", n)
 	}
 }

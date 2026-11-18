@@ -313,13 +313,13 @@ func (th *Theme) prompt(gtx C, s *Scene, w int) D {
 	empty := false
 	if s.Live {
 		ed := th.Editor("composer")
-		empty = ed.Len() == 0
 		ed.Submit = true
 		ui := &th.in.composer
 		ui.menu, ui.rows = len(s.Suggest) > 0 || s.SuggestEmpty != "", len(s.Suggest) > 0
 		ui.history = len(s.Thumbs) == 0 && len(s.Questions) == 0
 		ui.thumbs = s.Thumbs
 		d = th.editor(g, "composer", t, "")
+		empty = ed.Len() == 0
 	} else {
 		empty = s.Composer == ""
 		if !empty {
