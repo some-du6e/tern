@@ -714,9 +714,9 @@ func (th *Theme) rowTarget(gtx C, s *Scene, nav string, size image.Point, rect i
 	}
 	start := len(th.in.actions)
 	c, rc := th.events(gtx, nav)
-	mine := len(th.in.actions)
 	tag := th.rowKey(nav)
 	th.rowKeys(gtx, nav, tag, rect)
+	mine := len(th.in.actions)
 	focused = gtx.Focused(tag) && th.in.keyFocus
 	st := clip.Rect{Max: size}.Push(gtx.Ops)
 	c.Add(gtx.Ops)
