@@ -214,8 +214,9 @@ func TestTimelineFollow(t *testing.T) {
 		return D{Size: size}
 	}
 	// The last bubble ends 60dp over the canvas's bottom: the footer's 16,
-	// then its row's padding, actions and gap.
-	last := image.Pt(32+736-16, 600-60-20)
+	// then its row's padding, actions and gap. Probe its bottom padding,
+	// under the text.
+	last := image.Pt(32+736-16, 600-60-4)
 	wantPixel(t, drawn(t, size, 1, draw), last, P.MessageSurface, "the last bubble, followed")
 
 	var r gioinput.Router
