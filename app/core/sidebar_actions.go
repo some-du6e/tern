@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf16"
 	"unicode/utf8"
 
 	"golang.org/x/text/unicode/norm"
@@ -111,15 +112,23 @@ type refMatch struct {
 
 const (
 	msgDebounce = 120 * time.Millisecond // THREAD_SEARCH_DEBOUNCE_MS
-	msgQueryMax = 200                    // THREAD_SEARCH_QUERY_MAX_LENGTH, in characters
+	msgQueryMax = 200                    // THREAD_SEARCH_QUERY_MAX_LENGTH, in UTF-16 units
 	msgPrefix   = 0.8                    // MESSAGE_PREFIX: a word-start match's quality
 )
 
-// msgQuery is the search as the servers get it: trimmed and cut to 200
-// characters, so a pasted wall of text searches by its start.
+// msgQuery is the search as the servers get it: trimmed and cut to the 200
+// UTF-16 units they take, between characters, so a pasted wall of text
+// searches by its start.
 func msgQuery(s string) string {
-	q := []rune(strings.TrimSpace(s))
-	return strings.TrimSpace(string(q[:min(len(q), msgQueryMax)]))
+	s = strings.TrimSpace(s)
+	n := 0
+	for i, r := range s {
+		if n += utf16.RuneLen(r); n > msgQueryMax {
+			s = s[:i]
+			break
+		}
+	}
+	return strings.TrimSpace(s)
 }
 
 // wrappingQuotes is the quotes around a pasted query: "fix sidebar".

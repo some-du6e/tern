@@ -743,6 +743,21 @@ func TestMessageSearch(t *testing.T) {
 	}
 }
 
+// The servers get the query trimmed and cut to the 200 UTF-16 units they
+// take, so a pasted wall of text searches by its start.
+func TestMessageQuery(t *testing.T) {
+	for q, want := range map[string]string{
+		"  fix it  ":                   "fix it",
+		strings.Repeat("a", 250):       strings.Repeat("a", 200),
+		strings.Repeat("😀", 150):       strings.Repeat("😀", 100),
+		strings.Repeat("a", 199) + "😀": strings.Repeat("a", 199),
+	} {
+		if got := msgQuery(q); got != want {
+			t.Errorf("%.20q…: %d bytes, want %d", q, len(got), len(want))
+		}
+	}
+}
+
 // A message search needs a word of three letters, or two of Chinese,
 // Japanese or Korean; quotes around the query and its case go, and curly
 // apostrophes straighten (messageSearchTokens).
