@@ -50,6 +50,12 @@ func TestSidebarRows(t *testing.T) {
 	} {
 		wantPixel(t, img, image.Pt(20, c.y), cols[c.want], c.want)
 	}
+	// The hovered card's hover card: the glass, 4dp right of the row (which
+	// ends at 247) and level with its top at 185.
+	glass := over(alpha(P.Popover, 0xd5), P.Background)
+	wantPixel(t, img, image.Pt(256, 189), glass, "the hover card")
+	wantPixel(t, img, image.Pt(249, 187), SP.Sidebar, "the 4dp before it")
+	wantPixel(t, img, image.Pt(260, 183), P.Background, "above it")
 }
 
 // In light the open row is rung 1dp inside with the sidebar border at 70%.
