@@ -1,6 +1,15 @@
 package main
 
-import "github.com/some-du6e/tern/app/ui"
+import (
+	"bytes"
+	"image"
+	"image/color"
+	"image/png"
+	"strings"
+	"time"
+
+	"github.com/some-du6e/tern/app/ui"
+)
 
 func envs() []ui.Env {
 	return []ui.Env{{Label: "workstation", Status: ui.EnvOnline}, {Label: "bowen", Status: ui.EnvOnline}, {Label: "macbook", Status: ui.EnvOffline}}
@@ -36,50 +45,108 @@ func sidebar(s *ui.Scene, selected string) {
 	s.Stats = "1,024 threads   ·   2 running   ·   ping 38 ms   ·   frame 0.41 ms"
 }
 
-const goTestOut = `ok   github.com/some-du6e/tern/app/t3        0.412s
-ok   github.com/some-du6e/tern/app/t3/rpc    0.218s
---- replay: relay-exchange.jsonl (41 frames)
-    dpop-token     201  31ms
-    connect        200  188ms
-    oauth/token    200  94ms
-    ws ticket      404  -> fallback /api/auth/websocket-ticket  200`
+// The timeline's fixtures: a made-up project, so nothing real shows.
 
-const rpcDiff = `@@ -112,9 +112,22 @@ func (c *Conn) readLoop() {
- 	for {
--		_, data, err := c.ws.Read(ctx)
-+		ctx, cancel := context.WithTimeout(c.ctx, pongTimeout)
-+		_, data, err := c.ws.Read(ctx)
-+		cancel()
- 		if err != nil {
--			return err
-+			// No frame for 15 s: a laptop that slept leaves a socket
-+			// that never closes. Drop it and resubscribe.
-+			c.closeWith(errNoPong)
-+			return`
+const retryReply = "Done. `upload.Send` now retries with **exponential backoff**:\n\n" +
+	"- the first retry waits 250 ms, doubling up to a 4 s cap;\n" +
+	"- it gives up after five attempts and returns the last error;\n" +
+	"- `ErrPermanent` stops it at once.\n\n" +
+	"Run the tests with:\n\n```bash\ngo test ./upload/...\n```\n"
 
-func threadItems() []ui.Item {
-	return []ui.Item{
-		{Kind: ui.ItemUser, Text: "Port poc/public/t3.js to Go under app/t3. Keep the DPoP rules from docs/t3-connect.md and add a test that replays a recorded relay exchange."},
-		{Kind: ui.ItemFold, Text: "Worked for 4m 12s", Meta: "18 tool calls  ·  6 files"},
-		{Kind: ui.ItemAssistant, Text: "Ported. `app/t3` now has **Clerk**, **DPoP**, **Relay** and the RPC socket.\n\n" +
-			"- `dpop.go` signs proofs with a P-256 key, and the thumbprint test pins the RFC 7638 member order.\n" +
-			"- `relay.go` caches the 30-minute relay token and renews it a minute early.\n" +
-			"- `rpc.go` acks every `Chunk` and treats 15 s without a pong as a dead socket.\n\n" +
-			"One thing to know: nightly `0.1.3-nightly.20261023` still answers 404 on `/api/auth/websocket-ticket/rpc`, so the client falls back to the bare route."},
-		{Kind: ui.ItemUser, Text: "nice. wire it into the UI and keep the socket alive across sleep"},
-		{Kind: ui.ItemThought, Text: "A live socket outlives its session, so renewal only matters for tickets and uploads. On resume, resubscribe with afterSequence and wait for synchronized instead of refetching the snapshot."},
-		{Kind: ui.ItemTool, Tool: ui.ToolSearch, Title: "rg -n 'onclose|visibilitychange' poc/public/app.js", Meta: "4 matches"},
-		{Kind: ui.ItemTool, Tool: ui.ToolEdit, Title: "app/t3/rpc.go", Meta: "+48 −6", Body: rpcDiff},
-		{Kind: ui.ItemTool, Tool: ui.ToolEdit, Title: "app/app.go", Meta: "+112 −0"},
-		{Kind: ui.ItemTool, Tool: ui.ToolCommand, Title: "go test ./t3/...", Meta: "exit 0  ·  1.9s", Open: true, Body: goTestOut},
-		{Kind: ui.ItemTodo, Todos: []ui.Todo{
-			{Text: "Reconnect with afterSequence on resume", Done: true},
-			{Text: "Renew the DPoP session 3 minutes early", Done: true},
-			{Text: "Feed shell and thread streams into the view model", Now: true},
-			{Text: "Draft persistence per thread"},
+// threadRows is a running turn: a settled one folded above it, its open
+// tool group, and the running command with the newest thought.
+func threadRows() []ui.TimelineRow {
+	now := time.Now()
+	return []ui.TimelineRow{
+		{ID: "u1", Kind: ui.RowUser, Message: &ui.Message{ID: "u1", Text: "Add retries to the uploader: back off exponentially, give up after five attempts, and keep the existing timeout."}},
+		{ID: "turn-fold:run-1", Kind: ui.RowTurnFold, Group: "run-1", Label: "Worked for 4m 12s"},
+		{ID: "a1", Kind: ui.RowAssistant, Message: &ui.Message{ID: "a1", Text: retryReply, Meta: true, Copy: true}},
+		{ID: "u2", Kind: ui.RowUser, Message: &ui.Message{ID: "u2", Text: "Looks right. Log each retry, like in " + ui.ChipText(1), Chips: []string{"Image 1"},
+			Pictures: []ui.Picture{screenshot(480, 300)}}},
+		{ID: "working-indicator-row", Kind: ui.RowWorking, Since: now.Add(-68 * time.Second)},
+		{ID: "work-toggle:e1", Kind: ui.RowWorkToggle, Group: "work-group:e1", Open: true, Icon: "hammer", Label: "Ran 2 commands, changed 1 file, and performed 3 other actions", Continues: true},
+		{ID: "work-group:e1:details", Kind: ui.RowWork, Group: "work-group:e1", Open: true, Continues: true, Entries: []ui.WorkEntry{
+			{ID: "e1", Icon: "eye", Label: "Read upload/send.go", Expands: true},
+			{ID: "e2", Icon: "search", Label: "Searched retry in upload"},
+			{ID: "e3", Icon: "square-pen", Label: "upload/send.go", Expands: true, Open: true,
+				Body: &ui.EntryBody{File: "upload/send.go", Add: 48, Del: 6, Counts: true}},
+			{ID: "e4", Icon: "terminal", Label: "go test ./upload/...", Expands: true, Open: true,
+				Body: &ui.EntryBody{Command: "go test ./upload/...", Output: "ok  \texample.com/acme/upload\t0.412s"}},
+			{ID: "e5", Icon: "terminal", Label: "go vet ./...", Failed: true, Expands: true},
+			{ID: "e6", Icon: "brain", Label: "Checking where the logger comes from", Expands: true,
+				Thought: "Checking where the logger comes from. `Send` takes a `*slog.Logger`, so each retry can log at debug level."},
 		}},
-		{Kind: ui.ItemTool, Tool: ui.ToolCommand, Title: "go build -o bin/tern ./cmd/tern", Live: true, Meta: "3.1s"},
-		{Kind: ui.ItemThinking, Live: true, Text: "Gio delivers app.DestroyEvent on Android but only a stage change on desktop, so the resume hook goes on…"},
+		{ID: "live-activity-row", Kind: ui.RowWorkLive, Live: true, Group: "work-group:e7", Entry: &ui.WorkEntry{ID: "e7", Icon: "terminal", Label: "Running go"},
+			Thought: "Each retry logs the attempt and the delay at debug level, so the default level stays quiet."},
+	}
+}
+
+// screenshot is a stand-in for a pasted picture: a soft gradient.
+func screenshot(w, h int) ui.Picture {
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			img.Set(x, y, color.RGBA{uint8(60 + 140*x/w), uint8(110 + 90*y/h), 210, 255})
+		}
+	}
+	var b bytes.Buffer
+	if err := png.Encode(&b, img); err != nil {
+		panic(err)
+	}
+	p := ui.NewPicture(b.Bytes())
+	p.Name = "retry-log.png"
+	return p
+}
+
+// approvalRow is a command waiting for approval, in the timeline.
+func approvalRow() ui.TimelineRow {
+	return ui.TimelineRow{ID: "ap1", Kind: ui.RowWork, Entries: []ui.WorkEntry{{ID: "ap1", Icon: "terminal",
+		Approval: &ui.PendingApproval{ID: "req-1", Kind: "command", Detail: "git push -u origin feature/retries", Live: true}}}}
+}
+
+// markdownReply has every kind of block T3's markdown draws.
+const markdownReply = "## Two ways in\n\n" +
+	"The uploader knows how many bytes went out, so it can **report progress** without another goroutine; " +
+	"see the [`io.Writer` docs](https://pkg.go.dev/io#Writer) for the shape, and ~~a ticker~~ isn't needed.\n\n" +
+	"1. **A callback.** `Send` takes `OnProgress func(sent, total int64)` and calls it after each chunk.\n" +
+	"2. **A channel.** `Send` returns a `<-chan Progress` that closes when the upload ends.\n" +
+	"   - simpler to cancel\n   - but the caller must drain it\n\n" +
+	"| Option | Allocates | Cancels with ctx |\n|---|---|---|\n| Callback | no | yes |\n| Channel | one per upload | yes |\n\n" +
+	"> Both keep *Send's* signature small.\n\n" +
+	"> [!TIP]\n> Start with the callback: a channel is easy to build on top of it.\n\n" +
+	"```go\ntype Progress struct {\n\tSent, Total int64 // bytes\n}\n```\n\n" +
+	"- [x] chunked writes\n- [ ] resumable uploads\n"
+
+// planText is a proposed plan long enough to collapse.
+const planText = "# Retry the uploader\n\n## Summary\n\nRetry failed chunks with exponential backoff, and report each retry.\n\n" +
+	"## Steps\n\n1. Wrap `Send`'s chunk loop in a retry with a 250 ms base delay.\n2. Double the delay up to 4 s, with jitter.\n" +
+	"3. Stop after five attempts, or at once on `ErrPermanent`.\n4. Log each retry at debug level.\n5. Cover it with a fake clock.\n\n" +
+	"## Risks\n\n- Retrying a chunk the server already stored duplicates it.\n- A long backoff can outlive the caller's deadline.\n" +
+	"- The fake clock must cover the jitter.\n\n## Out of scope\n\n- Resumable uploads.\n- Progress reporting.\n"
+
+// longPrompt is a message tall enough to collapse.
+var longPrompt = strings.Repeat("The uploader drops the connection when a chunk takes longer than the timeout, and the caller sees a bare EOF. ", 3) +
+	"\n\n" + strings.Repeat("- keep the timeout per attempt\n", 8) + "\nAnd log every retry."
+
+// settledRows is a finished thread with the timeline's other rows: a fork
+// divider, a collapsed prompt, a plan, a compaction, a stopped turn with its
+// fold open, an error, and a steer.
+func settledRows() []ui.TimelineRow {
+	return []ui.TimelineRow{
+		{ID: "fork", Kind: ui.RowDivider, Label: "Forked from conversation", Icon: "git-fork"},
+		{ID: "s1", Kind: ui.RowUser, Message: &ui.Message{ID: "s1", Text: longPrompt}},
+		{ID: "turn-fold:run-s1", Kind: ui.RowTurnFold, Group: "run-s1", Label: "Worked for 34m 10s"},
+		{ID: "plan", Kind: ui.RowPlan, Plan: planText},
+		{ID: "s2", Kind: ui.RowUser, Message: &ui.Message{ID: "s2", Text: "Implement it.", GroupedNext: true}},
+		{ID: "s3", Kind: ui.RowUser, Message: &ui.Message{ID: "s3", Text: "Keep the timeout per attempt.", GroupedPrev: true, Steer: ui.SteerSteer}},
+		{ID: "compaction", Kind: ui.RowCompaction, Label: "Context compacted", Before: "180K", After: "12K"},
+		{ID: "turn-fold:run-s2", Kind: ui.RowTurnFold, Group: "run-s2", Label: "You stopped after 42s", Open: true},
+		{ID: "work-toggle:x1", Kind: ui.RowWorkToggle, Group: "work-group:x1", Icon: "terminal", Label: "Ran 3 commands", Failed: true, Continues: true},
+		{ID: "x2", Kind: ui.RowWork, Entries: []ui.WorkEntry{{ID: "x2", Icon: "circle-alert",
+			Error: &ui.EntryError{Label: "Provider error", Message: "The connection to the model was reset. Try again."}}}},
+		{ID: "a2", Kind: ui.RowAssistant, Message: &ui.Message{ID: "a2", Text: markdownReply, Meta: true, Copy: true, Badge: "interrupted"}},
+		{ID: "interrupt", Kind: ui.RowDivider, Label: "Run interrupted", Icon: "circle-stop"},
+		{ID: "live-activity-row", Kind: ui.RowThinking, Live: true, Label: "Thinking"},
 	}
 }
 
@@ -96,11 +163,10 @@ func base(selected string) *ui.Scene {
 		Runtime:     "Full access",
 		Placeholder: "Ask, steer or queue.   /  commands    $  skills    @  files",
 		Phase:       -1.1,
-		MoreAbove:   true,
 	}
 	sidebar(s, selected)
 	s.Browser = &ui.Browser{Title: "tern", URL: "localhost:8787", Control: "You have control"}
-	s.Items = threadItems()
+	s.Timeline = ui.Timeline{ID: "running", MoreHistory: true, Rows: threadRows()}
 	s.Run = &ui.RunInfo{Status: "Running · 1m 08s", Model: "Opus 5.5 · High", Elapsed: "5m 20s total", Mode: "Full access", Branch: "t3/go-client", Worktree: "~/.t3/worktrees/tern"}
 	s.Changes = []ui.FileChange{
 		{Path: "app/t3/rpc.go", Add: 48, Del: 6, Kind: 'M', Selected: true},
@@ -128,10 +194,8 @@ func approvalScene() *ui.Scene {
 	s.Run.Status = "Waiting"
 	s.Active[2].State = ui.ThreadApproval
 	s.Active[2].Note = "git push -u origin t3/go-client"
-	items := threadItems()
-	items = items[:len(items)-2]
-	items = append(items, ui.Item{Kind: ui.ItemTool, Tool: ui.ToolCommand, Title: "git push -u origin t3/go-client", Meta: "waiting for you"})
-	s.Items = items
+	rows := threadRows()
+	s.Timeline = ui.Timeline{ID: "approval", Rows: append(rows[:len(rows)-1], approvalRow())}
 	s.Approval = &ui.Approval{Kind: "command", Detail: "git push -u origin t3/go-client", Cwd: "~/.t3/worktrees/tern"}
 	s.Picker = &ui.ModelPicker{
 		Tabs: []ui.PickerTab{{}, {Provider: "Claude"}, {Provider: "Codex"}},
@@ -227,19 +291,15 @@ func questionScene() *ui.Scene {
 	s.State = ui.ThreadQuestion
 	s.StateLabel = "Has a question"
 	s.Project = "tern  ›  main"
-	s.MoreAbove = false
 	s.Run.Status = "Waiting for you"
 	s.Run.Branch = "main"
-	s.Items = []ui.Item{
-		{Kind: ui.ItemUser, Text: "design how the watch gets a session without ever touching Clerk"},
-		{Kind: ui.ItemFold, Text: "Worked for 1m 51s", Meta: "9 tool calls"},
-		{Kind: ui.ItemAssistant, Text: "## Two ways in\n\n" +
-			"The desktop app is already signed in through T3 Connect, so it can mint a pairing credential with `POST /api/auth/pairing-token` and hand it to the watch over a QR code. The watch trades it once at `/oauth/token` and never sees Clerk, the relay or DPoP.\n\n" +
-			"- **30-day bearer session.** One exchange, then the watch reconnects on every wrist raise with one ticket request.\n" +
-			"- **Scoped pairing.** Same flow with `orchestration:read` and `orchestration:operate` only, so a lost watch can't open a terminal.\n\n" +
-			"Revoking is the same either way: `POST /api/auth/clients/revoke` from the desktop, and close the socket, since a live socket outlives its session."},
-		{Kind: ui.ItemThought, Text: "Both work. The scope decision is the user's, not mine."},
-	}
+	s.Timeline = ui.Timeline{ID: "question", Rows: []ui.TimelineRow{
+		{ID: "q1", Kind: ui.RowUser, Message: &ui.Message{ID: "q1", Text: "How should the uploader report progress to the caller?"}},
+		{ID: "turn-fold:run-q", Kind: ui.RowTurnFold, Group: "run-q", Label: "Worked for 1m 51s"},
+		{ID: "qa", Kind: ui.RowAssistant, Message: &ui.Message{ID: "qa", Text: markdownReply, Meta: true, Copy: true}},
+		{ID: "qt", Kind: ui.RowWork, Entries: []ui.WorkEntry{{ID: "qt", Icon: "brain", Label: "Both work. The choice is the caller's.", Expands: true,
+			Thought: "Both work. The choice is the caller's."}}},
+	}}
 	s.Questions = []ui.Question{
 		{Header: "Session", Text: "Which session should the watch get?", Options: []string{"30-day, full access", "30-day, read + operate only", "1-hour, renew from phone"}, Picked: 1},
 		{Header: "Pairing", Text: "How should the watch receive the credential?", Options: []string{"QR code on desktop", "Typed 6-word code", "Through the iPhone app"}, Picked: 0},
@@ -255,8 +315,7 @@ func draftScene() *ui.Scene {
 	s.StateLabel = "Draft"
 	s.Project = "in tern  ›  new worktree"
 	s.Tabs = []string{"New thread", "Port the T3 Connect clie…"}
-	s.MoreAbove = false
-	s.Items = []ui.Item{{Kind: ui.ItemNotice, Text: "The first message starts the thread."}}
+	s.Timeline = ui.Timeline{}
 	s.Composer = "/re"
 	s.Images = 2
 	s.SuggestHead = "COMMANDS  ·  CLAUDE"
@@ -282,13 +341,24 @@ func phoneScene() *ui.Scene {
 	s := base("Port the T3 Connect client to Go")
 	s.Title = "Port the T3 Connect client to Go"
 	s.Project = "tern"
-	s.MoreAbove = false
-	items := threadItems()
-	s.Items = []ui.Item{items[1], items[2], items[3], items[4], items[5], {Kind: ui.ItemTool, Tool: ui.ToolEdit, Title: "app/t3/rpc.go", Meta: "+48 −6"}, items[7], items[8], items[10]}
-	s.Items[7].Open = false // test output wraps badly at phone width
+	rows := threadRows()
+	// The group closed: a phone shows its summary.
+	rows[5].Open, rows[5].Continues = false, true
+	s.Timeline = ui.Timeline{ID: "phone", Rows: append(append(rows[1:5:5], rows[5]), approvalRow())}
 	s.State = ui.ThreadApproval
 	s.StateLabel = "Needs approval"
 	s.Approval = &ui.Approval{Kind: "command", Detail: "git push -u origin t3/go-client", Cwd: "tern"}
 	s.Placeholder = "Steer or queue…"
+	return s
+}
+
+// settledScene is a finished thread with the timeline's other rows.
+func settledScene() *ui.Scene {
+	s := base("Gio sidebar: virtualize 1k rows")
+	s.Title = "Gio sidebar: virtualize 1k rows"
+	s.State, s.StateLabel = ui.ThreadIdle, "Idle"
+	s.Run.Status = "Idle"
+	s.Timeline = ui.Timeline{ID: "settled", Rows: settledRows()}
+	s.Changes = nil
 	return s
 }
