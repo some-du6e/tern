@@ -175,6 +175,32 @@ func TestCardMenu(t *testing.T) {
 	}
 }
 
+// The branch picker hangs 4dp under its row (whose bottom is at 220): its
+// search block over a rule 43dp down, then the refs 8dp further, each
+// 28dp, the first highlighted at foreground 9%; with nothing to list, a
+// 36dp "No refs found." block instead (BranchPicker.tsx, combobox.tsx).
+func TestBranchPickerDrawn(t *testing.T) {
+	defer SetDark(false)
+	SetDark(true)
+	s := cardScene()
+	s.Card.Picker = &BranchPicker{Refs: []BranchRef{{Name: "main", Tag: "default"}, {Name: "feature/ui-polish", Tag: "current"}}}
+	img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return NewTheme().Desktop(gtx, s) })
+	// x is clear of the names and of the tags at the rows' ends.
+	top, x := 220+4, 1157+173
+	list := top + 1 + 43
+	hi := over(alpha(P.Foreground, 0x17), P.Popover)
+	if first, last := run(img, x, list, list+80, hi); first != list+8 || last != list+8+28-1 {
+		t.Errorf("the highlighted ref spans y %d..%d, want %d..%d", first, last, list+8, list+8+28-1)
+	}
+	wantPixel(t, img, image.Pt(x, list+8+28+3), P.Popover, "the second ref, not highlighted")
+
+	s.Card.Picker = &BranchPicker{}
+	img = drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return NewTheme().Desktop(gtx, s) })
+	if first, last := run(img, x, list, list+80, P.Popover); first != list || last != list+36-1 {
+		t.Errorf("the empty block spans y %d..%d, want %d..%d", first, last, list, list+36-1)
+	}
+}
+
 // A Git action on the default branch asks in T3's dialog: the backdrop
 // over the window, the popup in the middle.
 func TestConfirmDialogDrawn(t *testing.T) {

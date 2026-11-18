@@ -329,6 +329,12 @@ func TestDraftWorkspace(t *testing.T) {
 	if strategy["type"] != "worktree" || strategy["baseRef"] != "main" {
 		t.Fatalf("launch strategy %v", strategy)
 	}
+	// Picking the new worktree's base offers no ref to create.
+	a.handle(th, ui.Action{ID: "card.branch", Kind: "click"})
+	a.handle(th, ui.Action{ID: "branch.search", Kind: "change", Text: "spike"})
+	if p := built(a, time.Now()).Card.Picker; p == nil || p.Create != "" {
+		t.Fatalf("picking a base: %+v", p)
+	}
 }
 
 // The header's project crumb starts a new thread in that project.

@@ -108,9 +108,9 @@ func (a *App) checkout() (*envState, *t3.Thread, t3.Project, *vcsState) {
 }
 
 // refreshStatus has the server read the checkout's status again
-// (vcs.refreshStatus), as the Git menu and branch picker do when they
-// open; the stream carries the result too.
-func (a *App) refreshStatus() {
+// (vcs.refreshStatus), as the Git menu does when it opens; the branch
+// picker asks for the local half only. The stream carries the result too.
+func (a *App) refreshStatus(localOnly bool) {
 	a.mu.Lock()
 	e, _, _, v := a.checkout()
 	if v == nil || e.conn == nil {
@@ -119,9 +119,13 @@ func (a *App) refreshStatus() {
 	}
 	conn := e.conn
 	a.mu.Unlock()
+	in := map[string]any{"cwd": v.cwd}
+	if localOnly {
+		in["localOnly"] = true
+	}
 	go func() {
 		var st t3.VcsStatus
-		if conn.Call("vcs.refreshStatus", map[string]any{"cwd": v.cwd}, &st) != nil {
+		if conn.Call("vcs.refreshStatus", in, &st) != nil {
 			return
 		}
 		a.mu.Lock()
@@ -354,25 +358,85 @@ func (a *App) initGit() {
 	}()
 }
 
-// pickRef is the branch picker's choice: a new worktree's base for a
-// draft starting one, else the checkout switches to it (or creates it
-// first) with vcs.switchRef or vcs.createRef, and a thread records it.
-func (a *App) pickRef(th *ui.Theme, name string, create bool) {
+// findRefs loads a page of the open branch picker's refs for its search
+// (vcs.listRefs, 100 at a time, the search as a ref name): the first, or
+// with more the one after those it has. It waits while a page is on its
+// way, and a page for an older search is dropped.
+func (a *App) findRefs(more bool) {
+	a.mu.Lock()
+	e, _, _, v := a.checkout()
+	pk := a.branchPicker
+	if pk == nil || v == nil || e.conn == nil || pk.loading {
+		a.mu.Unlock()
+		return
+	}
+	in := map[string]any{"cwd": v.cwd, "limit": 100}
+	if q := newRefName(pk.query); q != "" {
+		in["query"] = q
+	}
+	var base *t3.VcsRefs
+	if more {
+		base = a.pickerRefs(v)
+		if base == nil || base.NextCursor == nil {
+			a.mu.Unlock()
+			return
+		}
+		in["cursor"] = *base.NextCursor
+	}
+	pk.loading = true
+	conn, gen := e.conn, pk.gen
+	a.mu.Unlock()
+	a.changed()
+	go func() {
+		var page t3.VcsRefs
+		err := conn.Call("vcs.listRefs", in, &page)
+		a.mu.Lock()
+		if a.branchPicker == pk && pk.gen == gen {
+			pk.loading = false
+			if err == nil {
+				pk.found = appendRefs(base, &page)
+			}
+		}
+		a.mu.Unlock()
+		a.changed()
+	}()
+}
+
+// localBranchName is the branch checking out remote ref name makes
+// (deriveLocalBranchNameFromRemoteRef): the name past its remote.
+func localBranchName(name string) string {
+	if i := strings.Index(name, "/"); i > 0 && i < len(name)-1 {
+		return name[i+1:]
+	}
+	return name
+}
+
+// pickRef is the branch picker's choice: ref r, or with create a new ref
+// named r.Name. For a draft starting a new worktree it's only the base.
+// Else the checkout switches to it with vcs.switchRef (vcs.createRef
+// first for a new one), the row naming it meanwhile (a remote ref by the
+// local branch it makes), then a thread records the branch it landed on
+// and the refs are read again. The server sends the new status itself.
+func (a *App) pickRef(th *ui.Theme, r t3.VcsRef, create bool) {
 	a.mu.Lock()
 	e, t, _, v := a.checkout()
 	a.branchPicker = nil
-	if v == nil || e.conn == nil || name == "" {
+	if v == nil || e.conn == nil || r.Name == "" {
 		a.mu.Unlock()
 		return
 	}
 	if t == nil && a.draftWorktree {
-		a.draftBase = name
+		a.draftBase = r.Name
 		a.mu.Unlock()
 		th.Focus("composer")
 		return
 	}
-	v.busy = true
-	conn, cwd, threadID := e.conn, v.cwd, ""
+	branch := r.Name
+	if r.IsRemote {
+		branch = localBranchName(r.Name)
+	}
+	v.switching = branch
+	conn, cwd, key, threadID := e.conn, v.cwd, vcsKey(e.id(), v.cwd), ""
 	if t != nil {
 		threadID = t.ID
 	}
@@ -386,21 +450,24 @@ func (a *App) pickRef(th *ui.Theme, name string, create bool) {
 		what, err := "Failed to switch ref.", error(nil)
 		if create {
 			what = "Failed to create and switch ref."
-			err = conn.Call("vcs.createRef", map[string]any{"cwd": cwd, "refName": name, "switchRef": true}, &res)
+			err = conn.Call("vcs.createRef", map[string]any{"cwd": cwd, "refName": r.Name, "switchRef": true}, &res)
 		} else {
-			err = conn.Call("vcs.switchRef", map[string]any{"cwd": cwd, "refName": name}, &res)
+			err = conn.Call("vcs.switchRef", map[string]any{"cwd": cwd, "refName": r.Name}, &res)
 		}
 		a.mu.Lock()
-		v.busy = false
+		v.switching = ""
 		a.mu.Unlock()
 		if err != nil {
 			a.failf(what, err)
 			return
 		}
-		if threadID != "" && res.RefName != "" {
-			a.setThreadBranch(conn, threadID, res.RefName)
+		if (create || r.IsRemote) && res.RefName != "" {
+			branch = res.RefName
 		}
-		a.changed()
+		if threadID != "" {
+			a.setThreadBranch(conn, threadID, branch)
+		}
+		a.loadRefs(conn, key, v)
 	}()
 }
 

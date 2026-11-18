@@ -11,6 +11,7 @@ import (
 	"gioui.org/op"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
+	"gioui.org/text"
 )
 
 // The popups the details card's rows open: T3's Menu (menu.tsx,
@@ -188,13 +189,44 @@ func (th *Theme) branchPicker(gtx C, p *BranchPicker, w int) D {
 				return th.Text(gtx, Txt{Size: 14, LineH: 20.0 / 14, Color: P.PopoverForeground, MaxLines: 1}, p.Create)
 			}))
 		}
-		if len(rows) > 0 {
+		l := th.List("branch.refs", false)
+		if q := th.EditorText("branch.search"); q != th.in.pickQuery {
+			// A new search starts at the top of its list.
+			th.in.pickQuery, l.Position = q, layout.Position{}
+		}
+		switch {
+		case len(rows) > 0:
 			kids = append(kids, rigid(func(gtx C) D {
 				// The list scrolls past 224dp (max-h-56), padded 8 0 8 4.
 				gtx.Constraints.Max.Y = dp(gtx, 224)
 				return pad(8, 4, 8, 4).Layout(gtx, func(gtx C) D {
-					l := th.List("branch.refs", false)
-					return l.Layout(gtx, len(rows), func(gtx C, i int) D { return rows[i](gtx) })
+					if hi := p.Highlight; hi != th.in.pickHi {
+						// The arrows bring the highlight into view.
+						th.in.pickHi = hi
+						switch first, n := l.Position.First, l.Position.Count; {
+						case hi < first:
+							l.ScrollTo(hi)
+						case n > 0 && hi >= first+n-1:
+							l.Position.First, l.Position.Offset = hi+1, -gtx.Constraints.Max.Y
+						}
+					}
+					d := l.Layout(gtx, len(rows), func(gtx C, i int) D { return rows[i](gtx) })
+					// Half a page from its end it asks for the next page.
+					if p.More && l.Position.First+l.Position.Count >= len(rows)-max(1, l.Position.Count/2) {
+						th.push(Action{ID: "branch.more", Kind: "click"})
+					}
+					return d
+				})
+			}))
+		case !p.Loading:
+			// ComboboxEmpty: 14/20 muted, centred, padded 8.
+			kids = append(kids, rigid(func(gtx C) D {
+				gtx.Constraints.Min.X = gtx.Constraints.Max.X
+				return pad(8, 8, 8, 8).Layout(gtx, func(gtx C) D {
+					gtx.Constraints.Min = image.Pt(gtx.Constraints.Max.X, dp(gtx, 20))
+					return Row(gtx, flexed(func(gtx C) D {
+						return th.Text(gtx, Txt{Size: 14, LineH: 20.0 / 14, Color: P.MutedForeground, Align: text.Middle, MaxLines: 1}, "No refs found.")
+					}))
 				})
 			}))
 		}

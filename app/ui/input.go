@@ -67,6 +67,10 @@ type input struct {
 	// The details card's scroll.
 	cardScroll  int
 	cardScrollG gesture.Scroll
+	// The branch picker's search and highlight last frame: a new search
+	// scrolls its list to the top, a new highlight into view.
+	pickQuery string
+	pickHi    int
 	// The shell: whether the details card fits inline (from the last
 	// layout), and the sidebar rail's drag.
 	cardFits    bool

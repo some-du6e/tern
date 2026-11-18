@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -197,40 +198,105 @@ func TestPullAndInit(t *testing.T) {
 	})
 }
 
-// The branch picker lists the refs, filters them as you type, switches to
-// one with vcs.switchRef and records it on the thread, and creates one that
-// doesn't exist with vcs.createRef.
+// The branch picker lists the checkout's refs; a search asks the server
+// for the refs it matches (vcs.listRefs with the query), which the picker
+// filters as T3's does. Picking one switches to it with vcs.switchRef, the
+// row naming it until the switch lands, and records it on the thread. A
+// search no ref is named offers to create it, as a ref name, before its
+// refs come: vcs.createRef.
 func TestBranchPicker(t *testing.T) {
 	a, f := liveApp(t, status(nil),
 		t3.VcsRef{Name: "feature", Current: true}, t3.VcsRef{Name: "main", IsDefault: true}, t3.VcsRef{Name: "origin/main", IsRemote: true})
-	f.on("vcs.switchRef", func(f *fakeEnv, r fakeReq) { f.exit(r, map[string]any{"refName": "main"}) })
-	f.on("vcs.createRef", func(f *fakeEnv, r fakeReq) { f.exit(r, map[string]any{"refName": "spike"}) })
+	f.on("vcs.switchRef", func(f *fakeEnv, r fakeReq) {})
+	f.on("vcs.createRef", func(f *fakeEnv, r fakeReq) { f.exit(r, map[string]any{"refName": "new-idea"}) })
 	th := ui.NewTheme()
 	a.handle(th, ui.Action{ID: "card.branch", Kind: "click"})
 	p := built(a, time.Now()).Card.Picker
-	if p == nil || len(p.Refs) != 3 || p.Refs[0].Tag != "current" || p.Refs[1].Tag != "default" || p.Refs[2].Tag != "remote" || p.Create != "" {
+	if p == nil || len(p.Refs) != 3 || p.Refs[0].Tag != "current" || p.Refs[1].Tag != "default" || p.Refs[2].Tag != "remote" || p.Create != "" || p.Highlight != 0 {
 		t.Fatalf("picker %+v", p)
 	}
+	if r := f.wait("vcs.refreshStatus", 1); r.Payload["localOnly"] != true {
+		t.Fatalf("opening the picker should refresh the local status: %v", r.Payload)
+	}
 	a.handle(th, ui.Action{ID: "branch.search", Kind: "change", Text: "MAI"})
-	p = built(a, time.Now()).Card.Picker
-	if len(p.Refs) != 2 || p.Refs[0].Name != "main" || p.Create != `Create new ref "MAI"` {
-		t.Fatalf("filtered %+v", p)
+	if r := f.wait("vcs.listRefs", 2); r.Payload["query"] != "MAI" || r.Payload["limit"] != 100.0 || r.Payload["cwd"] != "/root/code/goog" {
+		t.Fatalf("search payload %v", r.Payload)
+	}
+	eventually(t, "the search's refs", func() bool {
+		p := built(a, time.Now()).Card.Picker
+		return len(p.Refs) == 2 && p.Refs[0].Name == "main" && p.Refs[1].Name == "origin/main" && p.Create == `Create new ref "MAI"`
+	})
+	// The arrows go round: up from the first item is the last, the ref to create.
+	a.handle(th, ui.Action{ID: "branch.search", Kind: "key", Text: "↑"})
+	if p := built(a, time.Now()).Card.Picker; p.Highlight != 2 {
+		t.Fatalf("highlight %d, want 2", p.Highlight)
 	}
 	a.handle(th, ui.Action{ID: "branch.ref:0", Kind: "click"})
-	if r := f.wait("vcs.switchRef", 1); r.Payload["refName"] != "main" || r.Payload["cwd"] != "/root/code/goog" {
+	r := f.wait("vcs.switchRef", 1)
+	if r.Payload["refName"] != "main" || r.Payload["cwd"] != "/root/code/goog" {
 		t.Fatalf("switch payload %v", r.Payload)
 	}
+	if s := built(a, time.Now()); s.Card.Picker != nil || s.Card.Branch.Label != "main" || !s.Card.Branch.Disabled {
+		t.Fatalf("while it switches the row names the ref and waits: %+v", s.Card.Branch)
+	}
+	f.exit(r, map[string]any{"refName": "main"})
 	if d := f.wait("orchestration.dispatchCommand:thread.metadata.update", 1); d.Payload["branch"] != "main" || d.Payload["threadId"] != "t1" {
 		t.Fatalf("branch update %v", d.Payload)
 	}
-	if s := built(a, time.Now()); s.Card.Picker != nil {
-		t.Fatal("picking closes the picker")
-	}
+	eventually(t, "the switch lands", func() bool { return !built(a, time.Now()).Card.Branch.Disabled })
 	a.handle(th, ui.Action{ID: "card.branch", Kind: "click"})
-	a.handle(th, ui.Action{ID: "branch.search", Kind: "change", Text: "spike"})
+	a.handle(th, ui.Action{ID: "branch.search", Kind: "change", Text: " new  idea"})
+	if p := built(a, time.Now()).Card.Picker; p.Create != `Create new ref "new-idea"` {
+		t.Fatalf("create offered %q", p.Create)
+	}
 	a.handle(th, ui.Action{ID: "branch.search", Kind: "submit"})
-	if r := f.wait("vcs.createRef", 1); r.Payload["refName"] != "spike" || r.Payload["switchRef"] != true {
+	if r := f.wait("vcs.createRef", 1); r.Payload["refName"] != "new-idea" || r.Payload["switchRef"] != true {
 		t.Fatalf("create payload %v", r.Payload)
+	}
+}
+
+// A long list of refs comes a page at a time: the picker says how many it
+// has and, asked near its end, loads the next page from the cursor the
+// last one gave; a remote ref it switches to is recorded by the local
+// branch it makes.
+func TestBranchPickerPages(t *testing.T) {
+	a, f := liveApp(t, status(nil))
+	refs := func(from, to int) []t3.VcsRef {
+		var out []t3.VcsRef
+		for i := from; i < to; i++ {
+			out = append(out, t3.VcsRef{Name: fmt.Sprintf("origin/ref-%03d", i), IsRemote: true})
+		}
+		return out
+	}
+	f.on("vcs.listRefs", func(f *fakeEnv, r fakeReq) {
+		if r.Payload["cursor"] == nil {
+			f.exit(r, map[string]any{"isRepo": true, "refs": refs(0, 100), "nextCursor": 100, "totalCount": 150})
+			return
+		}
+		f.exit(r, map[string]any{"isRepo": true, "refs": refs(100, 150), "nextCursor": nil, "totalCount": 150})
+	})
+	f.on("vcs.switchRef", func(f *fakeEnv, r fakeReq) { f.exit(r, map[string]any{"refName": "ref-120"}) })
+	th := ui.NewTheme()
+	a.handle(th, ui.Action{ID: "card.branch", Kind: "click"})
+	a.handle(th, ui.Action{ID: "branch.search", Kind: "change", Text: "ref"})
+	eventually(t, "the first page", func() bool {
+		p := built(a, time.Now()).Card.Picker
+		return len(p.Refs) == 100 && p.More && p.Status == "Showing 100 of 150 refs"
+	})
+	a.handle(th, ui.Action{ID: "branch.more", Kind: "click"})
+	if r := f.wait("vcs.listRefs", 3); r.Payload["cursor"] != 100.0 || r.Payload["query"] != "ref" {
+		t.Fatalf("next page payload %v", r.Payload)
+	}
+	eventually(t, "the second page", func() bool {
+		p := built(a, time.Now()).Card.Picker
+		return len(p.Refs) == 150 && !p.More && p.Status == ""
+	})
+	a.handle(th, ui.Action{ID: "branch.ref:120", Kind: "click"})
+	if r := f.wait("vcs.switchRef", 1); r.Payload["refName"] != "origin/ref-120" {
+		t.Fatalf("switch payload %v", r.Payload)
+	}
+	if d := f.wait("orchestration.dispatchCommand:thread.metadata.update", 1); d.Payload["branch"] != "ref-120" {
+		t.Fatalf("branch update %v", d.Payload)
 	}
 }
 

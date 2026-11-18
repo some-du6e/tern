@@ -208,6 +208,11 @@ func edgeFade(gtx C, col color.NRGBA, r image.Rectangle, down bool) {
 func (th *Theme) cardContent(gtx C, s *Scene, dn density) D {
 	d := s.Card
 	w := gtx.Constraints.Max.X
+	if d.Picker == nil {
+		// The branch picker opens at the top of its list.
+		delete(th.in.lists, "branch.refs")
+		th.in.pickHi = 0
+	}
 	// Each row with the popup it opens, which hangs 4dp under it as wide
 	// as it is.
 	type row struct {

@@ -345,12 +345,15 @@ type MenuRow struct {
 }
 
 // BranchPicker is the branch combobox (BranchPicker.tsx): a search field
-// over the refs it lists ("branch.search").
+// over the refs it lists ("branch.search"). Near the end of a list with
+// More it asks for the next page ("branch.more").
 type BranchPicker struct {
 	Refs      []BranchRef
 	Create    string // "Create new ref "<name>"" when no ref matches exactly
 	Status    string // "Loading refs...", "Showing 50 of 120 refs"
 	Highlight int
+	More      bool // the server has more refs for the search
+	Loading   bool // the search's first page hasn't come yet
 }
 
 // BranchRef is one ref in the picker, with its first tag: current,

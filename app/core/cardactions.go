@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/some-du6e/tern/app/t3"
 	"github.com/some-du6e/tern/app/ui"
 )
 
@@ -57,22 +58,39 @@ func (a *App) handleHeader(th *ui.Theme, act ui.Action) bool {
 		a.mu.Unlock()
 		return true
 	case id == "branch.search" && act.Kind == "change":
+		// A new search asks the server afresh, from its first item.
 		a.mu.Lock()
-		if a.branchPicker != nil {
-			a.branchPicker.query, a.branchPicker.hi = act.Text, 0
+		pk := a.branchPicker
+		search := pk != nil && pk.query != act.Text
+		if search {
+			pk.query, pk.hi, pk.found, pk.loading, pk.gen = act.Text, 0, nil, false, pk.gen+1
 		}
 		a.mu.Unlock()
+		if search && newRefName(act.Text) != "" {
+			a.findRefs(false)
+		}
 		return true
 	case id == "branch.search" && act.Kind == "key":
+		// The arrows move the highlight, round from either end.
 		a.mu.Lock()
-		if p := a.branchPicker; p != nil {
+		if p, _ := a.pickerScene(); p != nil {
+			n := len(p.Refs)
+			if p.Create != "" {
+				n++
+			}
+			step := 1
 			if act.Text == "↑" {
-				p.hi = max(0, p.hi-1)
-			} else {
-				p.hi++
+				step = -1
+			}
+			if n > 0 {
+				a.branchPicker.hi = ((a.branchPicker.hi+step)%n + n) % n
 			}
 		}
 		a.mu.Unlock()
+		return true
+	case id == "branch.more":
+		// The list came near its end: the next page of refs.
+		a.findRefs(true)
 		return true
 	case id == "branch.search" && act.Kind == "submit":
 		a.pickHighlighted(th)
@@ -137,7 +155,7 @@ func (a *App) handleHeader(th *ui.Theme, act ui.Action) bool {
 		}
 		a.mu.Unlock()
 		if open && menu == "git" {
-			a.refreshStatus()
+			a.refreshStatus(false)
 		}
 	case "card.openin":
 		a.mu.Lock()
@@ -162,21 +180,23 @@ func (a *App) handleHeader(th *ui.Theme, act ui.Action) bool {
 		if open {
 			th.SetEditorText("branch.search", "")
 			th.Focus("branch.search")
-			a.refreshStatus()
+			a.refreshStatus(true)
 		}
 	case "branch.ref":
 		a.mu.Lock()
-		name := a.pickerRef(atoi(arg))
+		r, ok := a.pickerRef(atoi(arg))
 		a.mu.Unlock()
-		a.pickRef(th, name, false)
+		if ok {
+			a.pickRef(th, r, false)
+		}
 	case "branch.create":
 		a.mu.Lock()
 		name := ""
 		if a.branchPicker != nil {
-			name = strings.TrimSpace(a.branchPicker.query)
+			name = newRefName(a.branchPicker.query)
 		}
 		a.mu.Unlock()
-		a.pickRef(th, name, true)
+		a.pickRef(th, t3.VcsRef{Name: name}, true)
 	case "card.initgit":
 		a.initGit()
 	case "card.git":
@@ -305,40 +325,52 @@ func (a *App) runPrimaryScript() {
 	}
 }
 
-// pickerRef is the name of the branch picker's ref i, as the scene lists
-// them. Call with the lock held.
-func (a *App) pickerRef(i int) string {
-	_, _, _, v := a.checkout()
+// pickerScene is the open branch picker as the card lists it, and the
+// checkout it's for. Call with the lock held.
+func (a *App) pickerScene() (*ui.BranchPicker, *vcsState) {
+	_, t, p, v := a.checkout()
 	if v == nil || a.branchPicker == nil {
-		return ""
+		return nil, v
 	}
-	refs := a.refPickerScene(v).Refs
-	if i < 0 || i >= len(refs) || refs[i].Disabled {
-		return ""
+	return a.refPickerScene(v, p.WorkspaceRoot, t == nil && a.draftWorktree), v
+}
+
+// pickerRef is the branch picker's ref i, as the scene lists them. Call
+// with the lock held.
+func (a *App) pickerRef(i int) (t3.VcsRef, bool) {
+	p, v := a.pickerScene()
+	if p == nil || i < 0 || i >= len(p.Refs) || p.Refs[i].Disabled {
+		return t3.VcsRef{}, false
 	}
-	return refs[i].Name
+	for _, r := range a.pickerRefs(v).Refs {
+		if r.Name == p.Refs[i].Name {
+			return r, true
+		}
+	}
+	return t3.VcsRef{}, false
 }
 
 // pickHighlighted picks the branch picker's highlighted item: a ref, or
 // the ref to create after them.
 func (a *App) pickHighlighted(th *ui.Theme) {
 	a.mu.Lock()
-	_, _, _, v := a.checkout()
-	if v == nil || a.branchPicker == nil {
+	p, _ := a.pickerScene()
+	if p == nil {
 		a.mu.Unlock()
 		return
 	}
-	p := a.refPickerScene(v)
-	hi := min(a.branchPicker.hi, len(p.Refs))
-	name, create := "", false
+	hi := a.branchPicker.hi
+	r, create, ok := t3.VcsRef{}, false, false
 	switch {
 	case hi < len(p.Refs):
-		name = p.Refs[hi].Name
+		r, ok = a.pickerRef(hi)
 	case p.Create != "":
-		name, create = strings.TrimSpace(a.branchPicker.query), true
+		r, create, ok = t3.VcsRef{Name: newRefName(a.branchPicker.query)}, true, true
 	}
 	a.mu.Unlock()
-	a.pickRef(th, name, create)
+	if ok {
+		a.pickRef(th, r, create)
+	}
 }
 
 // draftIn starts a new thread in project on environment envID, as the

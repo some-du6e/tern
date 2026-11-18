@@ -1,6 +1,7 @@
 package core
 
 import (
+	"regexp"
 	"strings"
 	"time"
 
@@ -23,7 +24,9 @@ type vcsState struct {
 	running *gitRun
 	done    *gitDone
 	initing bool // vcs.init is running
-	busy    bool // a ref is switching
+	// switching is the ref a switch is moving the checkout to; the branch
+	// row names it until the switch lands, as T3's optimistic label does.
+	switching string
 }
 
 // gitRun is a stacked action or pull in progress: its phase's label, the
@@ -47,10 +50,16 @@ type pendingGit struct {
 	includesCommit bool
 }
 
-// refPicker is the open branch picker's search and highlight.
+// refPicker is the open branch picker: its search and highlight, and the
+// refs the server found for the search (vcs.listRefs with the query), a
+// page at a time. Each search gets a new generation, so a page for an
+// older one is dropped when it lands.
 type refPicker struct {
-	query string
-	hi    int
+	query   string
+	hi      int
+	found   *t3.VcsRefs // the pages so far; nil until the first lands
+	loading bool
+	gen     int
 }
 
 func vcsKey(envID, cwd string) string { return envID + "\x00" + cwd }
@@ -172,7 +181,10 @@ func (a *App) cardScene(s *ui.Scene, e *envState, t *t3.Thread, p t3.Project, ha
 	}
 	if isRepo && show("branch") {
 		value := a.branchOf(t, v)
-		b := &ui.BranchRow{Label: "Select ref", Disabled: v.refs == nil || v.busy}
+		if v.switching != "" {
+			value = v.switching
+		}
+		b := &ui.BranchRow{Label: "Select ref", Disabled: v.refs == nil || v.switching != ""}
 		switch {
 		case value != "" && worktreeMode && worktree == "":
 			b.Label = "From " + value
@@ -181,7 +193,7 @@ func (a *App) cardScene(s *ui.Scene, e *envState, t *t3.Thread, p t3.Project, ha
 		}
 		d.Branch = b
 		if a.branchPicker != nil {
-			d.Picker = a.refPickerScene(v)
+			d.Picker = a.refPickerScene(v, p.WorkspaceRoot, t == nil && a.draftWorktree)
 		}
 		if a.cardMenu == "copybranch" && value != "" {
 			d.Menu = &ui.CardMenu{For: "copybranch", Rows: []ui.MenuRow{{Label: "Copy branch name", Icon: "copy"}}, AtPointer: true}
@@ -367,39 +379,96 @@ func gitProgress(r *gitRun, now time.Time) *ui.GitProgress {
 	return p
 }
 
-// refPickerScene is the open branch picker: the first page of refs that
-// match its search, each with its first tag, and a ref to create when
-// none matches exactly.
-func (a *App) refPickerScene(v *vcsState) *ui.BranchPicker {
-	p := &ui.BranchPicker{Highlight: a.branchPicker.hi}
-	if v.refs == nil {
-		p.Status = "Loading refs..."
-		return p
+// pickerRefs are the refs the open picker lists from: the server's pages
+// for its search, or for no search the checkout's first page, which the
+// branch row loaded. Call with the lock held.
+func (a *App) pickerRefs(v *vcsState) *t3.VcsRefs {
+	if pk := a.branchPicker; pk.found != nil || newRefName(pk.query) != "" {
+		return pk.found
 	}
-	q := strings.ToLower(strings.TrimSpace(a.branchPicker.query))
+	return v.refs
+}
+
+// refPickerScene is the open branch picker (BranchToolbarBranchSelector.tsx):
+// the refs found for its search, each with its first tag against the
+// project's folder root, then a ref to create when none is named that
+// (offered while the refs load too), except while picking a new
+// worktree's base; and how much is loaded.
+func (a *App) refPickerScene(v *vcsState, root string, choosingBase bool) *ui.BranchPicker {
+	pk := a.branchPicker
+	p := &ui.BranchPicker{Highlight: pk.hi}
+	found := a.pickerRefs(v)
+	q := strings.TrimSpace(pk.query)
+	name := newRefName(q)
 	exact := false
-	for _, r := range v.refs.Refs {
-		if q != "" && !strings.Contains(strings.ToLower(r.Name), q) {
-			continue
+	if found != nil {
+		for _, r := range found.Refs {
+			exact = exact || r.Name == name
+			if matchesRef(r.Name, q) {
+				p.Refs = append(p.Refs, ui.BranchRef{Name: r.Name, Tag: refTag(r, root)})
+			}
 		}
-		exact = exact || strings.EqualFold(r.Name, q)
-		p.Refs = append(p.Refs, ui.BranchRef{Name: r.Name, Tag: refTag(r, v.cwd)})
 	}
-	if q != "" && !exact {
-		p.Create = `Create new ref "` + strings.TrimSpace(a.branchPicker.query) + `"`
+	if q != "" && !exact && !choosingBase {
+		p.Create = `Create new ref "` + name + `"`
 	}
-	if n := len(v.refs.Refs); v.refs.TotalCount > n && q == "" {
-		p.Status = "Showing " + len3(n) + " of " + len3(v.refs.TotalCount) + " refs"
+	switch {
+	case found == nil:
+		p.Status, p.Loading = "Loading refs...", true
+	case pk.loading:
+		p.Status = "Loading more refs..."
+	case found.NextCursor != nil:
+		p.Status, p.More = "Showing "+len3(len(found.Refs))+" of "+len3(found.TotalCount)+" refs", true
 	}
 	return p
 }
 
-// refTag is the first of current, worktree, remote and default that fits r.
-func refTag(r t3.VcsRef, cwd string) string {
+// newRefName is a search as a ref name (sanitizeNewRefName): trimmed, each
+// run of spaces, tabs and line breaks a dash.
+func newRefName(q string) string { return refSpaces.ReplaceAllString(strings.TrimSpace(q), "-") }
+
+var refSpaces = regexp.MustCompile("[ \t\n\r\f\v]+")
+
+// matchesRef is the picker's filter (shouldIncludeBranchPickerItem): the
+// ref's name holds the search, ignoring case, as typed or as a ref name.
+func matchesRef(name, q string) bool {
+	q = strings.ToLower(q)
+	lower := strings.ToLower(name)
+	return q == "" || strings.Contains(lower, q) || strings.Contains(lower, newRefName(q))
+}
+
+// appendRefs adds a page to the ones before it, a ref named twice keeping
+// its first place.
+func appendRefs(prev *t3.VcsRefs, page *t3.VcsRefs) *t3.VcsRefs {
+	if prev == nil {
+		return page
+	}
+	out := *prev
+	out.Refs = append([]t3.VcsRef(nil), prev.Refs...)
+	at := map[string]int{}
+	for i, r := range out.Refs {
+		at[r.Name] = i
+	}
+	for _, r := range page.Refs {
+		if i, ok := at[r.Name]; ok {
+			out.Refs[i] = r
+			continue
+		}
+		at[r.Name] = len(out.Refs)
+		out.Refs = append(out.Refs, r)
+	}
+	out.NextCursor, out.TotalCount = page.NextCursor, max(prev.TotalCount, page.TotalCount)
+	return &out
+}
+
+// refTag is the first of current, worktree, remote and default that fits
+// r: "worktree" for a ref checked out somewhere other than the project's
+// own folder.
+func refTag(r t3.VcsRef, root string) string {
 	switch {
 	case r.Current:
 		return "current"
-	case r.WorktreePath != "" && r.WorktreePath != cwd:
+	case r.WorktreePath != "" && root != "" && r.WorktreePath != root:
 		return "worktree"
 	case r.IsRemote:
 		return "remote"
