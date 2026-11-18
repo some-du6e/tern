@@ -231,8 +231,8 @@ func main() {
 	h.c.Handle(h.th, []ui.Action{{ID: "tabclose:draft", Kind: "click"}, {ID: "tabclose:" + s.TabIDs[0], Kind: "click"}})
 	s = h.frame()
 	fmt.Printf("nothing open: details panel hidden=%v\n", s.Run == nil)
-	// Right-click the third row with the pointer: the thread menu opens there.
-	at := f32.Pt(150*scale, (30+42+31+46*2+23)*scale)
+	// Right-click the first card with the pointer: the thread menu opens there.
+	at := f32.Pt(150*scale, (100+2+24)*scale)
 	h.router.Queue(
 		pointer.Event{Kind: pointer.Move, Position: at, Source: pointer.Mouse},
 		pointer.Event{Kind: pointer.Press, Position: at, Buttons: pointer.ButtonSecondary, Source: pointer.Mouse},
@@ -240,14 +240,14 @@ func main() {
 	)
 	h.frame()
 	s = h.frame()
-	if s.Context == nil {
+	if s.Menu == nil {
 		log.Fatal("right-click opened no menu")
 	}
 	h.shot("thread-menu")
-	h.c.Handle(h.th, []ui.Action{{ID: "ctx:0:4", Kind: "click"}})
+	h.c.Handle(h.th, []ui.Action{{ID: "ctx:delete", Kind: "click"}})
 	h.shot("delete-confirm")
 	// Mark unread is harmless; read-only, the server must refuse it.
-	h.c.Handle(h.th, []ui.Action{{ID: "ctx:0:2", Kind: "click"}})
+	h.c.Handle(h.th, []ui.Action{{ID: "ctx:mark-unread", Kind: "click"}})
 	s = h.wait("menu refusal", func(s *ui.Scene) bool { return s.Error != "" })
 	fmt.Printf("thread menu refused as expected: %q\n", s.Error)
 	h.c.Handle(h.th, []ui.Action{{ID: "error", Kind: "click"}})

@@ -592,6 +592,8 @@ func (a *App) shelve(now time.Time, scope map[string]bool) sidebarList {
 			}
 			st := sideThread{Thread: t, e: e, ref: ref(e.id(), t.ID), child: children[t.ID]}
 			present[st.ref] = true
+			// Every thread is watched, so one filed elsewhere loses its hold.
+			w := a.onWorkingShelf(st.ref, t, st.child, now)
 			switch {
 			case snoozed(t, st.child, now):
 				l.snoozed = append(l.snoozed, st)
@@ -599,7 +601,7 @@ func (a *App) shelve(now time.Time, scope map[string]bool) sidebarList {
 				l.settled = append(l.settled, st)
 			case t.PinnedAt != "":
 				l.pinned = append(l.pinned, st)
-			case a.onWorkingShelf(st.ref, t, st.child, now):
+			case w:
 				l.working = append(l.working, st)
 			default:
 				l.active = append(l.active, st)

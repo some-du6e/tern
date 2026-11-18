@@ -690,6 +690,7 @@ func (th *Theme) rowKey1(nav string, name key.Name, rect image.Rectangle) {
 	case key.NameF10:
 		if strings.HasPrefix(nav, "thread:") {
 			th.in.ctxAt = image.Pt(rect.Min.X, rect.Max.Y)
+			th.in.menu.open = false
 			th.push(Action{ID: nav, Kind: "context", Text: "keyboard"})
 		}
 	}

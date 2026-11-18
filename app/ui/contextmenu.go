@@ -103,6 +103,16 @@ func nextEnabled(items []MenuItem, i, dir int) int {
 // They act on the deepest menu with a highlight.
 func (th *Theme) menuKeys(gtx C, root []MenuItem) {
 	ms := &th.in.menu
+	// The items can change under an open menu: keep the path to submenus
+	// that are still there.
+	items := root
+	for l, i := range ms.path {
+		if i < 0 || i >= len(items) || len(items[i].Children) == 0 {
+			ms.path = ms.path[:l]
+			break
+		}
+		items = items[i].Children
+	}
 	for {
 		ev, ok := gtx.Event(
 			key.FocusFilter{Target: &ms.tag},
@@ -132,6 +142,9 @@ func (th *Theme) menuKeys(gtx C, root []MenuItem) {
 			items = items[i].Children
 		}
 		hi := ms.hi[lvl]
+		if hi >= len(items) {
+			hi = -1
+		}
 		openSub := func() {
 			ms.path = append(ms.path[:lvl], hi)
 			for len(ms.hi) <= lvl+1 {

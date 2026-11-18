@@ -221,6 +221,7 @@ func (th *Theme) events(gtx C, id string) (*gesture.Click, *int) {
 		if e, ok := ev.(pointer.Event); ok {
 			switch e.Buttons {
 			case pointer.ButtonSecondary:
+				th.in.menu.open = false // a new menu starts afresh
 				th.push(Action{ID: id, Kind: "context"})
 			case pointer.ButtonTertiary:
 				th.push(Action{ID: id, Kind: "middle"})
