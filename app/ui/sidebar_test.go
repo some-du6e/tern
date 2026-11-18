@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"gioui.org/f32"
+	"gioui.org/font"
 	gioinput "gioui.org/io/input"
 	"gioui.org/io/key"
 	"gioui.org/io/pointer"
@@ -56,6 +57,67 @@ func TestSidebarRows(t *testing.T) {
 	wantPixel(t, img, image.Pt(256, 189), glass, "the hover card")
 	wantPixel(t, img, image.Pt(249, 187), SP.Sidebar, "the 4dp before it")
 	wantPixel(t, img, image.Pt(260, 183), P.Background, "above it")
+}
+
+// textAt is txt drawn on its own at p on bg, where a row centring its line
+// should put it.
+func textAt(t *testing.T, th *Theme, txt Txt, s string, p image.Point, bg color.NRGBA) *image.RGBA {
+	t.Helper()
+	return drawn(t, image.Pt(1440, 900), 1, func(gtx C) D {
+		fill(gtx, bg, image.Rect(0, 0, 1440, 900), 0)
+		defer op.Offset(p).Push(gtx.Ops).Pop()
+		gtx.Constraints = layout.Constraints{Max: image.Pt(400, 100)}
+		return th.Text(gtx, txt, s)
+	})
+}
+
+// A row's text sits centred on its line, as a CSS flex row centres it, not
+// pinned to the line's top: each of these is where the same text, drawn
+// alone with its line box centred by hand, is.
+func TestRowTextCentred(t *testing.T) {
+	th := NewTheme()
+	active, hover := over(SP.SidebarRowActive, SP.Sidebar), over(SP.SidebarRowHover, SP.Sidebar)
+	search := &Scene{Sidebar: Sidebar{HasProjects: true, Query: "pairing", Results: []ThreadRow{
+		{ID: "e/1", Title: "Watch pairing flow", Project: "tern", Icon: ProjectIcon{Text: "TN", Color: "amber"}, Age: "41m"},
+	}}}
+	menu := &Scene{Menu: &ContextMenu{At: image.Pt(600, 300), Items: []MenuItem{
+		{ID: "pin", Label: "Pin thread", Icon: "pin"},
+		{ID: "settle", Label: "Settle thread", Icon: "circle-check"},
+	}}}
+	for _, c := range []struct {
+		what string
+		s    *Scene
+		line image.Rectangle // the line the text is centred on
+		at   image.Point     // where its line box starts
+		txt  Txt
+		text string
+		bg   color.NRGBA
+	}{
+		// The open card's line 1 is 20dp at 102 + 8; its 12/16 project
+		// name starts at x 40.
+		{"the card's project", rowsScene(), image.Rect(40, 110, 70, 130), image.Pt(40, 112),
+			Txt{Size: 12, LineH: 16.0 / 12, Color: SP.SecondaryLabel, MaxLines: 1}, "tern", active},
+		// The Settled header is 779..811, its label 8dp in from x 10.
+		{"the shelf's label", rowsScene(), image.Rect(18, 779, 60, 811), image.Pt(18, 787),
+			Txt{Size: 12, LineH: 16.0 / 12, Font: UI(font.Medium), Color: SP.SidebarMutedForeground, MaxLines: 1}, "Settled", SP.Sidebar},
+		// The hovered slim row is 812..848, its title after the icon at 44.
+		{"the slim row's title", rowsScene(), image.Rect(44, 812, 90, 848), image.Pt(44, 820),
+			Txt{Size: 14, LineH: 20.0 / 14, Font: UI(font.Medium), Color: SP.Foreground, MaxLines: 1}, "Settled", hover},
+		// The highlighted result is 100..136.
+		{"the result's title", search, image.Rect(44, 100, 90, 136), image.Pt(44, 108),
+			Txt{Size: 14, LineH: 20.0 / 14, Font: UI(font.Medium), Color: SP.Foreground, MaxLines: 1}, "Watch pairing flow", active},
+		// The menu's second row is 333..361, its label after the 16dp icon.
+		{"the menu row's label", menu, image.Rect(637, 333, 680, 361), image.Pt(637, 337),
+			Txt{Size: 14, LineH: 20.0 / 14, Color: P.ContrastForeground, MaxLines: 1}, "Settle thread", P.Popover},
+	} {
+		img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, c.s) })
+		ref := textAt(t, th, c.txt, c.text, c.at, c.bg)
+		gt, gb, ok := inkRows(img, c.line, c.bg)
+		wt, wb, _ := inkRows(ref, c.line, c.bg)
+		if !ok || gt != wt || gb != wb {
+			t.Errorf("%s: ink on rows %d..%d, want %d..%d", c.what, gt, gb, wt, wb)
+		}
+	}
 }
 
 // In light the open row is rung 1dp inside with the sidebar border at 70%.

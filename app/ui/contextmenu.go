@@ -190,8 +190,8 @@ func (th *Theme) menuKeys(gtx C, root []MenuItem) {
 // menuLevel lays out one menu, and each row's box in it: at least 128dp
 // and at most 384 wide, radius 8, the popover inside a 1dp border at the
 // foreground's 10%, padded 4; rows 28dp, padded 4 by 8, 14/20 in the
-// foreground with 16dp icons 8dp before the label, a detail 16dp after it
-// in 12px muted, a chevron on a submenu's row; 1dp separators 4 by 8 in.
+// foreground with 16dp icons 8dp before the label, a detail 8 + 16dp after
+// it in 12px muted, a chevron on a submenu's row; 1dp separators 4 by 8 in.
 func (th *Theme) menuLevel(gtx C, items []MenuItem, level int) (D, []image.Rectangle) {
 	ms := &th.in.menu
 	px := max(1, dp(gtx, 1))
@@ -199,22 +199,14 @@ func (th *Theme) menuLevel(gtx C, items []MenuItem, level int) (D, []image.Recta
 	padX, gap, icon := dp(gtx, 8), dp(gtx, 8), dp(gtx, 16)
 	label := Txt{Size: 14, LineH: 20.0 / 14, MaxLines: 1}
 	detail := Txt{Size: 12, LineH: 20.0 / 12, MaxLines: 1}
-	textW := func(t Txt, s string) int {
-		m := op.Record(gtx.Ops)
-		g := gtx
-		g.Constraints = layout.Constraints{Max: image.Pt(1<<20, 1<<20)}
-		d := th.Text(g, t, s)
-		m.Stop()
-		return d.Size.X
-	}
 	inner := 0
 	for _, it := range items {
-		w := 2*padX + textW(label, it.Label)
+		w := 2*padX + th.textWidth(gtx, label, it.Label)
 		if it.Icon != "" || it.Radio {
 			w += icon + gap
 		}
 		if it.Detail != "" {
-			w += dp(gtx, 16) + textW(detail, it.Detail)
+			w += gap + dp(gtx, 16) + th.textWidth(gtx, detail, it.Detail)
 		}
 		if len(it.Children) > 0 {
 			w += gap + icon - dp(gtx, 2)
@@ -335,7 +327,7 @@ func (th *Theme) menuRow(gtx C, it MenuItem, level, i int, size image.Point) {
 	}))
 	if it.Detail != "" {
 		kids = append(kids, rigid(func(gtx C) D {
-			return pad(0, 0, 0, 8).Layout(gtx, func(gtx C) D {
+			return pad(0, 0, 0, 16).Layout(gtx, func(gtx C) D {
 				return th.Text(gtx, Txt{Size: 12, LineH: 20.0 / 12, Color: muted, MaxLines: 1}, it.Detail)
 			})
 		}))
@@ -346,5 +338,5 @@ func (th *Theme) menuRow(gtx C, it MenuItem, level, i int, size image.Point) {
 			return pad(0, -2, 0, 0).Layout(gtx, lucideStroke("chevron-right", chev, 16, 2))
 		}))
 	}
-	layout.Flex{Alignment: layout.Middle, Gap: dp(gtx, 8)}.Layout(g, kids...)
+	RowGap(g, 8, kids...)
 }

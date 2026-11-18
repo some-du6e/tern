@@ -809,7 +809,6 @@ func (th *Theme) cardRow(gtx C, s *Scene, r *ThreadRow, top int) D {
 	}
 	paintRow(gtx, size, in, ring, focused)
 	cw := w - 2*dp(gtx, 10)
-	gap := dp(gtx, 6)
 	at := func(y, lh int, draw func(gtx C) D) {
 		defer op.Offset(image.Pt(dp(gtx, 10), y)).Push(gtx.Ops).Pop()
 		g := gtx
@@ -836,7 +835,7 @@ func (th *Theme) cardRow(gtx C, s *Scene, r *ThreadRow, top int) D {
 			}),
 			rigid(func(gtx C) D { return th.statusSlot(gtx, s, r, in, hot || menuOpen) }),
 		)
-		return layout.Flex{Alignment: layout.Middle, Gap: gap}.Layout(gtx, kids...)
+		return RowGap(gtx, 6, kids...)
 	})
 	// Line 2: the title, and the trailing icons when there's no line 3.
 	at(dp(gtx, 8+20+4), dp(gtx, 20), func(gtx C) D {
@@ -844,7 +843,7 @@ func (th *Theme) cardRow(gtx C, s *Scene, r *ThreadRow, top int) D {
 		if !meta {
 			kids = append(kids, rigid(func(gtx C) D { return th.trailingIcons(gtx, r, in) }))
 		}
-		return layout.Flex{Alignment: layout.Middle, Gap: gap}.Layout(gtx, kids...)
+		return RowGap(gtx, 6, kids...)
 	})
 	if meta {
 		at(dp(gtx, 8+20+4+20+2), dp(gtx, 16), func(gtx C) D { return th.metaLine(gtx, s, r, in) })
@@ -990,7 +989,7 @@ func (th *Theme) statusSlot(gtx C, s *Scene, r *ThreadRow, in rowInk, hot bool) 
 	m := op.Record(gtx.Ops)
 	g := gtx
 	g.Constraints.Min = image.Pt(0, gtx.Constraints.Max.Y)
-	d := layout.Flex{Alignment: layout.Middle}.Layout(g, kids...)
+	d := Row(g, kids...)
 	call := m.Stop()
 	w := max(d.Size.X, dp(gtx, 32))
 	defer op.Offset(image.Pt(w-d.Size.X, 0)).Push(gtx.Ops).Pop()
@@ -1016,7 +1015,7 @@ func (th *Theme) statusLabel(gtx C, s *Scene, r *ThreadRow, in rowInk) D {
 		if r.Timer != "" {
 			kids = append(kids, rigid(func(gtx C) D { return th.Text(gtx, t, r.Timer) }))
 		}
-		return layout.Flex{Alignment: layout.Middle, Gap: dp(gtx, 4)}.Layout(gtx, kids...)
+		return RowGap(gtx, 4, kids...)
 	}
 	if r.Status != StatusWoke {
 		return label(gtx)
@@ -1059,7 +1058,9 @@ func (th *Theme) rowControls(gtx C, s *Scene, r *ThreadRow, in rowInk) D {
 				}
 			}
 			m := op.Record(gtx.Ops)
-			d := body(in.of(col))(gtx)
+			g := gtx
+			g.Constraints.Min = image.Point{}
+			d := body(in.of(col))(g)
 			call := m.Stop()
 			size := image.Pt(d.Size.X+2*dp(gtx, 6), h)
 			func() {
@@ -1098,14 +1099,14 @@ func (th *Theme) rowControls(gtx C, s *Scene, r *ThreadRow, in rowInk) D {
 	if r.CanSettle {
 		kids = append(kids, button(liveID(s, "settle:"+r.ID), "Settle thread", func(col color.NRGBA) W {
 			return func(gtx C) D {
-				return layout.Flex{Alignment: layout.Middle, Gap: dp(gtx, 4)}.Layout(gtx,
+				return RowGap(gtx, 4,
 					rigid(LucideW("check", col, 14)),
 					rigid(func(gtx C) D { return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: col, MaxLines: 1}, "Settle") }),
 				)
 			}
 		}, nil))
 	}
-	d := layout.Flex{Alignment: layout.Middle}.Layout(gtx, kids...)
+	d := Row(gtx, kids...)
 	if r.CanSettle {
 		// Settle's -4dp end margin: it reaches into the row's padding.
 		d.Size.X -= dp(gtx, 4)
@@ -1165,7 +1166,7 @@ func (th *Theme) metaLine(gtx C, s *Scene, r *ThreadRow, in rowInk) D {
 		kids = append(kids, rigid(func(gtx C) D { return th.prBadge(gtx, r.PR, in) }))
 	}
 	kids = append(kids, rigid(func(gtx C) D { return th.trailingIcons(gtx, r, in) }))
-	return layout.Flex{Alignment: layout.Middle, Gap: dp(gtx, 6)}.Layout(gtx, kids...)
+	return RowGap(gtx, 6, kids...)
 }
 
 // trailingIcons are a row's machine icon (on a list mixing machines) and
@@ -1178,7 +1179,7 @@ func (th *Theme) trailingIcons(gtx C, r *ThreadRow, in rowInk) D {
 	if len(r.Providers) > 0 {
 		kids = append(kids, rigid(func(gtx C) D { return th.providerStack(gtx, r.Providers, in) }))
 	}
-	return layout.Flex{Alignment: layout.Middle, Gap: dp(gtx, 4)}.Layout(gtx, kids...)
+	return RowGap(gtx, 4, kids...)
 }
 
 // providerStack is the providers a thread has run on (SidebarProviderStack):
@@ -1196,7 +1197,7 @@ func (th *Theme) providerStack(gtx C, providers []string, in rowInk) D {
 			return providerMark(gtx, p, 14, in.of(alpha(col, 0x99)))
 		}))
 	}
-	return layout.Flex{Alignment: layout.Middle, Gap: dp(gtx, 6)}.Layout(gtx, kids...)
+	return RowGap(gtx, 6, kids...)
 }
 
 // statusPulse is T3's status-pulse at now: opacity 1 to 40% of its 2s, 0.5
@@ -1264,7 +1265,7 @@ func (th *Theme) prBadge(gtx C, pr *PRBadge, in rowInk) D {
 	case "closed":
 		icon, tone = "git-pull-request-closed", pick("red-600", "red-300", 0xe6)
 	}
-	return layout.Flex{Alignment: layout.Middle, Gap: dp(gtx, 2)}.Layout(gtx,
+	return RowGap(gtx, 2,
 		rigid(LucideW(icon, in.of(tone), 12)),
 		rigid(func(gtx C) D {
 			return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: in.of(SP.SecondaryLabel), MaxLines: 1}, pr.Text)
@@ -1323,7 +1324,7 @@ func (th *Theme) slimRow(gtx C, s *Scene, r *ThreadRow, top int) D {
 		kids = append(kids, rigid(th.terminalButton(s, r, in)))
 	}
 	kids = append(kids, rigid(func(gtx C) D { return th.slimSlot(gtx, s, r, in, rest, hot, shown) }))
-	layout.Flex{Alignment: layout.Middle, Gap: dp(gtx, 10)}.Layout(g, kids...)
+	RowGap(g, 10, kids...)
 	return D{Size: size}
 }
 
@@ -1342,13 +1343,13 @@ func (th *Theme) slimSlot(gtx C, s *Scene, r *ThreadRow, in rowInk, rest func(co
 		switch {
 		case r.Shelf == "snoozed" && r.Wake != "":
 			col := fade(in.of(rest(SP.InfoForeground)), k)
-			return layout.Flex{Alignment: layout.Middle, Gap: dp(gtx, 4)}.Layout(gtx,
+			return RowGap(gtx, 4,
 				rigid(LucideW("alarm-clock", col, 12)),
 				rigid(func(gtx C) D { return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: col, MaxLines: 1}, r.Wake) }))
 		case r.Woke:
 			col := in.of(rest(SP.WarningForeground))
 			return th.wokeButton(gtx, s, r, func(gtx C) D {
-				return layout.Flex{Alignment: layout.Middle, Gap: dp(gtx, 4)}.Layout(gtx,
+				return RowGap(gtx, 4,
 					rigid(LucideW("alarm-clock", col, 12)),
 					rigid(func(gtx C) D {
 						return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Font: UI(font.Medium), Color: col, MaxLines: 1}, "Woke")
@@ -1422,7 +1423,7 @@ func (th *Theme) shelfHeader(gtx C, s *Scene, sh *Shelf) D {
 	defer op.Offset(image.Pt(dp(gtx, 8), 0)).Push(gtx.Ops).Pop()
 	g := gtx
 	g.Constraints = layout.Exact(image.Pt(size.X-2*dp(gtx, 8), size.Y))
-	return layout.Flex{Alignment: layout.Middle, Gap: dp(gtx, 8)}.Layout(g,
+	return RowGap(g, 8,
 		rigid(func(gtx C) D {
 			return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Font: UI(font.Medium), Color: col, MaxLines: 1}, sh.Label)
 		}),
@@ -1457,7 +1458,7 @@ func (th *Theme) moreRow(gtx C, s *Scene, n int) D {
 	defer op.Offset(image.Pt(dp(gtx, 10), 0)).Push(gtx.Ops).Pop()
 	g := gtx
 	g.Constraints = layout.Exact(image.Pt(w-2*dp(gtx, 10), size.Y))
-	return layout.Flex{Alignment: layout.Middle, Gap: dp(gtx, 10)}.Layout(g,
+	return RowGap(g, 10,
 		rigid(LucideW("chevron-down", col, 16)),
 		rigid(func(gtx C) D {
 			return th.Text(gtx, Txt{Size: 14, LineH: 20.0 / 14, Color: col, MaxLines: 1}, fmt.Sprintf("Show %d more", n))
@@ -1581,7 +1582,7 @@ func (th *Theme) resultRow(gtx C, s *Scene, r *ThreadRow, i, top int) D {
 				})
 			}),
 		)
-		layout.Flex{Alignment: layout.Middle, Gap: dp(gtx, 10)}.Layout(g, kids...)
+		RowGap(g, 10, kids...)
 	}()
 	x0 := dp(gtx, sideInset)
 	th.hoverCard(gtx, s, r, image.Rectangle{Min: image.Pt(x0, top), Max: image.Pt(x0+w, top+size.Y)}, hovered)
@@ -1723,14 +1724,7 @@ func splitMiddle(value string) (head, tail string) {
 func (th *Theme) middleTruncate(gtx C, t Txt, value string) D {
 	w := gtx.Constraints.Max.X
 	t.MaxLines = 1
-	width := func(s string) int {
-		m := op.Record(gtx.Ops)
-		g := gtx
-		g.Constraints = layout.Constraints{Max: image.Pt(1<<20, gtx.Constraints.Max.Y)}
-		d := th.Text(g, Txt{Size: t.Size, LineH: t.LineH, Font: t.Font, Color: t.Color}, s)
-		m.Stop()
-		return d.Size.X
-	}
+	width := func(s string) int { return th.textWidth(gtx, t, s) }
 	head, tail := splitMiddle(value)
 	if tail == "" || width(value) <= w {
 		return th.Text(gtx, t, value)
@@ -1747,6 +1741,15 @@ func (th *Theme) middleTruncate(gtx C, t Txt, value string) D {
 		}
 	}
 	return th.Text(gtx, t, string(hr[:lo])+"…"+tail)
+}
+
+// textWidth is how wide s sets in t, on one line.
+func (th *Theme) textWidth(gtx C, t Txt, s string) int {
+	m := op.Record(gtx.Ops)
+	gtx.Constraints = layout.Constraints{Max: image.Pt(1<<20, 1<<20)}
+	d := th.Text(gtx, t, s)
+	m.Stop()
+	return d.Size.X
 }
 
 // ---------- the hover card ----------
@@ -1805,7 +1808,7 @@ func (th *Theme) cardBody(gtx C, r *ThreadRow) D {
 	line := func(icon W, text string, col color.NRGBA) layout.FlexChild {
 		return rigid(func(gtx C) D {
 			return pad(0, 0, 0, 2).Layout(gtx, func(gtx C) D {
-				return layout.Flex{Alignment: layout.Middle, Gap: dp(gtx, 8)}.Layout(gtx,
+				return RowGap(gtx, 8,
 					rigid(icon),
 					flexed(func(gtx C) D {
 						return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: col, MaxLines: 1}, text)
@@ -1834,7 +1837,7 @@ func (th *Theme) cardBody(gtx C, r *ThreadRow) D {
 		gap()
 		lines = append(lines, rigid(func(gtx C) D {
 			return pad(0, 0, 0, 2).Layout(gtx, func(gtx C) D {
-				return layout.Flex{Alignment: layout.Middle, Gap: dp(gtx, 8)}.Layout(gtx,
+				return RowGap(gtx, 8,
 					rigid(LucideW("git-branch", muted, 12)),
 					flexed(func(gtx C) D { return th.middleTruncate(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: soft}, r.Branch) }))
 			})
