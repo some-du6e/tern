@@ -142,7 +142,7 @@ func (th *Theme) shellKeys(gtx C, s *Scene) {
 			th.push(Action{ID: "confirm:abort", Kind: "click"})
 		case ke.Name == key.NameEscape && menuOpen(s):
 			th.push(Action{ID: "menus.close", Kind: "click"})
-		case ke.Name == "J" && s.Card != nil:
+		case ke.Name == "J" && hasProject(s):
 			th.push(Action{ID: "terminal.toggle", Kind: "click"})
 		case ke.Name == "O" && s.Card != nil && s.Card.OpenIn != nil && !s.Card.OpenIn.Disabled:
 			th.push(Action{ID: "card.openin", Kind: "click"})
@@ -150,7 +150,7 @@ func (th *Theme) shellKeys(gtx C, s *Scene) {
 			// The keyboard's open shows the card's first row focused.
 			th.in.keyFocus = true
 			th.push(th.detailsAction())
-		case ke.Name == "B" && ke.Modifiers.Contain(key.ModAlt) && s.Card != nil:
+		case ke.Name == "B" && ke.Modifiers.Contain(key.ModAlt) && hasProject(s):
 			th.push(Action{ID: "browser.toggle", Kind: "click"})
 		case ke.Name == "B" && !ke.Modifiers.Contain(key.ModShift|key.ModAlt):
 			th.push(Action{ID: "sidebar.toggle", Kind: "click"})
@@ -349,11 +349,16 @@ func (th *Theme) titleButtonW(id, tip string, b titleButton) W {
 		off := op.Offset(image.Pt((s-dp(gtx, 16))/2, (s-dp(gtx, 16))/2)).Push(gtx.Ops)
 		LucideW(b.icon, icon, 16)(gtx)
 		off.Pop()
-		if !b.disabled {
+		if b.disabled {
+			// It takes no presses but still says why: T3's tooltip sits on
+			// a wrapper around the disabled toggle.
+			id += ".off"
+			th.hover(gtx, id, r.Max)
+		} else {
 			th.hit(gtx, id, r.Max)
-			if tip != "" {
-				th.tipAt(gtx, id, tip, r.Max, false, b.tipAlign)
-			}
+		}
+		if tip != "" {
+			th.tipAt(gtx, id, tip, r.Max, false, b.tipAlign)
 		}
 		return D{Size: r.Max}
 	}
@@ -375,7 +380,6 @@ func (th *Theme) sidebarTrigger(gtx C, s *Scene, visible bool) {
 // details, terminal drawer, right panel. While the right panel is open the
 // details toggle moves into the chat header and Maximize joins them.
 func (th *Theme) titlebarControls(gtx C, s *Scene, size image.Point, panelOpen bool) {
-	none := s.Card == nil
 	type ctl struct {
 		id, tip string
 		b       titleButton
@@ -383,15 +387,16 @@ func (th *Theme) titlebarControls(gtx C, s *Scene, size image.Point, panelOpen b
 	var ctls []ctl
 	if !panelOpen {
 		ctls = append(ctls, ctl{th.detailsID(), "Toggle thread details (" + ShortcutShift("B") + ")",
-			titleButton{icon: "square-menu", pressed: th.detailsShown(s), disabled: none, tipAlign: 1}})
+			titleButton{icon: "square-menu", pressed: th.detailsShown(s), disabled: s.Card == nil, tipAlign: 1}})
 	}
-	term := "Toggle terminal drawer (" + Shortcut("J") + ")"
+	none := !hasProject(s)
+	term, right := "Toggle terminal drawer ("+Shortcut("J")+")", "Toggle right panel ("+ShortcutAlt("B")+")"
 	if none {
-		term = "Terminal drawer is unavailable"
+		term, right = "Terminal drawer is unavailable", "Right panel is unavailable"
 	}
 	ctls = append(ctls,
 		ctl{"terminal.toggle", term, titleButton{icon: "panel-bottom", pressed: s.Term != nil, disabled: none, tipAlign: 1}},
-		ctl{"browser.toggle", "Toggle right panel (" + ShortcutAlt("B") + ")", titleButton{icon: "panel-right", pressed: s.Web != nil, disabled: none, tipAlign: 1}},
+		ctl{"browser.toggle", right, titleButton{icon: "panel-right", pressed: s.Web != nil, disabled: none, tipAlign: 1}},
 	)
 	n := len(ctls)
 	gap := dp(gtx, 4)
@@ -403,6 +408,10 @@ func (th *Theme) titlebarControls(gtx C, s *Scene, size image.Point, panelOpen b
 		x += dp(gtx, controlSize) + gap
 	}
 }
+
+// hasProject reports whether the open thread or draft is in a project:
+// without one T3 has no terminal or right panel to open.
+func hasProject(s *Scene) bool { return s.Header != nil && s.Header.Project != "" }
 
 // detailsShown reports whether the details card or its popover is up.
 func (th *Theme) detailsShown(s *Scene) bool {

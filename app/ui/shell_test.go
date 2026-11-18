@@ -3,6 +3,7 @@ package ui
 import (
 	"image"
 	"testing"
+	"time"
 )
 
 // The lane rule reproduces T3's measured lanes at 1440x900 with the
@@ -59,4 +60,37 @@ func TestTitlebarControls(t *testing.T) {
 	for _, x := range []int{1335, 1367, 1399} {
 		wantPixel(t, img, image.Pt(x+2, 14), P.Background, "unpressed toggle")
 	}
+}
+
+// Without a project the terminal toggle (at 1367, 12) is off: a click does
+// nothing, but resting on it still brings up its tooltip under it, held
+// to its right edge (PanelLayoutControls.tsx). In a project it toggles.
+func TestTerminalToggleNeedsProject(t *testing.T) {
+	defer SetDark(false)
+	SetDark(true)
+	s := &Scene{Live: true, Title: "A thread", Header: &ChatHeader{Server: true}, Card: &ThreadDetails{}}
+	l := newLive(image.Pt(1440, 900), nil)
+	l.draw = func(gtx C) { l.th.Desktop(gtx, s) }
+	l.frame(0)
+	l.click(1367+14, 12+14)
+	for _, a := range l.frame(10 * time.Millisecond) {
+		if a.ID == "terminal.toggle" {
+			t.Fatalf("the toggle acted without a project: %+v", a)
+		}
+	}
+	l.move(1367+14, 12+14)
+	l.frame(0)
+	l.frame(800 * time.Millisecond)
+	wantPixel(t, l.pixels(t), image.Pt(1367+28-5, 12+28+4+8), P.Popover, "the unavailable toggle's tooltip")
+
+	s.Header.Project = "atlas"
+	l.frame(0)
+	l.click(1367+14, 12+14)
+	acts := l.frame(10 * time.Millisecond)
+	for _, a := range acts {
+		if a.ID == "terminal.toggle" {
+			return
+		}
+	}
+	t.Fatalf("in a project the toggle should toggle: %+v", acts)
 }
