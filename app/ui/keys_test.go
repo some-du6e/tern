@@ -15,8 +15,8 @@ import (
 	"gioui.org/unit"
 )
 
-// The composer: Enter submits, Alt+Enter submits as a queue, Shift+Enter is
-// a newline.
+// The composer: Enter submits, Mod+Enter submits the other way (T3's
+// alternate dispatch, a queue while a run works), Shift+Enter is a newline.
 func TestComposerKeys(t *testing.T) {
 	th := NewTheme()
 	var r gioinput.Router
@@ -41,10 +41,10 @@ func TestComposerKeys(t *testing.T) {
 	if got := th.EditorText("composer"); got != "hello\n" {
 		t.Fatalf("Shift+Enter: text %q, want a newline", got)
 	}
-	r.Queue(key.Event{Name: key.NameReturn, Modifiers: key.ModAlt, State: key.Press})
+	r.Queue(key.Event{Name: key.NameReturn, Modifiers: key.ModShortcut, State: key.Press})
 	acts := frame()
 	if len(acts) == 0 || acts[0].Kind != "submit" || !acts[0].Alt {
-		t.Fatalf("Alt+Enter: actions %+v, want an Alt submit", acts)
+		t.Fatalf("Mod+Enter: actions %+v, want an alternate submit", acts)
 	}
 	r.Queue(key.Event{Name: key.NameReturn, State: key.Press})
 	acts = frame()
@@ -56,6 +56,66 @@ func TestComposerKeys(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("Enter: actions %+v, want a submit", acts)
+	}
+}
+
+// With the @, / or $ menu open, its keys are the menu's: the arrows,
+// Enter, Tab and Escape go to it, not to the prompt. With it shut, Up on
+// an empty prompt goes back through the history, and Down comes forward
+// only while the prompt is the one it brought back.
+func TestComposerMenuKeys(t *testing.T) {
+	th := NewTheme()
+	var r gioinput.Router
+	var ops op.Ops
+	frame := func() []Action {
+		ops.Reset()
+		gtx := layout.Context{Ops: &ops, Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Exact(image.Pt(800, 200)), Source: r.Source()}
+		th.Editor("composer").Submit = true
+		th.editor(gtx, "composer", Txt{}, "")
+		r.Frame(&ops)
+		return th.Actions()
+	}
+	press := func(name key.Name) []Action {
+		r.Queue(key.Event{Name: name, State: key.Press}, key.Event{Name: name, State: key.Release})
+		return frame()
+	}
+	keyed := func(acts []Action, id, kind, text string) bool {
+		for _, a := range acts {
+			if a.ID == id && a.Kind == kind && a.Text == text {
+				return true
+			}
+		}
+		return false
+	}
+	th.Focus("composer")
+	frame()
+	th.SetEditorText("composer", "@comp")
+	frame()
+	th.in.composer.menu = true
+	for _, k := range []key.Name{key.NameDownArrow, key.NameUpArrow, key.NameReturn, key.NameTab, key.NameEscape} {
+		if acts := press(k); !keyed(acts, "suggest", "key", string(k)) {
+			t.Fatalf("%s with the menu open: %+v", k, acts)
+		}
+	}
+	if got := th.EditorText("composer"); got != "@comp" {
+		t.Fatalf("the menu's keys reached the prompt: %q", got)
+	}
+
+	th.in.composer.menu, th.in.composer.history = false, true
+	th.SetEditorText("composer", "")
+	frame()
+	if acts := press(key.NameUpArrow); !keyed(acts, "composer", "history", "back") {
+		t.Fatalf("Up on an empty prompt: %+v", acts)
+	}
+	th.RecallPrompt("an earlier prompt")
+	frame()
+	if acts := press(key.NameDownArrow); !keyed(acts, "composer", "history", "forward") {
+		t.Fatalf("Down on a recalled prompt: %+v", acts)
+	}
+	th.SetEditorText("composer", "typed")
+	frame()
+	if acts := press(key.NameUpArrow); keyed(acts, "composer", "history", "back") {
+		t.Fatalf("Up on a typed prompt walked the history: %+v", acts)
 	}
 }
 

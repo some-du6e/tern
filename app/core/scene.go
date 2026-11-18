@@ -3,6 +3,7 @@ package core
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -356,7 +357,11 @@ func (a *App) draftScene(s *ui.Scene) {
 	}
 	s.PickProject = true
 	s.Hero = p.Title
-	s.Placeholder = "Ask anything…"
+	if e != nil && e.config != nil && e.config.ScratchWorkspaceRoot != "" {
+		// The scratch project holds threads that belong to no project.
+		s.Scratch = (a.comp.scratch == a.draft && p.ID == "") || p.WorkspaceRoot == e.config.ScratchWorkspaceRoot
+		s.CanScratch = !s.Scratch
+	}
 	if a.projectsOpen {
 		s.ProjectsHero = a.projectsHero
 		s.Projects = &ui.Traits{}
@@ -455,7 +460,6 @@ func (a *App) threadScene(s *ui.Scene) {
 	if t.Branch != "" {
 		s.Project += "  ›  " + t.Branch
 	}
-	s.Placeholder = "Ask, steer or queue.   /  commands    @  files"
 	v := a.view
 	if v == nil || !v.loaded {
 		s.Empty = "Loading…"
@@ -502,17 +506,11 @@ func homePath(p string) string {
 	return p
 }
 
-var runtimeModes = []struct{ id, label, desc string }{
-	{"full-access", "Full access", "Runs commands and edits without asking"},
-	{"auto", "Auto", "The provider decides what needs approval"},
-	{"auto-accept-edits", "Accept edits", "Edits go through, commands ask first"},
-	{"approval-required", "Ask every time", "Every command and edit asks first"},
-}
-
+// runtimeLabel is a runtime mode's name, T3's.
 func runtimeLabel(id string) string {
-	for _, m := range runtimeModes {
-		if m.id == id {
-			return m.label
+	for _, m := range ui.RuntimeModes {
+		if m.ID == id {
+			return m.Label
 		}
 	}
 	return id
@@ -849,7 +847,8 @@ func (a *App) foldRuns(t *t3.Thread, v *threadView, list []*t3.TurnItem) (map[st
 // yesNo requests get Approve / For session / Decline.
 var yesNo = map[string]bool{"command": true, "file-read": true, "file-change": true, "permission": true}
 
-// pending fills the approval card, questions and queue for the open thread.
+// pending fills the approval, the questions and the queue for the open
+// thread.
 func (a *App) pending(s *ui.Scene, t *t3.Thread, v *threadView) {
 	if req := t.PendingRuntimeRequest; req != nil {
 		var asked *t3.TurnItem
@@ -861,13 +860,16 @@ func (a *App) pending(s *ui.Scene, t *t3.Thread, v *threadView) {
 		if asked != nil && len(asked.Questions) > 0 {
 			picked := a.answers[req.ID]
 			for qi, q := range asked.Questions {
-				uq := ui.Question{Header: q.Header, Text: q.Question, MultiSel: q.MultiSelect, Picked: -1}
+				uq := ui.Question{Header: q.Header, Text: q.Question, MultiSel: q.MultiSelect,
+					NoCustom: q.AllowCustomAnswer != nil && !*q.AllowCustomAnswer}
 				for oi, o := range q.Options {
 					uq.Options = append(uq.Options, o.Label)
+					uq.Descs = append(uq.Descs, o.Description)
 					uq.Chosen = append(uq.Chosen, picked[qi*100+oi])
 				}
 				s.Questions = append(s.Questions, uq)
 			}
+			s.Dismissible = asked.ResponseMode == "message"
 		} else {
 			detail := strings.ReplaceAll(req.Kind, "-", " ")
 			if asked != nil {
@@ -1026,46 +1028,24 @@ func (a *App) composerScene(s *ui.Scene, key string) {
 		s.Thumbs = append(s.Thumbs, p.thumb)
 	}
 	c := a.choiceFor(key)
-	s.Model, s.Provider = "Pick a model", ""
-	if p := a.provider(c.sel.InstanceID); p != nil {
+	s.Model, s.Provider = "", ""
+	p := a.provider(c.sel.InstanceID)
+	if p != nil {
 		s.Provider = providerName(p)
 	}
 	m := a.model(c.sel)
 	switch {
 	case m != nil:
-		s.Model = m.Name
+		s.Model = modelShortName(*m, p.Driver)
+		s.Effort, s.Fast, s.Window = effortSuffix(c.sel, m)
 	case c.sel.Model != "":
 		s.Model = c.sel.Model
 	}
-	if m != nil {
-		// The options button label: each set value, joined with " · ".
-		var parts []string
-		first := true
-		for _, d := range m.Capabilities.OptionDescriptors {
-			v := optionValue(c.sel, d)
-			switch d.Type {
-			case "select":
-				def := ""
-				for _, o := range d.Options {
-					if o.IsDefault {
-						def = o.ID
-					}
-				}
-				for _, o := range d.Options {
-					if o.ID == v && (first || o.ID != def) {
-						parts = append(parts, o.Label)
-					}
-				}
-				first = false
-			case "boolean":
-				if b, _ := v.(bool); b {
-					parts = append(parts, strings.TrimSuffix(d.Label, " Mode"))
-				}
-			}
-		}
-		s.Effort = strings.Join(parts, " · ")
-	}
-	s.Runtime = runtimeLabel(c.runtime)
+	s.Runtime = c.runtime
+	// The footer names the mode only while it isn't the default; a new
+	// thread's strip always does.
+	s.RuntimeChip = a.draft == "" && c.runtime != a.defaultRuntime()
+	s.Sending = a.comp.sending
 	if a.picker != nil {
 		s.Picker = a.pickerScene(c)
 	}
@@ -1073,15 +1053,54 @@ func (a *App) composerScene(s *ui.Scene, key string) {
 		s.Traits = traits(c.sel, m)
 	}
 	if a.accessOpen {
-		g := ui.Trait{Label: "Access"}
-		for i, rm := range runtimeModes {
-			g.Choices = append(g.Choices, ui.TraitChoice{Label: rm.label, Desc: rm.desc})
-			if rm.id == c.runtime {
+		g := ui.Trait{Label: "Permissions"}
+		for i, rm := range a.runtimeModes(c) {
+			g.Choices = append(g.Choices, ui.TraitChoice{Label: rm.Label, Desc: rm.Desc})
+			if rm.ID == c.runtime {
 				g.Sel = i
 			}
 		}
 		s.Access = &ui.Traits{Groups: []ui.Trait{g}}
 	}
+	for _, it := range a.comp.items {
+		s.Suggest = append(s.Suggest, it.Suggestion)
+	}
+	s.SuggestSel, s.SuggestEmpty = a.comp.sel, a.menuEmpty()
+
+	req, qs := a.questions()
+	var q *t3.Question
+	if len(qs) > 0 {
+		a.syncQuestions(req)
+		q = &qs[min(a.comp.question, len(qs)-1)]
+		s.Question = min(a.comp.question, len(qs)-1)
+	}
+	t := a.curThread()
+	approval := a.draft == "" && t != nil && t.PendingRuntimeRequest != nil && t.PendingRuntimeRequest.Kind != "user_input"
+	s.Placeholder = placeholder(approval, q, a.cfg() != nil && len(a.pickerTabs()) == 0)
+}
+
+// defaultRuntime is the server's default permission mode.
+func (a *App) defaultRuntime() string {
+	if a.cfg() != nil && a.cfg().Settings.DefaultRuntimeMode != "" {
+		return a.cfg().Settings.DefaultRuntimeMode
+	}
+	return "full-access"
+}
+
+// runtimeModes is the modes c's provider supports, in T3's order: all of
+// them when it names none (resolveCompatibleRuntimeMode).
+func (a *App) runtimeModes(c *choice) []ui.RuntimeMode {
+	p := a.provider(c.sel.InstanceID)
+	if p == nil || len(p.SupportedRuntimeModes) == 0 {
+		return ui.RuntimeModes
+	}
+	var out []ui.RuntimeMode
+	for _, m := range ui.RuntimeModes {
+		if slices.Contains(p.SupportedRuntimeModes, m.ID) {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 func traits(sel t3.ModelSelection, m *t3.Model) *ui.Traits {

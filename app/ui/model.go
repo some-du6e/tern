@@ -100,14 +100,15 @@ type Approval struct {
 	YesNo  bool // false for requests tern can only show, like MCP elicitation
 }
 
+// Question is one of an agent's questions (ComposerPendingUserInputPanel.tsx).
 type Question struct {
 	Header   string
 	Text     string
 	Options  []string
-	Picked   int
-	Chosen   []bool // multi-select picks; when set it wins over Picked
-	Custom   string
+	Descs    []string // each option's description, "" for none
+	Chosen   []bool   // which options are picked
 	MultiSel bool
+	NoCustom bool // only an option answers it, nothing typed
 }
 
 type FileChange struct {
@@ -174,8 +175,13 @@ type TraitChoice struct {
 	Off         bool // shown but can't be picked now
 }
 
+// Suggestion is a row of the composer's @, / and $ menu (ComposerCommandMenu.tsx).
 type Suggestion struct {
-	Name, Hint, Desc string
+	Icon   string // the lucide icon before it: "file", "folder"; "" for none
+	Prefix string // muted text before the label, like "/skill:"
+	Label  string
+	Desc   string
+	Badge  string // a skill's source: "Personal", "Project", "System"
 }
 
 type SignIn struct {
@@ -256,22 +262,32 @@ type Scene struct {
 	Items      []Item
 	MoreAbove  bool
 
+	// The composer (docs/ui/07-composer.md). Live, the "composer" editor
+	// holds the prompt; mockups put it in Composer.
 	Composer     string
 	Hero         string // a new thread's project: "What should we build in <Hero>?" over a centered composer
+	Scratch      bool   // the draft has no project: "What should we work on?"
+	CanScratch   bool   // the hero offers "or start without a project"
 	ProjectsHero bool   // the Projects menu opens under the heading's project name
 	Placeholder  string
-	Images       int     // mockup placeholders
-	Thumbs       []Thumb // the composer's pasted images, live
+	Thumbs       []Thumb // the composer's pictures, as tiles over the prompt
 	Provider     string  // "Claude", "Codex", "Gemini": picks the logo
-	Model        string
-	Effort       string // the options button label, values joined with " · "
-	Runtime      string
+	Model        string  // the model's short name, on the trigger
+	Effort       string  // the trigger's effort word, "" for none
+	Fast         bool    // the trigger's bolt, for Fast mode
+	Window       string  // the trigger's context window, like "1M"
+	Runtime      string  // the runtime mode: "full-access", "approval-required", …
+	RuntimeChip  bool    // the footer shows the permissions chip: the mode isn't the default
+	Sending      bool    // a send is on its way: the send button spins
 	Queue        []string
 	Approval     *Approval
 	Questions    []Question
+	Question     int  // the question on show
+	Answering    bool // the answers are on their way
+	Dismissible  bool // the questions can be dismissed unanswered
 	Suggest      []Suggestion
 	SuggestSel   int
-	SuggestHead  string
+	SuggestEmpty string // the menu's line while it has no items: still searching, or nothing matched
 
 	Changes []FileChange
 	Run     *RunInfo

@@ -16,12 +16,12 @@ import (
 	_ "golang.org/x/image/webp"
 )
 
-// thumbPx is the stored thumbnail's side: 52 dp at 2x.
-const thumbPx = 104
+// thumbPx is the stored thumbnail's side: a 64dp tile at 2x.
+const thumbPx = 128
 
-// Thumb is a pasted image, shrunk once for the composer.
+// Thumb is a picture, shrunk once for its tile and chip.
 type Thumb struct {
-	N  int // its number, 1 to 9: the composer's text holds ChipRune(N) for it
+	N  int // its chip's number, 1 to 9, when the text holds ChipRune(N); 0 for a tile alone
 	op paint.ImageOp
 	ok bool
 }
@@ -38,31 +38,40 @@ func NewThumb(data []byte) Thumb {
 	if side == 0 {
 		return Thumb{}
 	}
-	// The middle square, like a photo grid.
+	// The middle square, like a photo grid (object-cover).
 	sq := image.Rect(0, 0, side, side).Add(b.Min).Add(image.Pt((b.Dx()-side)/2, (b.Dy()-side)/2))
 	dst := image.NewRGBA(image.Rect(0, 0, thumbPx, thumbPx))
 	draw.ApproxBiLinear.Scale(dst, dst.Bounds(), src, sq, draw.Src, nil)
 	return Thumb{op: paint.NewImageOp(dst), ok: true}
 }
 
-// pasted draws thumbnail i of the composer, with its remove button when
-// remove is set.
-func (th *Theme) pasted(t Thumb, i int, remove bool) W {
+// drawThumb paints t sizePx square at the origin, rounded rad, or does
+// nothing while it has no picture.
+func drawThumb(gtx C, t Thumb, sizePx, rad int) bool {
+	if !t.ok {
+		return false
+	}
+	defer clip.UniformRRect(image.Rect(0, 0, sizePx, sizePx), rad).Push(gtx.Ops).Pop()
+	k := float32(sizePx) / thumbPx
+	defer op.Affine(f32.Affine2D{}.Scale(f32.Point{}, f32.Pt(k, k))).Push(gtx.Ops).Pop()
+	t.op.Add(gtx.Ops)
+	paint.PaintOp{}.Add(gtx.Ops)
+	return true
+}
+
+// pasted draws a sent message's picture i as a 52dp thumbnail, numbered
+// to match its marker in the text.
+func (th *Theme) pasted(t Thumb, i int) W {
 	return func(gtx C) D {
 		s := dp(gtx, 52)
 		r := image.Rect(0, 0, s, s)
-		if !t.ok {
-			thumb(i)(gtx)
-		} else {
-			cl := clip.UniformRRect(r, dp(gtx, 6)).Push(gtx.Ops)
-			scale := float32(s) / thumbPx
-			st := op.Affine(f32.Affine2D{}.Scale(f32.Point{}, f32.Pt(scale, scale))).Push(gtx.Ops)
-			t.op.Add(gtx.Ops)
-			paint.PaintOp{}.Add(gtx.Ops)
-			st.Pop()
-			cl.Pop()
-			strokeRect(gtx, ColBorderHi, r, dp(gtx, 6), float32(max(1, dp(gtx, 1))))
+		if !drawThumb(gtx, t, s, dp(gtx, 6)) {
+			fill(gtx, over(P.Muted, P.Background), r, dp(gtx, 6))
+			off := op.Offset(image.Pt((s-dp(gtx, 16))/2, (s-dp(gtx, 16))/2)).Push(gtx.Ops)
+			LucideW("image", P.MutedForeground, 16)(gtx)
+			off.Pop()
 		}
+		strokeRect(gtx, ColBorderHi, r, dp(gtx, 6), float32(max(1, dp(gtx, 1))))
 		if t.N != 0 {
 			// The number, bottom left, to match the marker in the text.
 			m := op.Record(gtx.Ops)
@@ -77,20 +86,6 @@ func (th *Theme) pasted(t Thumb, i int, remove bool) W {
 			tx.Pop()
 			at.Pop()
 		}
-		if !remove {
-			return D{Size: r.Max}
-		}
-		// The × sits in the top-right corner.
-		b := dp(gtx, 18)
-		off := op.Offset(image.Pt(s-b-dp(gtx, 3), dp(gtx, 3))).Push(gtx.Ops)
-		th.Click("image.remove:"+strconv.Itoa(i), func(gtx C) D {
-			circle(gtx, alpha(ColWindow, 0xd8), image.Pt(b/2, b/2), b/2)
-			off := op.Offset(image.Pt((b-dp(gtx, 12))/2, (b-dp(gtx, 12))/2)).Push(gtx.Ops)
-			DrawIcon(gtx, IconClose, ColText, 12)
-			off.Pop()
-			return D{Size: image.Pt(b, b)}
-		})(gtx)
-		off.Pop()
 		return D{Size: r.Max}
 	}
 }

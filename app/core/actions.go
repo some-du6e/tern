@@ -54,21 +54,38 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 			a.pickModel(th, 0)
 		}
 		return
-	case act.Kind == "change" && id == "composer":
-		a.syncImages(act.Text)
+	case (act.Kind == "change" || act.Kind == "caret") && id == "composer":
+		a.composerChanged(th, act.Text)
+		return
+	case act.Kind == "history" && id == "composer":
+		a.recall(th, act.Text == "back")
 		return
 	case act.Kind == "paste" && id == "composer":
 		a.paste(th)
 		return
 	case act.Kind == "submit" && id == "composer":
-		a.send(th, act.Alt)
+		a.mu.Lock()
+		asking := len(a.questionsLocked()) > 0
+		a.mu.Unlock()
+		if asking {
+			a.answerAll(th)
+		} else {
+			a.send(th, act.Alt)
+		}
+		return
+	case act.Kind == "key" && id == "suggest":
+		a.menuKey(th, act.Text)
+		return
+	case act.Kind == "hover" && id == "suggest":
+		a.mu.Lock()
+		if i := atoi(act.Text); i >= 0 && i < len(a.comp.items) {
+			a.comp.sel = i
+		}
+		a.mu.Unlock()
 		return
 	case act.Kind == "submit" && id == "browser.url":
 		a.browserGo(act.Text)
 		th.Unfocus()
-		return
-	case act.Kind == "submit" && id == "answer":
-		a.answer(th)
 		return
 	case act.Kind == "key" && act.Text == "⎋":
 		a.closeMenus()
@@ -268,9 +285,17 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		a.respond(map[string]any{"decision": arg})
 	case "q":
 		qi, oi := split2(arg)
-		a.pickAnswer(qi, oi)
+		a.pickOption(th, qi, oi)
+	case "q.prev":
+		a.moveQuestion(th, -1)
 	case "answer":
-		a.answer(th)
+		a.answerAll(th)
+	case "suggest":
+		a.pickItem(th, atoi(arg))
+	case "attach":
+		a.attach()
+	case "project.scratch":
+		a.startScratch(th)
 	case "dismiss":
 		a.dispatchOpen("thread.user-input.dismiss", map[string]any{"requestId": a.pendingID()})
 	case "queue":
@@ -320,8 +345,9 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		}
 		_, ci := split2(arg)
 		a.mu.Lock()
-		if ci >= 0 && ci < len(runtimeModes) {
-			a.choiceFor(a.composerKey()).runtime = runtimeModes[ci].id
+		c := a.choiceFor(a.composerKey())
+		if modes := a.runtimeModes(c); ci >= 0 && ci < len(modes) {
+			c.runtime = modes[ci].ID
 		}
 		a.accessOpen = false
 		a.mu.Unlock()
@@ -720,45 +746,6 @@ func (a *App) pickAnswer(qi, oi int) {
 	m[k] = on
 }
 
-// answer sends {questionId: value | [values] | typed text}.
-func (a *App) answer(th *ui.Theme) {
-	typed := strings.TrimSpace(th.EditorText("answer"))
-	a.mu.Lock()
-	req, qs := a.questions()
-	picked := a.answers[req]
-	answers := map[string]any{}
-	for qi, q := range qs {
-		var vals []string
-		for oi, o := range q.Options {
-			if picked[qi*100+oi] {
-				v := o.Value
-				if v == "" {
-					v = o.Label
-				}
-				vals = append(vals, v)
-			}
-		}
-		switch {
-		case typed != "" && (len(vals) == 0 || len(qs) == 1):
-			answers[q.ID] = typed
-		case len(vals) == 0:
-			a.fail(errors.New("answer \"" + q.Header + "\" first"))
-			a.mu.Unlock()
-			return
-		case q.MultiSelect:
-			answers[q.ID] = vals
-		default:
-			answers[q.ID] = vals[0]
-		}
-	}
-	a.mu.Unlock()
-	if req == "" || len(answers) == 0 {
-		return
-	}
-	th.SetEditorText("answer", "")
-	a.respond(map[string]any{"answers": answers})
-}
-
 func (a *App) currentTab() int {
 	c := a.choiceFor(a.composerKey())
 	for i, id := range a.pickerTabs() {
@@ -869,10 +856,11 @@ func (a *App) sendable(sel t3.ModelSelection, text string) (t3.ModelSelection, s
 }
 
 // send works like T3's composer: modes first if they changed, then the
-// message with the chosen model. Busy threads get deliveryIntent "auto" and
-// the server picks steer or queue; queue forces the queue. Drafts become a
-// thread through launchThread.
-func (a *App) send(th *ui.Theme, queue bool) {
+// message with the chosen model. While a run works it steers the run, or
+// with alternate (Mod+Enter) queues behind it; servers that resolve the
+// dispatch themselves are told which. Drafts become a thread through
+// launchThread.
+func (a *App) send(th *ui.Theme, alternate bool) {
 	text := ui.TrimText(th.EditorText("composer"))
 	a.mu.Lock()
 	if text == "" && len(a.images[a.composerKey()]) == 0 {
@@ -911,15 +899,15 @@ func (a *App) send(th *ui.Theme, queue bool) {
 	imgs := a.images[key]
 	delete(a.images, key)
 	delete(a.trash, key)
-	a.notice = "Sending…"
+	a.comp.sending, a.comp.pos = true, 0
 	a.mu.Unlock()
 	th.SetEditorText("composer", "")
 	saveDraft(key, "")
 	a.changed()
 	go func() {
-		err := a.deliver(e, conn, draft, t, sel, runtime, body, text, imgs, queue, smart, inline)
+		err := a.deliver(e, conn, draft, t, sel, runtime, body, text, imgs, alternate, smart, inline)
 		a.mu.Lock()
-		a.notice = ""
+		a.comp.sending = false
 		if err != nil {
 			a.fail(err)
 			if len(imgs) > 0 && len(a.images[key]) == 0 {
@@ -942,7 +930,7 @@ func (a *App) send(th *ui.Theme, queue bool) {
 	}()
 }
 
-func (a *App) deliver(e *envState, conn *t3.Conn, draft string, t *t3.Thread, sel t3.ModelSelection, runtime, body, text string, imgs []pastedImage, queue, smart, inline bool) error {
+func (a *App) deliver(e *envState, conn *t3.Conn, draft string, t *t3.Thread, sel t3.ModelSelection, runtime, body, text string, imgs []pastedImage, alternate, smart, inline bool) error {
 	attachments, recs, err := upload(conn, imgs)
 	if err != nil {
 		return err
@@ -1003,14 +991,21 @@ func (a *App) deliver(e *envState, conn *t3.Conn, draft string, t *t3.Thread, se
 	}
 	mergeMap(cmd, msg)
 	busy := t.ActiveRunID != ""
+	if req := t.PendingRuntimeRequest; req != nil && req.Kind != "user_input" {
+		// A message sent while an approval waits declines it and redirects
+		// the agent (useComposerSend.ts), steering the waiting turn.
+		if err := conn.Dispatch(map[string]any{"type": "runtime-request.respond", "threadId": t.ID, "requestId": req.ID, "decision": "decline"}); err != nil {
+			return err
+		}
+		alternate = false
+	}
+	mode := dispatchMode(busy, alternate)
 	switch {
-	case queue && busy:
+	case mode == "queue" || (busy && !smart):
 		cmd["dispatchMode"] = map[string]any{"type": "queue_after_active"}
 	case smart:
 		cmd["dispatchMode"] = map[string]any{"type": "start_immediately"}
-		cmd["deliveryIntent"] = "auto"
-	case busy:
-		cmd["dispatchMode"] = map[string]any{"type": "queue_after_active"}
+		cmd["deliveryIntent"] = mode
 	default:
 		cmd["dispatchMode"] = map[string]any{"type": "start_immediately"}
 	}

@@ -9,6 +9,7 @@ import (
 
 	"gioui.org/font"
 	"gioui.org/io/key"
+	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
@@ -17,10 +18,10 @@ import (
 )
 
 // A picture in text is a chip, like T3's web composer: ChipRune(n) and then
-// chipPad figure spaces, which reserve the pill's width and don't wrap. The
+// chipPad figure spaces, which reserve the chip's width and don't wrap. The
 // text keeps the run whole: the caret steps over it, Backspace and Delete
 // take all of it, and a run broken some other way is cleared. drawChips
-// paints the pill over it.
+// paints the chip over it.
 
 const (
 	chipFill = ' ' // FIGURE SPACE: wide and non-breaking
@@ -208,32 +209,26 @@ type textRegions interface {
 	Regions(start, end int, regions []widget.Region) []widget.Region
 }
 
-// Chip colours, shaped like T3's context chips (the accent at 11% for the
-// fill, mixed 34% into the border and 22% into the text) but in the app's
-// blue: T3's image red read as an error.
-var chipAccent, chipBorder, chipText color.NRGBA
-
-// chipColors derives them from the theme; SetDark calls it.
-func chipColors() {
-	chipAccent = ColAccent
-	chipBorder = mix(chipAccent, ColBorderHi, 0.34)
-	chipText = mix(chipAccent, ColText, 0.22)
-}
-
 func mix(a, b color.NRGBA, t float32) color.NRGBA {
 	f := func(x, y uint8) uint8 { return uint8(float32(x)*t + float32(y)*(1-t) + 0.5) }
 	return color.NRGBA{f(a.R, b.R), f(a.G, b.G), f(a.B, b.B), 0xff}
 }
 
-// drawChips paints a pill over each chip in t: the image icon and
-// label(n). bg is what the text sits on, scroll how far it has scrolled.
-func (th *Theme) drawChips(gtx C, t textRegions, size image.Point, scroll image.Point, bg color.NRGBA, sizeSp float32, label func(n int) string) {
+// drawChips paints T3's image chip over each chip in t (ContextChip.tsx,
+// contextChipParts.tsx): no pill, the picture itself at 1em, rounded 4,
+// then 0.2em on its label in medium, both in --context-chip-image, on the
+// text's baseline. chip gives chip n's label and picture; one still
+// loading shows lucide's image. bg is what the text sits on, to hide the
+// run the chip holds; scroll is how far the text has scrolled.
+func (th *Theme) drawChips(gtx C, t textRegions, size image.Point, scroll image.Point, bg color.NRGBA, sizeSp float32, chip func(n int) (string, Thumb)) {
 	spans := chipSpans(t.Text())
 	if len(spans) == 0 {
 		return
 	}
 	defer clip.Rect{Max: size}.Push(gtx.Ops).Pop()
 	em := gtx.Metric.PxPerSp * sizeSp
+	ink := P.ContextChipImage
+	label := Txt{Size: unit.Sp(sizeSp), Color: ink, Font: UI(font.Medium), MaxLines: 1}
 	var regs []widget.Region
 	for _, c := range spans {
 		regs = t.Regions(c.start, c.end, regs[:0])
@@ -246,26 +241,26 @@ func (th *Theme) drawChips(gtx C, t textRegions, size image.Point, scroll image.
 				b = b.Union(r.Bounds.Sub(scroll))
 			}
 		}
+		base := b.Max.Y - regs[0].Baseline
 		// Hide the rune and its fill; the circled digit dips below the line.
 		fill(gtx, bg, image.Rect(b.Min.X, b.Min.Y-dp(gtx, 2), b.Max.X, b.Max.Y+dp(gtx, 3)), 0)
-		h := min(int(1.41*em+0.5), b.Dy())
-		top := b.Min.Y + (b.Dy()-h)/2
-		pill := image.Rect(b.Min.X+dp(gtx, 1), top, b.Max.X-dp(gtx, 1), top+h)
-		rad := int(0.5*em + 0.5)
-		fill(gtx, mix(chipAccent, bg, 0.11), pill, rad)
-		strokeRect(gtx, chipBorder, pill, rad, float32(max(1, dp(gtx, 1))))
-		padX := int(0.5*em + 0.5)
-		iconPx := int(1.17*0.86*em + 0.5)
-		off := op.Offset(image.Pt(pill.Min.X+padX, pill.Min.Y+(h-iconPx)/2)).Push(gtx.Ops)
-		id := DrawIcon(gtx, IconImage, chipText, float32(iconPx)/gtx.Metric.PxPerDp)
+		name, pic := chip(c.n)
+		icon := int(em + 0.5)
+		// The picture centres on the chip's line, the text's ascent over
+		// its descent (line-height: normal).
+		mid := base - int(0.36*em+0.5)
+		off := op.Offset(image.Pt(b.Min.X, mid-icon/2)).Push(gtx.Ops)
+		if !drawThumb(gtx, pic, icon, dp(gtx, 4)) {
+			LucideW("image", ink, sizeSp)(gtx)
+		}
 		off.Pop()
+		x := b.Min.X + icon + int(0.2*em+0.5)
 		m := op.Record(gtx.Ops)
 		lg := gtx
-		lg.Constraints.Min = image.Point{}
-		lg.Constraints.Max.X = max(0, pill.Dx()-2*padX-id.Size.X-int(0.33*em))
-		ld := th.Text(lg, Txt{Size: unit.Sp(sizeSp * 0.86), Color: chipText, Font: UI(font.Medium), MaxLines: 1}, label(c.n))
+		lg.Constraints = layout.Constraints{Max: image.Pt(max(0, b.Max.X-x), b.Dy())}
+		ld := th.Text(lg, label, name)
 		call := m.Stop()
-		lo := op.Offset(image.Pt(pill.Min.X+padX+id.Size.X+int(0.33*em), pill.Min.Y+(h-ld.Size.Y)/2)).Push(gtx.Ops)
+		lo := op.Offset(image.Pt(x, base-(ld.Size.Y-ld.Baseline))).Push(gtx.Ops)
 		call.Add(gtx.Ops)
 		lo.Pop()
 	}
@@ -273,6 +268,19 @@ func (th *Theme) drawChips(gtx C, t textRegions, size image.Point, scroll image.
 
 // ImageLabel is a composer picture's name in its chip.
 func ImageLabel(n int) string { return "Image " + strconv.Itoa(n) }
+
+// chipPictures is drawChips' chip for the composer: picture n's label and
+// its thumbnail among thumbs.
+func chipPictures(thumbs []Thumb) func(n int) (string, Thumb) {
+	return func(n int) (string, Thumb) {
+		for _, t := range thumbs {
+			if t.N == n {
+				return ImageLabel(n), t
+			}
+		}
+		return ImageLabel(n), Thumb{}
+	}
+}
 
 // editorScroll is how far the editor has scrolled. Regions are in document
 // coordinates and the caret's are on screen, so the difference is the scroll.
@@ -307,11 +315,11 @@ func editorScroll(ed *widget.Editor, size image.Point) image.Point {
 // selectable, which the chips need for their positions.
 func (th *Theme) chipText(gtx C, id, s string, labels []string) D {
 	d, sel := th.selectableSel(gtx, id, s, UI(font.Normal), SizeBody, ColText, 1.42)
-	th.drawChips(gtx, sel, d.Size, image.Point{}, ColFrameHover, float32(SizeBody), func(n int) string {
+	th.drawChips(gtx, sel, d.Size, image.Point{}, ColFrameHover, float32(SizeBody), func(n int) (string, Thumb) {
 		if n <= len(labels) {
-			return labels[n-1]
+			return labels[n-1], Thumb{}
 		}
-		return ImageLabel(n)
+		return ImageLabel(n), Thumb{}
 	})
 	return d
 }

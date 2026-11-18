@@ -18,10 +18,11 @@ const maxImages = 8
 type pastedImage struct {
 	id string // the composer's own id, which names its context record
 	n  int    // its number in the composer: ChipText(n) in the text
-	// pending is true until the chip is typed into the composer.
-	pending bool
-	img     clip.Image
-	thumb   ui.Thumb
+	// pending is true until the paste lands in the composer; chip, that it
+	// went in as a chip, not just a tile.
+	pending, chip bool
+	img           clip.Image
+	thumb         ui.Thumb
 }
 
 // readClipboard is clip.Images, swapped out in tests.
@@ -74,23 +75,37 @@ func (a *App) pasted(key string, imgs []clip.Image, err error) {
 	if len(added) == 0 {
 		return
 	}
-	// Like the web's chips, a picture goes where the caret is and is sent at
-	// that spot.
+	// Like T3's (useComposerAttachmentIntake.ts), a picture pasted into
+	// text, over a selection or into an answer goes in as a chip at the
+	// caret and is sent at that spot; one pasted into an empty prompt is a
+	// tile alone and goes at the end.
 	a.onUI(func(th *ui.Theme) {
 		a.mu.Lock()
 		here := a.composerKey() == key
+		text := drafts[key]
+		if here {
+			text = th.EditorText("composer")
+		}
+		chip := ui.TrimText(ui.StripChips(text)) != "" || (here && th.EditorSelected("composer")) || len(a.questionsLocked()) > 0
 		markers := ""
 		for i := range a.images[key] {
 			p := &a.images[key][i]
 			if p.pending && slices.Contains(added, p.id) {
-				p.pending = false
-				markers += p.marker()
+				p.pending, p.chip = false, chip
+				if chip {
+					markers += p.marker()
+				} else {
+					p.thumb.N = 0
+				}
 			}
 		}
 		a.mu.Unlock()
-		if here {
+		switch {
+		case markers == "":
+			a.changed()
+		case here:
 			th.InsertText("composer", markers)
-		} else {
+		default:
 			saveDraft(key, drafts[key]+markers)
 		}
 	})
@@ -121,6 +136,7 @@ func (p pastedImage) label() string  { return ui.ImageLabel(p.n) }
 
 // syncImages keeps the pictures in step with the composer's text: deleting
 // a picture's chip drops it, and undo bringing the chip back restores it.
+// A tile without a chip stays until it's removed.
 func (a *App) syncImages(text string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -130,7 +146,7 @@ func (a *App) syncImages(text string) {
 	}
 	var keep []pastedImage
 	for _, p := range a.images[key] {
-		if p.pending || strings.Contains(text, p.marker()) {
+		if p.pending || !p.chip || strings.Contains(text, p.marker()) {
 			keep = append(keep, p)
 		} else {
 			a.trash[key] = append(a.trash[key], p)
@@ -170,7 +186,11 @@ func (a *App) unpaste(th *ui.Theme, arg string) {
 		delete(a.images, key)
 	}
 	a.mu.Unlock()
-	th.DeleteChip("composer", gone.n)
+	if gone.chip {
+		th.DeleteChip("composer", gone.n)
+	} else {
+		a.changed()
+	}
 }
 
 // upload puts the images on the environment, in order, and returns the

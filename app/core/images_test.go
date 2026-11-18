@@ -36,32 +36,46 @@ func TestPasteImages(t *testing.T) {
 		t.Fatalf("other thread shows %d thumbs", len(s.Thumbs))
 	}
 	a.openThread("swiss/t1")
-	// Each paste typed its chip at the caret.
+	// Pasted into an empty prompt, as in T3, they're tiles alone: no chips.
 	th := ui.NewTheme()
 	a.RunUI(th)
-	if got := th.EditorText("composer"); got != ui.ChipText(1)+ui.ChipText(2) {
-		t.Fatalf("composer = %q", got)
+	if got := th.EditorText("composer"); got != "" {
+		t.Fatalf("composer = %q, want no chips", got)
 	}
+	if s := a.build(time.Now()); s.Thumbs[0].N != 0 || s.Thumbs[1].N != 0 {
+		t.Fatalf("tiles numbered as chips: %+v", s.Thumbs)
+	}
+	// Into text, a picture goes in as a chip at the caret.
+	th.SetEditorText("composer", "look ")
+	a.pasted(a.composerKey(), []clip.Image{shot}, nil)
+	a.RunUI(th)
+	if got := th.EditorText("composer"); got != "look "+ui.ChipText(3) {
+		t.Fatalf("composer = %q, want the chip after the text", got)
+	}
+	// Removing a tile leaves the text alone; removing a chip's picture
+	// takes its chip.
 	a.handle(th, ui.Action{ID: "image.remove:0", Kind: "click"})
-	if s := a.build(time.Now()); len(s.Thumbs) != 1 || s.Thumbs[0].N != 2 {
-		t.Fatalf("after remove: %+v", s.Thumbs)
+	if s := a.build(time.Now()); len(s.Thumbs) != 2 || th.EditorText("composer") != "look "+ui.ChipText(3) {
+		t.Fatalf("after removing a tile: %+v, %q", s.Thumbs, th.EditorText("composer"))
 	}
-	if got := th.EditorText("composer"); got != ui.ChipText(2) {
-		t.Fatalf("chip left behind: %q", got)
+	a.handle(th, ui.Action{ID: "image.remove:1", Kind: "click"})
+	if s := a.build(time.Now()); len(s.Thumbs) != 1 || th.EditorText("composer") != "look " {
+		t.Fatalf("chip left behind: %+v, %q", s.Thumbs, th.EditorText("composer"))
 	}
 	a.pasted(a.composerKey(), []clip.Image{shot}, nil)
 	a.RunUI(th)
-	if got := th.EditorText("composer"); got != ui.ChipText(2)+ui.ChipText(1) {
+	if got := th.EditorText("composer"); got != "look "+ui.ChipText(1) {
 		t.Fatalf("the free number is reused: %q", got)
 	}
 
-	// Backspacing a chip drops its picture; undo brings it back.
-	a.handle(th, ui.Action{ID: "composer", Kind: "change", Text: "look " + ui.ChipText(1)})
-	if imgs := a.images[a.composerKey()]; len(imgs) != 1 || imgs[0].n != 1 {
-		t.Fatalf("after deleting ②: %+v", imgs)
+	// Backspacing a chip drops its picture; undo brings it back. The tile
+	// stays either way.
+	a.handle(th, ui.Action{ID: "composer", Kind: "change", Text: "look "})
+	if imgs := a.images[a.composerKey()]; len(imgs) != 1 || imgs[0].n != 2 {
+		t.Fatalf("after deleting ①: %+v", imgs)
 	}
-	a.handle(th, ui.Action{ID: "composer", Kind: "change", Text: "look " + ui.ChipText(1) + ui.ChipText(2)})
-	if imgs := a.images[a.composerKey()]; len(imgs) != 2 || imgs[1].n != 2 {
+	a.handle(th, ui.Action{ID: "composer", Kind: "change", Text: "look " + ui.ChipText(1)})
+	if imgs := a.images[a.composerKey()]; len(imgs) != 2 || imgs[0].n != 1 {
 		t.Fatalf("after undo: %d images", len(imgs))
 	}
 
@@ -85,8 +99,8 @@ func TestOpenThreadComposerUsesRef(t *testing.T) {
 	a := testApp(t)
 	a.openThread("swiss/t1")
 	a.choices["swiss/t1"] = &choice{runtime: "approval-required"}
-	if s := a.build(time.Now()); s.Runtime != runtimeLabel("approval-required") {
-		t.Fatalf("runtime label = %q", s.Runtime)
+	if s := a.build(time.Now()); s.Runtime != "approval-required" || !s.RuntimeChip {
+		t.Fatalf("runtime = %q, chip %v", s.Runtime, s.RuntimeChip)
 	}
 }
 

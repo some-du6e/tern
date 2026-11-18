@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/some-du6e/tern/app/clip"
 	"github.com/some-du6e/tern/app/t3"
 	"github.com/some-du6e/tern/app/ui"
 )
@@ -104,6 +105,11 @@ type App struct {
 	answers       map[string]map[int]bool // question id -> picked option indexes
 
 	uiOps []func(*ui.Theme) // editor and focus changes from goroutines, run on the UI goroutine
+
+	comp composerState // the composer's menu, history and questions
+	// ChooseImages asks for image files to attach: the system's file
+	// dialog, where the platform has one.
+	ChooseImages func() ([]clip.Image, error)
 
 	// ver counts state changes. Scene reuses its last result while ver and
 	// the clock's second stay the same, so idle frames cost almost nothing.

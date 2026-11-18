@@ -484,7 +484,7 @@ func (th *Theme) canvas(gtx C, s *Scene) {
 		return draw(g)
 	}
 	switch {
-	case s.Live && s.Hero != "" && len(s.Items) == 0:
+	case (s.Hero != "" || s.Scratch) && len(s.Items) == 0:
 		in(0, size.Y, func(gtx C) D {
 			gtx.Constraints.Min.Y = size.Y
 			return th.hero(gtx, s, false)

@@ -65,7 +65,8 @@ type input struct {
 	editors     map[string]*widget.Editor
 	lists       map[string]*layout.List
 	focus       string
-	caret       [2]int                        // the composer's selection last frame, to step over chips
+	caret       [2]int // the composer's selection last frame, to step over chips
+	composer    composerUI
 	selectables map[string]*widget.Selectable // selectable text: sent messages, code blocks
 	copies      map[string]string             // copy buttons' text, by click id
 	copied      map[string]time.Time          // when each was last clicked, for its check
@@ -372,17 +373,6 @@ func (th *Theme) editor(gtx C, id string, t Txt, placeholder string) D {
 		gtx.Execute(key.FocusCmd{Tag: ed})
 		th.in.focus = ""
 	}
-	// Alt+Enter has its own meaning in the composer (queue), so take it
-	// before the editor turns it into a submit.
-	for {
-		ev, ok := gtx.Event(key.Filter{Focus: ed, Name: key.NameReturn, Required: key.ModAlt})
-		if !ok {
-			break
-		}
-		if ke, ok := ev.(key.Event); ok && ke.State == key.Press {
-			th.push(Action{ID: id, Kind: "submit", Text: ed.Text(), Alt: true})
-		}
-	}
 	// The composer takes pictures too. Its Ctrl+V goes to the app, which
 	// looks for an image and calls PasteText when there's none.
 	if id == "composer" {
@@ -395,8 +385,7 @@ func (th *Theme) editor(gtx C, id string, t Txt, placeholder string) D {
 				th.push(Action{ID: id, Kind: "paste"})
 			}
 		}
-	}
-	if id == "composer" {
+		th.composerKeys(gtx, ed)
 		th.chipKeys(gtx, id, ed)
 	}
 	if th.in.paste == id {
@@ -448,7 +437,12 @@ func (th *Theme) editor(gtx C, id string, t Txt, placeholder string) D {
 		if fixChips(ed) {
 			th.push(Action{ID: id, Kind: "change", Text: ed.Text()})
 		}
+		was := th.in.caret
 		th.snapChips(ed)
+		if th.in.caret != was {
+			// The menus follow the word at the caret.
+			th.push(Action{ID: id, Kind: "caret", Text: ed.Text()})
+		}
 	}
 	if t.Size == 0 {
 		t.Size = SizeUI
@@ -468,11 +462,44 @@ func (th *Theme) editor(gtx C, id string, t Txt, placeholder string) D {
 		th.Text(gtx, Txt{Size: t.Size, Color: ColFaint, Font: t.Font, MaxLines: 1}, placeholder)
 	}
 	ed.LineHeightScale = t.LineH
-	d := ed.Layout(gtx, th.Shaper, t.Font, unit.Sp(t.Size), col(t.Color), col(alpha(ColAccent, 0x60)))
+	sel := col(alpha(ColAccent, 0x60))
 	if id == "composer" {
-		th.drawChips(gtx, ed, d.Size, editorScroll(ed, d.Size), ColFrame, float32(t.Size), ImageLabel)
+		sel = col(selection())
+	}
+	d := ed.Layout(gtx, th.Shaper, t.Font, unit.Sp(t.Size), col(t.Color), sel)
+	if id == "composer" {
+		th.drawChips(gtx, ed, d.Size, editorScroll(ed, d.Size), glass(), float32(t.Size), chipPictures(th.in.composer.thumbs))
 	}
 	return d
+}
+
+// EditorCaret is where the caret of the editor named id is, in runes.
+func (th *Theme) EditorCaret(id string) int {
+	c, _ := th.Editor(id).Selection()
+	return c
+}
+
+// EditorSelected reports whether the editor named id has text selected.
+func (th *Theme) EditorSelected(id string) bool {
+	s, e := th.Editor(id).Selection()
+	return s != e
+}
+
+// ReplaceText replaces runes [start, end) of the editor named id with s
+// and puts the caret after it.
+func (th *Theme) ReplaceText(id string, start, end int, s string) {
+	ed := th.Editor(id)
+	ed.SetCaret(start, end)
+	ed.Insert(s)
+	th.push(Action{ID: id, Kind: "change", Text: ed.Text()})
+}
+
+// RecallPrompt puts an earlier prompt in the composer, the caret at its
+// end; while it's unchanged, the arrows keep walking the history.
+func (th *Theme) RecallPrompt(s string) {
+	th.SetEditorText("composer", s)
+	th.in.composer.recalled = s
+	th.push(Action{ID: "composer", Kind: "change", Text: s})
 }
 
 // InsertText types s at the caret of the editor named id.

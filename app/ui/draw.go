@@ -204,7 +204,6 @@ const (
 	IconSearch
 	IconDots
 	IconStop
-	IconSend
 	IconPin
 	IconCheck
 	IconTerminal
@@ -220,7 +219,6 @@ const (
 	IconForward
 	IconReload
 	IconSplit
-	IconGauge
 	IconStar
 	IconStarFill
 	IconFolder
@@ -255,9 +253,6 @@ func DrawIcon(gtx C, ic Icon, col color.NRGBA, sizeDp float32) D {
 		}
 	case IconStop:
 		fill(gtx, col, image.Rect(int(4*u), int(4*u), int(12*u), int(12*u)), int(1.5*u))
-	case IconSend:
-		polyline(gtx, col, sw, pt(8, 13), pt(8, 3.5))
-		polyline(gtx, col, sw, pt(4, 7.5), pt(8, 3.5), pt(12, 7.5))
 	case IconPin:
 		polyline(gtx, col, sw, pt(6, 2.8), pt(10, 2.8))
 		polyline(gtx, col, sw, pt(6.7, 3), pt(6.2, 7.5), pt(4.2, 9.6), pt(11.8, 9.6), pt(9.8, 7.5), pt(9.3, 3))
@@ -330,15 +325,6 @@ func DrawIcon(gtx C, ic Icon, col color.NRGBA, sizeDp float32) D {
 		}
 		p.Close()
 		paint.FillShape(gtx.Ops, col, clip.Outline{Path: p.End()}.Op())
-	case IconGauge:
-		var arc []f32.Point
-		for i := 0; i <= 20; i++ {
-			a := math.Pi*0.8 + float64(i)/20*math.Pi*1.4
-			arc = append(arc, pt(8+5.5*float32(math.Cos(a)), 9+5.5*float32(math.Sin(a))))
-		}
-		polyline(gtx, col, sw, arc...)
-		polyline(gtx, col, sw, pt(8, 9), pt(11, 5.8))
-		circle(gtx, col, pt(8, 9).Round(), int(1.2*u+0.5))
 	case IconSplit:
 		strokeRect(gtx, col, image.Rect(int(2.5*u), int(2.5*u), int(13.5*u), int(13.5*u)), int(1.5*u), sw)
 		polyline(gtx, col, sw, pt(2.5, 8), pt(13.5, 8))
@@ -454,7 +440,6 @@ const (
 	Primary
 	Ghost
 	Danger
-	Toggled
 )
 
 // Button is an ImGui-style flat button: frame color, no shadow, small radius.
@@ -468,8 +453,6 @@ func (th *Theme) Button(v Variant, ic Icon, hasIcon bool, label string) W {
 			bg, fg, border = color.NRGBA{}, ColDim, color.NRGBA{}
 		case Danger:
 			bg, fg, border = alpha(ColRed, 0x1e), ColRed, alpha(ColRed, 0x50)
-		case Toggled:
-			bg, fg, border = ColAccentSoft, ColAccentHi, alpha(ColAccent, 0x70)
 		}
 		px := float32(9)
 		if label == "" {

@@ -91,10 +91,11 @@ func base(selected string) *ui.Scene {
 		StateLabel:  "Running",
 		Project:     "tern  ›  t3/go-client",
 		Provider:    "Claude",
-		Model:       "Claude Opus 5.5",
-		Effort:      "High · Fast",
-		Runtime:     "Full access",
-		Placeholder: "Ask, steer or queue.   /  commands    $  skills    @  files",
+		Model:       "Opus 5.5",
+		Effort:      "High",
+		Fast:        true,
+		Runtime:     "full-access",
+		Placeholder: "Ask anything. @ files, $ skills, / commands",
 		Phase:       -1.1,
 		MoreAbove:   true,
 	}
@@ -133,6 +134,7 @@ func approvalScene() *ui.Scene {
 	items = append(items, ui.Item{Kind: ui.ItemTool, Tool: ui.ToolCommand, Title: "git push -u origin t3/go-client", Meta: "waiting for you"})
 	s.Items = items
 	s.Approval = &ui.Approval{Kind: "command", Detail: "git push -u origin t3/go-client", Cwd: "~/.t3/worktrees/tern"}
+	s.Placeholder = "Send a message to decline and redirect the agent"
 	s.Picker = &ui.ModelPicker{
 		Tabs: []ui.PickerTab{{}, {Provider: "Claude"}, {Provider: "Codex"}},
 		Tab:  1,
@@ -241,9 +243,11 @@ func questionScene() *ui.Scene {
 		{Kind: ui.ItemThought, Text: "Both work. The scope decision is the user's, not mine."},
 	}
 	s.Questions = []ui.Question{
-		{Header: "Session", Text: "Which session should the watch get?", Options: []string{"30-day, full access", "30-day, read + operate only", "1-hour, renew from phone"}, Picked: 1},
-		{Header: "Pairing", Text: "How should the watch receive the credential?", Options: []string{"QR code on desktop", "Typed 6-word code", "Through the iPhone app"}, Picked: 0},
+		{Header: "Session", Text: "Which session should the watch get?", Options: []string{"30-day, full access", "30-day, read + operate only", "1-hour, renew from phone"},
+			Descs: []string{"", "It can't open a terminal", "The phone renews it while it's near"}, Chosen: []bool{false, true, false}},
+		{Header: "Pairing", Text: "How should the watch receive the credential?", Options: []string{"QR code on desktop", "Typed 6-word code", "Through the iPhone app"}, Chosen: []bool{true, false, false}},
 	}
+	s.Placeholder = "Type your own answer, or leave this blank to use the selected option"
 	s.Changes = nil
 	return s
 }
@@ -258,14 +262,13 @@ func draftScene() *ui.Scene {
 	s.MoreAbove = false
 	s.Items = []ui.Item{{Kind: ui.ItemNotice, Text: "The first message starts the thread."}}
 	s.Composer = "/re"
-	s.Images = 2
-	s.SuggestHead = "COMMANDS  ·  CLAUDE"
+	s.Thumbs = pictures(2)
 	s.Suggest = []ui.Suggestion{
-		{Name: "/review", Hint: "[pr]", Desc: "Review the current diff for bugs"},
-		{Name: "/resume", Desc: "Resume an earlier conversation"},
-		{Name: "/release-notes", Desc: "Show what changed in this version"},
-		{Name: "/frontend:refactor", Hint: "<path>", Desc: "Refactor a component"},
-		{Name: "/pr-comments", Desc: "Fetch review comments on this branch"},
+		{Label: "/review", Desc: "Review the current diff for bugs"},
+		{Label: "/resume", Desc: "Resume an earlier conversation"},
+		{Label: "/release-notes", Desc: "Show what changed in this version"},
+		{Prefix: "/skill:", Label: "frontend-refactor", Desc: "Refactor a component", Badge: "Personal"},
+		{Label: "/pr-comments", Desc: "Fetch review comments on this branch"},
 	}
 	s.Run = nil
 	s.Changes = nil
@@ -289,6 +292,6 @@ func phoneScene() *ui.Scene {
 	s.State = ui.ThreadApproval
 	s.StateLabel = "Needs approval"
 	s.Approval = &ui.Approval{Kind: "command", Detail: "git push -u origin t3/go-client", Cwd: "tern"}
-	s.Placeholder = "Steer or queue…"
+	s.Placeholder = "Send a message to decline and redirect the agent"
 	return s
 }

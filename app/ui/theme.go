@@ -66,7 +66,7 @@ func init() { SetDark(false) }
 var (
 	ColWindow, ColPanel, ColPanelHi, ColFrame, ColFrameHover, ColFrameActive color.NRGBA
 	ColBorder, ColBorderHi, ColText, ColDim, ColFaint                        color.NRGBA
-	ColAccent, ColAccentHi, ColAccentSoft, ColSelected                       color.NRGBA
+	ColAccent, ColAccentHi, ColSelected                                      color.NRGBA
 	ColGreen, ColAmber, ColRed, ColViolet, ColCyan, ColCode                  color.NRGBA
 	ColAddBg, ColAddFg, ColDelBg, ColDelFg, ColHunkFg                        color.NRGBA
 )
@@ -81,13 +81,12 @@ func legacyColors() {
 	ColBorder, ColBorderHi = on(P.Border), on(P.Input)
 	ColText, ColDim, ColFaint = on(P.Foreground), on(P.MutedForeground), on(alpha(P.MutedForeground, 0xb3))
 	ColAccent, ColAccentHi = on(P.Primary), on(P.Primary)
-	ColAccentSoft, ColSelected = on(alpha(P.Primary, 0x2c)), on(alpha(P.Primary, 0x24))
+	ColSelected = on(alpha(P.Primary, 0x24))
 	ColGreen, ColAmber, ColRed = on(P.Success), on(P.Warning), on(P.Error)
 	ColViolet, ColCyan, ColCode = Tailwind["violet-500"], on(P.Info), on(P.CodeForeground)
 	ColAddBg, ColAddFg = on(alpha(P.DiffAddition, 0x26)), on(P.DiffAdditionForeground)
 	ColDelBg, ColDelFg = on(alpha(P.DiffDeletion, 0x26)), on(P.DiffDeletionForeground)
 	ColHunkFg = on(P.Info)
-	chipColors()
 }
 
 // Type scale, in sp.
