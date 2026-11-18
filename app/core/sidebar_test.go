@@ -592,8 +592,15 @@ func TestSearch(t *testing.T) {
 		t3.Thread{ID: "3", Title: "Something else", CreatedAt: ago(now, 3*time.Minute)},
 	)
 	th := ui.NewTheme()
+	// Each frame's scene, built under the lock as Scene does: the search's
+	// pause runs on a timer.
+	scene := func() *ui.Scene {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		return a.build(now)
+	}
 	a.handle(th, ui.Action{ID: "search", Kind: "change", Text: "sidebar"})
-	s := a.build(now)
+	s := scene()
 	var got []string
 	for _, r := range s.Sidebar.Results {
 		got = append(got, r.Title)
@@ -602,17 +609,17 @@ func TestSearch(t *testing.T) {
 		t.Fatalf("results %v, items %d", got, len(s.Sidebar.Items))
 	}
 	a.handle(th, ui.Action{ID: "search", Kind: "key", Text: "↓"})
-	if s = a.build(now); s.Sidebar.Highlight != 1 {
+	if s = scene(); s.Sidebar.Highlight != 1 {
 		t.Fatalf("highlight %d after ArrowDown", s.Sidebar.Highlight)
 	}
 	// With no match, the servers are asked once the typing pauses; till
 	// they've answered (here, no one, with no socket), the list says
 	// they're looking.
 	a.handle(th, ui.Action{ID: "search", Kind: "change", Text: "zebra"})
-	if s = a.build(now); s.Sidebar.NoResults != "Searching thread messages…" {
+	if s = scene(); s.Sidebar.NoResults != "Searching thread messages…" {
 		t.Fatalf("no results yet: %q", s.Sidebar.NoResults)
 	}
-	for end := time.Now().Add(5 * time.Second); s.Sidebar.NoResults != "No threads found" && time.Now().Before(end); s = a.build(now) {
+	for end := time.Now().Add(5 * time.Second); s.Sidebar.NoResults != "No threads found" && time.Now().Before(end); s = scene() {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if s.Sidebar.NoResults != "No threads found" {
@@ -621,9 +628,11 @@ func TestSearch(t *testing.T) {
 	// Enter opens the highlighted result, and the search clears.
 	th.SetEditorText("search", "sidebar")
 	a.handle(th, ui.Action{ID: "search", Kind: "change", Text: "sidebar"})
+	scene()
 	a.handle(th, ui.Action{ID: "search", Kind: "key", Text: "↓"})
+	scene()
 	a.handle(th, ui.Action{ID: "search", Kind: "submit"})
-	s = a.build(now)
+	s = scene()
 	open := ""
 	for _, it := range s.Sidebar.Items {
 		if it.Row != nil && it.Row.Active {
