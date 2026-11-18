@@ -42,8 +42,9 @@ type terminal struct {
 	ref, cwd string
 	conn     *t3.Conn
 	threadID string
-	attached bool // the server has the shell: a resize before that is lost
-	closed   bool // the tab was closed: nothing reattaches it
+	attached bool   // the server has the shell: a resize before that is lost
+	closed   bool   // the tab was closed: nothing reattaches it
+	queued   string // text to type once the shell has started
 }
 
 const (
@@ -69,6 +70,50 @@ func (a *App) toggleTerminal() {
 			d.open = false
 			a.fail(err)
 		}
+	}
+}
+
+// runInTerminal is a code block's "Run in terminal": the command runs in
+// the open thread's terminal, with the drawer open on it
+// (useChatTerminalActions.ts:317-328).
+func (a *App) runInTerminal(command string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.openID == "" || command == "" {
+		return
+	}
+	d := a.drawers[a.openID]
+	if d == nil {
+		d = &drawer{}
+		a.drawers[a.openID] = d
+	}
+	d.open = true
+	if len(d.terms) == 0 {
+		if err := a.newTerminalLocked(d); err != nil {
+			d.open = false
+			a.fail(err)
+			return
+		}
+	}
+	term := d.terms[d.active]
+	term.queued += command + "\r"
+	if term.attached {
+		term.typeQueued()
+	}
+}
+
+// typeQueued types what waited for the shell to start. Call with the
+// lock held.
+func (term *terminal) typeQueued() {
+	s := term.queued
+	term.queued = ""
+	if s == "" {
+		return
+	}
+	defer func() { recover() }() // the terminal closed meanwhile
+	select {
+	case term.input <- func() { term.emu.SendText(s) }:
+	default:
 	}
 }
 
@@ -173,6 +218,7 @@ func (a *App) termEvent(term *terminal, ev t3.TermEvent) {
 			if cols, rows := term.cols, term.rows; cols != termCols || rows != termRows {
 				go term.conn.TerminalResize(term.threadID, term.id, cols, rows)
 			}
+			term.typeQueued()
 		}
 		if ev.Snapshot != nil {
 			term.status = ev.Snapshot.Status

@@ -15,7 +15,6 @@ import (
 	"gioui.org/unit"
 
 	"github.com/some-du6e/tern/app/core"
-	"github.com/some-du6e/tern/app/shell"
 	"github.com/some-du6e/tern/app/ui"
 )
 
@@ -36,7 +35,6 @@ const fadeIn = 280 * time.Millisecond
 
 func run(w *app.Window) error {
 	th := ui.NewTheme()
-	th.CanRun, th.Run = shell.Runnable, shell.Run
 	th.ControlsLeft, th.Frameless = controlsLeft, frameless
 	// T3 follows the system's light or dark setting; so does tern.
 	var dark atomic.Bool
@@ -111,8 +109,8 @@ func moving(s *ui.Scene) bool {
 			return true
 		}
 	}
-	for _, it := range s.Items {
-		if it.Live {
+	for _, r := range s.Timeline.Rows {
+		if r.Live || r.Kind == ui.RowWorking {
 			return true
 		}
 	}
