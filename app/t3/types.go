@@ -122,9 +122,80 @@ type TurnItem struct {
 	} `json:"steps"`
 	Failure *struct {
 		Message string `json:"message"`
+		Class   string `json:"class"` // usage_limit, provider_error, …
+		Code    string `json:"code"`
+		ResetAt string `json:"resetAt"`
 	} `json:"failure"`
 	Questions   []Question        `json:"questions"`
 	Attachments []json.RawMessage `json:"attachments"`
+
+	// What the timeline's rows read (orchestrationV2.ts:1559-1912).
+	ParentItemID   string `json:"parentItemId"`
+	ProviderTurnID string `json:"providerTurnId"`
+	// A user message: turn_start, queued_turn, steer or
+	// promoted_queued_to_steer; who sent it.
+	InputIntent    string `json:"inputIntent"`
+	CreatedBy      string `json:"createdBy"`
+	CreationSource string `json:"creationSource"`
+	// An assistant message: commentary, partial_answer, final_answer.
+	Phase           string             `json:"phase"`
+	OutputOmitted   bool               `json:"outputOmitted"`
+	ViewedImagePath string             `json:"viewedImagePath"`
+	ToolSurface     string             `json:"toolSurface"` // browser, computer
+	Changes         []FileChangeDetail `json:"changes"`
+	Results         []SearchResult     `json:"results"`
+	RequestKind     string             `json:"requestKind"`
+	AppName         string             `json:"appName"`
+	Options         []ApprovalOption   `json:"options"`
+	QuestionAnswer  *QuestionAnswer    `json:"questionAnswer"`
+	Retry           *struct {
+		Attempt      int  `json:"attempt"`
+		MaxAttempts  *int `json:"maxAttempts"`
+		RetryDelayMs *int `json:"retryDelayMs"`
+	} `json:"retry"`
+	Summary          string `json:"summary"`
+	BeforeTokenCount *int   `json:"beforeTokenCount"`
+	AfterTokenCount  *int   `json:"afterTokenCount"`
+	Source           *struct {
+		Type     string `json:"type"` // run, node, provider_thread
+		ThreadID string `json:"threadId"`
+	} `json:"source"`
+	TargetThreadID string `json:"targetThreadId"`
+}
+
+// FileChangeDetail is one operation of a file change.
+type FileChangeDetail struct {
+	Operation string `json:"operation"`
+	Path      string `json:"path"`
+	OldPath   string `json:"oldPath"`
+	FileType  string `json:"fileType"`
+	MimeType  string `json:"mimeType"`
+}
+
+// SearchResult is a file search's match or a web search's hit.
+type SearchResult struct {
+	FileName string `json:"fileName"`
+	Line     int    `json:"line"`
+	Column   int    `json:"column"`
+	Preview  string `json:"preview"`
+	Title    string `json:"title"`
+	URL      string `json:"url"`
+	Snippet  string `json:"snippet"`
+}
+
+// ApprovalOption is one answer an approval offers.
+type ApprovalOption struct {
+	Decision string `json:"decision"` // accept, acceptForSession, decline, cancel
+	Label    string `json:"label"`
+	Warning  string `json:"warning"`
+}
+
+// QuestionAnswer is what the user answered a question with.
+type QuestionAnswer struct {
+	RequestID        string                       `json:"requestId"`
+	QuestionTextByID map[string]string            `json:"questionTextById"`
+	Answers          map[string]json.RawMessage   `json:"answers"`
+	Attachments      map[string][]json.RawMessage `json:"attachmentsByQuestionId"`
 }
 
 type Question struct {
@@ -148,6 +219,8 @@ type Run struct {
 	QueuePosition int    `json:"queuePosition"`
 	QueueHeld     bool   `json:"queueHeld"`
 	UserMessageID string `json:"userMessageId"`
+	Ordinal       int    `json:"ordinal"`
+	RequestedAt   string `json:"requestedAt"`
 }
 
 type Message struct {
