@@ -168,14 +168,21 @@ func TestSearchExcerpt(t *testing.T) {
 
 	gtx := layout.Context{Ops: new(op.Ops), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
 	width := func(txt Txt, s string) int { return th.textWidth(gtx, txt, s) }
-	// same checks text is drawn as txt alone would be in its line box at.
+	// same checks text is drawn as txt alone would be in its line box at,
+	// give or take the few steps the GPU's antialiasing of a glyph varies
+	// by with what else the frame draws (far less than a change of weight
+	// or colour makes).
+	near := func(a, b color.RGBA) bool {
+		d := func(x, y uint8) bool { return int(x)-int(y) <= 16 && int(y)-int(x) <= 16 }
+		return d(a.R, b.R) && d(a.G, b.G) && d(a.B, b.B)
+	}
 	same := func(what string, txt Txt, text string, at image.Point, bg color.NRGBA) {
 		t.Helper()
 		ref := textAt(t, th, txt, text, at, bg)
 		h := int(float32(txt.Size)*txt.LineH + 0.5)
 		for y := at.Y; y < at.Y+h; y++ {
 			for x := at.X; x < at.X+width(txt, text); x++ {
-				if got, want := img.RGBAAt(x, y), ref.RGBAAt(x, y); !nearPixel(got, color.NRGBA(want)) {
+				if got, want := img.RGBAAt(x, y), ref.RGBAAt(x, y); !near(got, want) {
 					t.Errorf("%s: %v at %d,%d, want %v", what, got, x, y, want)
 					return
 				}

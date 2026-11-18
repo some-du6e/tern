@@ -605,8 +605,17 @@ func TestSearch(t *testing.T) {
 	if s = a.build(now); s.Sidebar.Highlight != 1 {
 		t.Fatalf("highlight %d after ArrowDown", s.Sidebar.Highlight)
 	}
+	// With no match, the servers are asked once the typing pauses; till
+	// they've answered (here, no one, with no socket), the list says
+	// they're looking.
 	a.handle(th, ui.Action{ID: "search", Kind: "change", Text: "zebra"})
-	if s = a.build(now); s.Sidebar.NoResults != "No threads found" {
+	if s = a.build(now); s.Sidebar.NoResults != "Searching thread messages…" {
+		t.Fatalf("no results yet: %q", s.Sidebar.NoResults)
+	}
+	for end := time.Now().Add(5 * time.Second); s.Sidebar.NoResults != "No threads found" && time.Now().Before(end); s = a.build(now) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if s.Sidebar.NoResults != "No threads found" {
 		t.Fatalf("no results: %q", s.Sidebar.NoResults)
 	}
 	// Enter opens the highlighted result, and the search clears.
