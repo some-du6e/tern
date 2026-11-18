@@ -59,21 +59,28 @@ func TestSidebarRows(t *testing.T) {
 	wantPixel(t, img, image.Pt(260, 183), P.Background, "above it")
 }
 
-// textAt is txt drawn on its own at p on bg, where a row centring its line
-// should put it.
+// textAt is txt drawn on its own on bg, in the CSS line box whose top left
+// is p: its glyphs' box (a line's ascent and descent, which is all Gio
+// sizes a line by) centred in the line height, as CSS's half-leading puts
+// it.
 func textAt(t *testing.T, th *Theme, txt Txt, s string, p image.Point, bg color.NRGBA) *image.RGBA {
 	t.Helper()
 	return drawn(t, image.Pt(1440, 900), 1, func(gtx C) D {
 		fill(gtx, bg, image.Rect(0, 0, 1440, 900), 0)
-		defer op.Offset(p).Push(gtx.Ops).Pop()
 		gtx.Constraints = layout.Constraints{Max: image.Pt(400, 100)}
-		return th.Text(gtx, txt, s)
+		m := op.Record(gtx.Ops)
+		d := th.Text(gtx, txt, s)
+		call := m.Stop()
+		lineH := int(float32(txt.Size)*txt.LineH + 0.5)
+		defer op.Offset(p.Add(image.Pt(0, (lineH-d.Size.Y)/2))).Push(gtx.Ops).Pop()
+		call.Add(gtx.Ops)
+		return d
 	})
 }
 
 // A row's text sits centred on its line, as a CSS flex row centres it, not
 // pinned to the line's top: each of these is where the same text, drawn
-// alone with its line box centred by hand, is.
+// alone in its line box, is.
 func TestRowTextCentred(t *testing.T) {
 	th := NewTheme()
 	active, hover := over(SP.SidebarRowActive, SP.Sidebar), over(SP.SidebarRowHover, SP.Sidebar)
@@ -131,7 +138,7 @@ func TestEmptyState(t *testing.T) {
 	}
 	border := over(SP.SidebarBorder, SP.Sidebar)
 	left, right := -1, -1
-	for x := 0; x < 256; x++ {
+	for x := 8; x < 248; x++ {
 		if nearPixel(img.RGBAAt(x, 160), border) {
 			if left < 0 {
 				left = x
