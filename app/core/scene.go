@@ -343,9 +343,9 @@ func (a *App) build(now time.Time) *ui.Scene {
 	}
 	switch {
 	case a.draft != "":
-		a.draftScene(s)
+		a.draftScene(s, now)
 	case a.openID != "":
-		a.threadScene(s)
+		a.threadScene(s, now)
 	default:
 		s.Title = ""
 		s.Empty = "Pick a thread, or press + to start one."
@@ -356,7 +356,7 @@ func (a *App) build(now time.Time) *ui.Scene {
 	return s
 }
 
-func (a *App) draftScene(s *ui.Scene) {
+func (a *App) draftScene(s *ui.Scene, now time.Time) {
 	e := a.env(a.draftEnv)
 	var p t3.Project
 	if e != nil {
@@ -367,7 +367,7 @@ func (a *App) draftScene(s *ui.Scene) {
 	if e != nil {
 		_, ok := e.projects[a.draft]
 		a.headerScene(s, e, nil, p, ok)
-		a.cardScene(s, e, nil, p, ok, time.Now())
+		a.cardScene(s, e, nil, p, ok, now)
 	}
 	s.Hero = p.Title
 	s.Placeholder = "Ask anything…"
@@ -435,7 +435,7 @@ func (a *App) projectChoices() []projectGroup {
 	return out
 }
 
-func (a *App) threadScene(s *ui.Scene) {
+func (a *App) threadScene(s *ui.Scene, now time.Time) {
 	e, t := a.thread(a.openID)
 	if t == nil {
 		s.Empty = "Loading…"
@@ -448,7 +448,7 @@ func (a *App) threadScene(s *ui.Scene) {
 	s.State = threadState(t)
 	p, ok := e.projects[t.ProjectID]
 	a.headerScene(s, e, t, p, ok)
-	a.cardScene(s, e, t, p, ok, time.Now())
+	a.cardScene(s, e, t, p, ok, now)
 	s.Placeholder = "Ask, steer or queue.   /  commands    @  files"
 	v := a.view
 	if v == nil || !v.loaded {
