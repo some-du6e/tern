@@ -330,7 +330,7 @@ func (th *Theme) filterSearch(gtx C, s *Scene) D {
 				return d
 			}))
 		}()
-		rule := over(alpha(P.Border, 0xb3), P.Popover)
+		rule := over(faded(P.Border, 0.7), P.Popover)
 		if focused {
 			rule = P.Ring
 		}
@@ -915,6 +915,13 @@ func (th *Theme) cardRow(gtx C, s *Scene, r *ThreadRow, top int) D {
 	}
 	th.hoverCard(gtx, s, r, rect, hot && !menuOpen)
 	return D{Size: image.Pt(w, h+dp(gtx, 4))}
+}
+
+// faded is c at k of its own opacity, as Tailwind's color/NN is: a
+// translucent token keeps its own see-through, times k.
+func faded(c color.NRGBA, k float32) color.NRGBA {
+	c.A = uint8(float32(c.A)*k + 0.5)
+	return c
 }
 
 // title is a row's title, or its editor while it's renamed.
