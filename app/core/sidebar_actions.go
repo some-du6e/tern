@@ -27,21 +27,23 @@ import (
 // ---------- search ----------
 
 // searchScene lists, in place of the list, every listed thread in scope
-// whose title, branch or pull request has all the query's words, in the
-// list's order; then those the servers' message search found only in their
-// messages, each with its message. With none it says so, or that the
-// servers are still looking. The highlight stays on its thread as late
-// results arrive.
+// whose title, branch or pull requests (their numbers and titles) have all
+// the query's words, or that the whole query names by its id or a pull
+// request's reference, in the list's order; then those the servers'
+// message search found only in their messages, each with its message. A
+// result shows its pull request's number only when the query matches its
+// pull requests. With none it says so, or that the servers are still
+// looking. The highlight stays on its thread as late results arrive.
 func (a *App) searchScene(sb *ui.Sidebar, l sidebarList, q string, now time.Time) {
 	words := strings.Fields(strings.ToLower(q))
 	match := func(t *t3.Thread) bool {
 		hay := strings.ToLower(t.Title + " " + t.Branch)
-		for _, pr := range t.PullRequests {
-			hay += fmt.Sprintf(" #%d", pr.Number)
+		for _, pr := range searchPRs(t) {
+			hay += fmt.Sprintf(" #%d %s", pr.number, strings.ToLower(pr.title))
 		}
 		for _, w := range words {
 			if !strings.Contains(hay, w) {
-				return false
+				return referenced(t, q)
 			}
 		}
 		return true
@@ -51,6 +53,9 @@ func (a *App) searchScene(sb *ui.Sidebar, l sidebarList, q string, now time.Time
 		r := a.row(t, "", now)
 		if settled {
 			r.Shelf = "settled"
+		}
+		if !prMatches(t.Thread, q) {
+			r.PR = nil
 		}
 		sb.Results = append(sb.Results, r)
 		a.results = append(a.results, t.ref)
@@ -92,6 +97,126 @@ func (a *App) searchScene(sb *ui.Sidebar, l sidebarList, q string, now time.Time
 		return
 	}
 	sb.Highlight = max(0, slices.Index(a.results, a.searchHi))
+}
+
+// searchPR is a pull request as a search matches it: its number, its
+// title, and its "owner/repo#N" and link.
+type searchPR struct {
+	number int
+	title  string
+	refs   []string
+}
+
+// searchPRs is the thread's pull requests a search matches it by
+// (threadSearchPullRequests): the branch's, then the linked ones newest
+// first, the newest three with their titles; with none linked, the one it
+// names.
+func searchPRs(t *t3.Thread) []searchPR {
+	var out []searchPR
+	add := func(number int, repo, url, title string) {
+		out = append(out, searchPR{number, title, []string{fmt.Sprintf("%s#%d", repo, number), url}})
+	}
+	if b := t.BranchPullRequest; b != nil {
+		add(b.Number, b.Repository, b.URL, "")
+	}
+	if len(t.PullRequests) == 0 {
+		if l := t.LinkedPullRequest; l != nil {
+			add(l.Number, l.Repository, l.URL, "")
+		}
+		return out
+	}
+	var links []t3.PullRequestLink
+	for _, l := range t.PullRequests {
+		if l.Source != "stack-dismissed" {
+			links = append(links, l)
+		}
+	}
+	updated := func(l t3.PullRequestLink) int64 {
+		at := l.LinkedAt
+		if l.Snapshot != nil && l.Snapshot.UpdatedAt != "" {
+			at = l.Snapshot.UpdatedAt
+		}
+		return ms(at)
+	}
+	sort.SliceStable(links, func(i, j int) bool { return updated(links[i]) > updated(links[j]) })
+	for i, l := range links {
+		title := ""
+		if i < 3 && l.Snapshot != nil {
+			title = l.Snapshot.Title
+		}
+		add(l.Number, l.Repository, l.URL, title)
+	}
+	return out
+}
+
+// referenced reports a query that names the thread by its id or one of its
+// pull requests' "owner/repo#N" or link (matchReference): eight
+// characters or more, found anywhere in one when it has a digit, though
+// never cutting a number short, or a link pasted with more after it; else
+// only from one's start.
+func referenced(t *t3.Thread, q string) bool {
+	q = foldQuery(q)
+	if utf8.RuneCountInString(q) < 8 {
+		return false
+	}
+	digit := strings.ContainsFunc(q, unicode.IsNumber)
+	notCut := func(s string, end int) bool {
+		r, _ := utf8.DecodeRuneInString(s[end:])
+		return end >= len(s) || !unicode.IsNumber(r)
+	}
+	matches := func(ref string) bool {
+		ref = strings.ToLower(ref)
+		at := strings.Index(ref, q)
+		if !digit {
+			return at == 0
+		}
+		return at >= 0 && notCut(ref, at+len(q)) || strings.HasPrefix(q, ref) && notCut(q, len(ref))
+	}
+	if t.ID != "" && matches(t.ID) {
+		return true
+	}
+	for _, pr := range searchPRs(t) {
+		for _, ref := range pr.refs {
+			if matches(ref) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// prMatches reports a query whose every word is in the thread's pull
+// requests (pullRequestMatchesSearchQuery): their numbers, references,
+// links and titles, whatever the case and accents.
+func prMatches(t *t3.Thread, q string) bool {
+	var terms []string
+	for _, pr := range searchPRs(t) {
+		terms = append(terms, fmt.Sprintf("#%d", pr.number))
+		terms = append(terms, pr.refs...)
+		if pr.title != "" {
+			terms = append(terms, pr.title)
+		}
+	}
+	words := strings.Fields(plainText(q))
+	hay := plainText(strings.Join(terms, " "))
+	for _, w := range words {
+		if !strings.Contains(hay, w) {
+			return false
+		}
+	}
+	return len(words) > 0
+}
+
+// plainText is text as T3 compares it (normalizeSearchText): accents off,
+// lower-cased, its spaces collapsed.
+func plainText(s string) string {
+	var b strings.Builder
+	for _, r := range norm.NFKD.String(s) {
+		if !unicode.Is(unicode.M, r) {
+			b.WriteRune(r)
+		}
+	}
+	return strings.Join(strings.Fields(strings.ToLower(b.String())), " ")
 }
 
 // ---------- the servers' message search ----------

@@ -1459,6 +1459,30 @@ func (th *Theme) terminalButton(s *Scene, r *ThreadRow, in rowInk) W {
 	}
 }
 
+// prLook is a pull request state's glyph and tone (pullRequestIcons.tsx):
+// open emerald, draft zinc, merged violet and closed red, Tailwind's 600s
+// (zinc 500) in light and their 300s at 90% (zinc 400 at 80%) in dark; an
+// unknown state's is the muted foreground.
+func prLook(state string) (icon string, tone color.NRGBA) {
+	pick := func(light, darkName string, a uint8) color.NRGBA {
+		if dark {
+			return alpha(Tailwind[darkName], a)
+		}
+		return Tailwind[light]
+	}
+	switch state {
+	case "open":
+		return "git-pull-request-arrow", pick("emerald-600", "emerald-300", 0xe6)
+	case "draft":
+		return "git-pull-request-draft", pick("zinc-500", "zinc-400", 0xcc)
+	case "merged":
+		return "git-merge", pick("violet-600", "violet-300", 0xe6)
+	case "closed":
+		return "git-pull-request-closed", pick("red-600", "red-300", 0xe6)
+	}
+	return "git-pull-request-arrow", SP.MutedForeground
+}
+
 // prBadge is the meta line's pull request: its state's glyph at 12dp in
 // its tone, then the number in the secondary label, 2dp on. It's T3's
 // InlineButton: a click opens the pull request, and hovered the number
@@ -1471,23 +1495,7 @@ func (th *Theme) prBadge(gtx C, s *Scene, r *ThreadRow, in rowInk) D {
 		c, _ := th.events(gtx, id)
 		hovered = c.Hovered()
 	}
-	icon, tone := "git-pull-request-arrow", SP.MutedForeground
-	pick := func(light, darkName string, a uint8) color.NRGBA {
-		if dark {
-			return alpha(Tailwind[darkName], a)
-		}
-		return Tailwind[light]
-	}
-	switch pr.State {
-	case "open":
-		tone = pick("emerald-600", "emerald-300", 0xe6)
-	case "draft":
-		icon, tone = "git-pull-request-draft", pick("zinc-500", "zinc-400", 0xcc)
-	case "merged":
-		icon, tone = "git-merge", pick("violet-600", "violet-300", 0xe6)
-	case "closed":
-		icon, tone = "git-pull-request-closed", pick("red-600", "red-300", 0xe6)
-	}
+	icon, tone := prLook(pr.State)
 	col := in.of(SP.SecondaryLabel)
 	d := RowGap(gtx, 2,
 		rigid(LucideW(icon, in.of(tone), 12)),
@@ -1781,12 +1789,12 @@ func (th *Theme) listNote(gtx C, note string) D {
 }
 
 // resultRow is a search result (§2.6, §3.11): 36dp, padded 4 by 10, 10dp
-// gaps: the project's icon, the title and the age, 32dp wide in the muted
-// foreground at 55%; a result found by its messages grows to 44dp for the
-// matching one under the title. The highlighted result (keyboard or
-// pointer) and the open thread take the active row fill. A settled
-// thread's title is quieter, 400 in the secondary label at 70%, until it's
-// lit.
+// gaps: the project's icon, the title, the pull request's number when the
+// query matched it, and the age, 32dp wide in the muted foreground at 55%;
+// a result found by its messages grows to 44dp for the matching one under
+// the title. The highlighted result (keyboard or pointer) and the open
+// thread take the active row fill. A settled thread's title is quieter,
+// 400 in the secondary label at 70%, until it's lit.
 func (th *Theme) resultRow(gtx C, s *Scene, r *ThreadRow, i, top int) D {
 	w := gtx.Constraints.Max.X
 	size := image.Pt(w, dp(gtx, slimH))
@@ -1835,14 +1843,16 @@ func (th *Theme) resultRow(gtx C, s *Scene, r *ThreadRow, i, top int) D {
 		g.Constraints = layout.Exact(image.Pt(w-2*dp(gtx, 10), size.Y))
 		line := func(gtx C) D {
 			gtx.Constraints = layout.Exact(image.Pt(gtx.Constraints.Max.X, dp(gtx, 20)))
-			return RowGap(gtx, 10,
-				flexed(func(gtx C) D { return th.Text(gtx, title, r.Title) }),
-				rigid(func(gtx C) D {
-					return FixedW(gtx, 32, func(gtx C) D {
-						return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: over(alpha(SP.MutedForeground, 0x8c), bg), MaxLines: 1, Align: text.End}, r.Age)
-					})
-				}),
-			)
+			kids := []layout.FlexChild{flexed(func(gtx C) D { return th.Text(gtx, title, r.Title) })}
+			if r.PR != nil {
+				kids = append(kids, rigid(func(gtx C) D { return th.resultPR(gtx, r.PR, settled, hovered, bg) }))
+			}
+			kids = append(kids, rigid(func(gtx C) D {
+				return FixedW(gtx, 32, func(gtx C) D {
+					return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: over(alpha(SP.MutedForeground, 0x8c), bg), MaxLines: 1, Align: text.End}, r.Age)
+				})
+			}))
+			return RowGap(gtx, 10, kids...)
 		}
 		var kids []layout.FlexChild
 		if r.Project != "" {
@@ -1867,6 +1877,29 @@ func (th *Theme) resultRow(gtx C, s *Scene, r *ThreadRow, i, top int) D {
 		pop()
 	}
 	return D{Size: size}
+}
+
+// resultPR is a search result's pull request number
+// (ThreadSearchPullRequestNumber): its state's 12dp glyph and its number,
+// 12dp, 2dp apart, in the state's tone; a settled result's in the
+// secondary label until the row is hovered, when a known state's tone
+// shows.
+func (th *Theme) resultPR(gtx C, pr *PRBadge, settled, hovered bool, bg color.NRGBA) D {
+	icon, tone := prLook(pr.State)
+	if settled && (!hovered || pr.State == "") {
+		tone = SP.SecondaryLabel
+	}
+	col := over(tone, bg)
+	return RowGap(gtx, 2,
+		rigid(LucideW(icon, col, 12)),
+		rigid(func(gtx C) D {
+			// The number on its 16dp line, which the glyph centres on.
+			gtx.Constraints.Min.Y = dp(gtx, 16)
+			return RowGap(gtx, 0, rigid(func(gtx C) D {
+				return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: col, MaxLines: 1}, pr.Text)
+			}))
+		}),
+	)
 }
 
 // excerpt is a search result's matching message on one 16dp line, 12dp in

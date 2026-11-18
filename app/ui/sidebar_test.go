@@ -168,21 +168,14 @@ func TestSearchExcerpt(t *testing.T) {
 
 	gtx := layout.Context{Ops: new(op.Ops), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
 	width := func(txt Txt, s string) int { return th.textWidth(gtx, txt, s) }
-	// same checks text is drawn as txt alone would be in its line box at,
-	// give or take the few steps the GPU's antialiasing of a glyph varies
-	// by with what else the frame draws (far less than a change of weight
-	// or colour makes).
-	near := func(a, b color.RGBA) bool {
-		d := func(x, y uint8) bool { return int(x)-int(y) <= 16 && int(y)-int(x) <= 16 }
-		return d(a.R, b.R) && d(a.G, b.G) && d(a.B, b.B)
-	}
+	// same checks text is drawn as txt alone would be in its line box at.
 	same := func(what string, txt Txt, text string, at image.Point, bg color.NRGBA) {
 		t.Helper()
 		ref := textAt(t, th, txt, text, at, bg)
 		h := int(float32(txt.Size)*txt.LineH + 0.5)
 		for y := at.Y; y < at.Y+h; y++ {
 			for x := at.X; x < at.X+width(txt, text); x++ {
-				if got, want := img.RGBAAt(x, y), ref.RGBAAt(x, y); !near(got, want) {
+				if got, want := img.RGBAAt(x, y), ref.RGBAAt(x, y); !nearInk(got, want) {
 					t.Errorf("%s: %v at %d,%d, want %v", what, got, x, y, want)
 					return
 				}
@@ -213,6 +206,52 @@ func TestSearchExcerpt(t *testing.T) {
 		k--
 	}
 	same("the cut", muted, "…", image.Pt(44+width(agent, "Agent:")+width(muted, " "+strings.Repeat("m", k)), 169), SP.Sidebar)
+}
+
+// A result whose pull request the query matched shows its number before
+// the age, 10dp from it: the state's 12dp glyph and the number, 12/16,
+// 2dp apart, in the state's tone, centred on the title's line
+// (ThreadSearchPullRequestNumber).
+func TestSearchPullRequestNumber(t *testing.T) {
+	th := NewTheme()
+	s := &Scene{Sidebar: Sidebar{HasProjects: true, Query: "#42", Results: []ThreadRow{
+		{ID: "e/1", Title: "Ship it", Age: "2h", PR: &PRBadge{State: "open", Text: "42"}},
+	}}}
+	img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, s) })
+	active := over(SP.SidebarRowActive, SP.Sidebar)
+	tone := over(Tailwind["emerald-600"], active)
+	gtx := layout.Context{Ops: new(op.Ops), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+	num := Txt{Size: 12, LineH: 16.0 / 12, Color: tone, MaxLines: 1}
+	// The age is 205..237, so the number ends at 195; the title's line is
+	// 108..128, the number's 16dp line 110..126 and the glyph 112..124.
+	x := 195 - th.textWidth(gtx, num, "42")
+	ref := textAt(t, th, num, "42", image.Pt(x, 110), active)
+	glyph := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D {
+		fill(gtx, active, image.Rect(0, 0, 1440, 900), 0)
+		defer op.Offset(image.Pt(x-14, 112)).Push(gtx.Ops).Pop()
+		return LucideW("git-pull-request-arrow", tone, 12)(gtx)
+	})
+	for _, c := range []struct {
+		what string
+		r    image.Rectangle
+		want *image.RGBA
+	}{
+		{"the number", image.Rect(x, 110, 195, 126), ref},
+		{"its glyph", image.Rect(x-14, 112, x-2, 124), glyph},
+	} {
+		if _, _, ok := inkRows(img, c.r, active); !ok {
+			t.Errorf("%s: nothing drawn in %v", c.what, c.r)
+		}
+	check:
+		for y := c.r.Min.Y; y < c.r.Max.Y; y++ {
+			for x := c.r.Min.X; x < c.r.Max.X; x++ {
+				if got, want := img.RGBAAt(x, y), c.want.RGBAAt(x, y); !nearInk(got, want) {
+					t.Errorf("%s: %v at %d,%d, want %v", c.what, got, x, y, want)
+					break check
+				}
+			}
+		}
+	}
 }
 
 // The empty list's message sits 24dp down, and 8dp under it its button:

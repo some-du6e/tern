@@ -63,20 +63,27 @@ type BackgroundTask struct {
 // PullRequestLink is a pull request linked to a thread, with the server's
 // last snapshot of it.
 type PullRequestLink struct {
-	Number   int    `json:"number"`
-	URL      string `json:"url"`
-	Source   string `json:"source"`
-	LinkedAt string `json:"linkedAt"`
-	Snapshot *struct {
-		State   string `json:"state"` // "open", "closed", "merged"
-		IsDraft bool   `json:"isDraft"`
-	} `json:"snapshot"`
+	Number     int                  `json:"number"`
+	Repository string               `json:"repository"` // "owner/repo"
+	URL        string               `json:"url"`
+	Source     string               `json:"source"` // "stack-dismissed" hides it
+	LinkedAt   string               `json:"linkedAt"`
+	Snapshot   *PullRequestSnapshot `json:"snapshot"`
+}
+
+// PullRequestSnapshot is what the server last read of a pull request.
+type PullRequestSnapshot struct {
+	State     string `json:"state"` // "open", "closed", "merged"
+	IsDraft   bool   `json:"isDraft"`
+	Title     string `json:"title"`
+	UpdatedAt string `json:"updatedAt"`
 }
 
 // LinkedPullRequest is the pull request a thread names, by number.
 type LinkedPullRequest struct {
-	Number int    `json:"number"`
-	URL    string `json:"url"`
+	Number     int    `json:"number"`
+	Repository string `json:"repository"`
+	URL        string `json:"url"`
 }
 
 type Thread struct {

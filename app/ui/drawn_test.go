@@ -54,6 +54,14 @@ func nearPixel(got color.RGBA, c color.NRGBA) bool {
 	return near(got.R, c.R) && near(got.G, c.G) && near(got.B, c.B)
 }
 
+// nearInk reports two drawn pixels within a few steps of each other: the
+// GPU's antialiasing of a glyph shifts a little with what else the frame
+// draws, far less than a change of weight or colour makes.
+func nearInk(a, b color.RGBA) bool {
+	d := func(x, y uint8) bool { return int(x)-int(y) <= 16 && int(y)-int(x) <= 16 }
+	return d(a.R, b.R) && d(a.G, b.G) && d(a.B, b.B)
+}
+
 // inkRows is the first and last row of pixels in r that something is drawn
 // on: more than a few steps off bg. ok is false if nothing is.
 func inkRows(img *image.RGBA, r image.Rectangle, bg color.NRGBA) (top, bottom int, ok bool) {

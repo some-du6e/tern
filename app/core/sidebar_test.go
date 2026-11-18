@@ -743,6 +743,46 @@ func TestMessageSearch(t *testing.T) {
 	}
 }
 
+// A search finds threads by their pull requests' numbers and titles, and
+// by a whole reference to one ("owner/repo#N", its link) or the thread's
+// id; a result shows its pull request's number only when the query
+// matches its pull requests (§3.11, ThreadSearchPullRequestNumber).
+func TestSearchPullRequests(t *testing.T) {
+	now := time.Now()
+	link := t3.PullRequestLink{Number: 42, Repository: "acme/app", URL: "https://example.test/acme/app/pull/42", LinkedAt: ago(now, time.Hour),
+		Snapshot: &t3.PullRequestSnapshot{State: "open", Title: "Faster startup"}}
+	a := sideApp(t,
+		t3.Thread{ID: "1", Title: "Ship it", CreatedAt: ago(now, time.Minute), PullRequests: []t3.PullRequestLink{link}},
+		t3.Thread{ID: "2", Title: "Ship notes", CreatedAt: ago(now, 2*time.Minute)},
+		t3.Thread{ID: "thread-0042abc", Title: "Other", CreatedAt: ago(now, 3*time.Minute)},
+	)
+	for q, want := range map[string]string{
+		"#42":         "Ship it 42",
+		"startup":     "Ship it 42",
+		"ship":        "Ship it, Ship notes",
+		"acme/app#42": "Ship it 42",
+		"https://example.test/acme/app/pull/42/files": "Ship it",
+		"acme/app#4":  "",
+		"thread-0042": "Other",
+	} {
+		a.mu.Lock()
+		a.search = q
+		s := a.build(now)
+		a.mu.Unlock()
+		var got []string
+		for _, r := range s.Sidebar.Results {
+			if r.PR != nil {
+				got = append(got, r.Title+" "+r.PR.Text)
+			} else {
+				got = append(got, r.Title)
+			}
+		}
+		if strings.Join(got, ", ") != want {
+			t.Errorf("%q: %q, want %q", q, strings.Join(got, ", "), want)
+		}
+	}
+}
+
 // The servers get the query trimmed and cut to the 200 UTF-16 units they
 // take, so a pasted wall of text searches by its start.
 func TestMessageQuery(t *testing.T) {
