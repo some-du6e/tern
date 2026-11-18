@@ -680,6 +680,14 @@ func (th *Theme) planCard(gtx C, r *TimelineRow) int {
 	mo := op.Offset(image.Pt(inner-dp(gtx, 24), 0)).Push(gtx.Ops)
 	th.T3Button(id+":menu", menu)(gtx)
 	mo.Pop()
+	if th.clicked(id + ":menu") {
+		th.toggleMenu(id + ":menu")
+	}
+	// The menu's "Copy to clipboard"; T3's download and save to the
+	// workspace aren't here.
+	if th.rowMenu(gtx, id+":menu", image.Pt(inner, hh+dp(gtx, 4)), []string{"Copy to clipboard"}) == 0 {
+		th.copyNow(gtx, "copy:"+id, r.Plan)
+	}
 	y := hh + dp(gtx, 16)
 	src := body
 	if collapsible && !open {
