@@ -277,13 +277,13 @@ func (th *Theme) filterPopup(gtx C, s *Scene) D {
 			rigid(func(gtx C) D { return th.filterSearch(gtx, s) }),
 			rigid(func(gtx C) D {
 				if len(f.Items) == 0 {
-					return pad(8, 8, 8, 8).Layout(gtx, func(gtx C) D {
+					return pad(9, 9, 9, 9).Layout(gtx, func(gtx C) D {
 						gtx.Constraints.Min.X = gtx.Constraints.Max.X
 						return th.Text(gtx, Txt{Size: 14, LineH: 20.0 / 14, Color: P.MutedForeground, Align: text.Middle}, "No matching projects.")
 					})
 				}
 				// The rows scroll within the popup's height.
-				return pad(4, 4, 4, 4).Layout(gtx, func(gtx C) D {
+				return pad(4, 5, 5, 5).Layout(gtx, func(gtx C) D {
 					gtx.Constraints.Max.Y = min(gtx.Constraints.Max.Y, len(f.Items)*dp(gtx, 32))
 					return th.List("filter", false).Layout(gtx, len(f.Items), func(gtx C, i int) D {
 						return th.filterItem(gtx, s, f.Items[i])
@@ -294,10 +294,11 @@ func (th *Theme) filterPopup(gtx C, s *Scene) D {
 	})
 }
 
-// filterSearch is the popup's search: padded 10 12 0 over a 1dp rule at
-// border 70% that turns the ring colour while it's focused.
+// filterSearch is the popup's search, padded 10 12 0 inside its 1dp
+// border, over a 1dp rule at border 70% that turns the ring colour while
+// it's focused.
 func (th *Theme) filterSearch(gtx C, s *Scene) D {
-	return pad(10, 12, 0, 12).Layout(gtx, func(gtx C) D {
+	return pad(11, 13, 0, 13).Layout(gtx, func(gtx C) D {
 		w := gtx.Constraints.Max.X
 		h := dp(gtx, 26)
 		ed := th.Editor("filter.search")
@@ -1795,9 +1796,9 @@ func (th *Theme) hoverCard(gtx C, s *Scene, r *ThreadRow, rect image.Rectangle, 
 }
 
 // cardBody is the hover card: the glass tooltip surface (its fill alone,
-// without the blur), radius 6, the tooltip's 4 by 8 padding around the
-// card's 8 by 4; the title in 12/15 medium, then the lines 6dp apart, each
-// a 12dp icon and 12/16 text in the foreground at 75%, 8dp apart.
+// without the blur) in a 1dp border, radius 6, the tooltip's 4 by 8 padding
+// around the card's 8 by 4; the title in 12/15 medium, then the lines 6dp
+// apart, each a 12dp icon and 12/16 text in the foreground at 75%, 8dp apart.
 func (th *Theme) cardBody(gtx C, r *ThreadRow) D {
 	bg := over(alpha(P.Popover, 0xd5), P.Background)
 	muted := over(P.MutedForeground, bg)
@@ -1866,7 +1867,7 @@ func (th *Theme) cardBody(gtx C, r *ThreadRow) D {
 		add(LucideW("circle-alert", col, 12), r.Error, col)
 	}
 	m := op.Record(gtx.Ops)
-	d := pad(4+8, 8+4, 4+8, 8+4).Layout(gtx, func(gtx C) D {
+	d := pad(1+4+8, 1+8+4, 1+4+8, 1+8+4).Layout(gtx, func(gtx C) D {
 		kids := []layout.FlexChild{rigid(func(gtx C) D {
 			return th.Text(gtx, Txt{Size: 12, LineH: 15.0 / 12, Font: UI(font.Medium), Color: over(P.Foreground, bg), MaxLines: 1}, r.Title)
 		})}
@@ -1907,7 +1908,7 @@ func (th *Theme) snoozeMenu(gtx C, s *Scene, trigger image.Point) {
 		m := op.Record(gtx.Ops)
 		d := th.popUp(gtx, s, "snooze:"+sm.Row, nil, func(gtx C) D {
 			return popupFrame(gtx, func(gtx C) D {
-				return pad(4, 4, 4, 4).Layout(gtx, func(gtx C) D {
+				return pad(5, 5, 5, 5).Layout(gtx, func(gtx C) D {
 					var kids []layout.FlexChild
 					for _, c := range sm.Choices {
 						c := c
