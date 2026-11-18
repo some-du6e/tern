@@ -60,40 +60,95 @@ type Lineage struct {
 }
 
 type Thread struct {
-	ID                    string          `json:"id"`
-	ProjectID             string          `json:"projectId"`
-	Title                 string          `json:"title"`
-	CreatedAt             string          `json:"createdAt"`
-	UpdatedAt             string          `json:"updatedAt"`
-	LatestUserMessageAt   string          `json:"latestUserMessageAt"`
-	LatestRunCompletedAt  string          `json:"latestRunCompletedAt"`
-	LastVisitedAt         string          `json:"lastVisitedAt"`
-	PinnedAt              string          `json:"pinnedAt"`
-	PinOrderKey           string          `json:"pinOrderKey"`
-	ActiveOrderKey        string          `json:"activeOrderKey"`
-	SettledAt             string          `json:"settledAt"`
-	SnoozedUntil          string          `json:"snoozedUntil"`
-	ArchivedAt            string          `json:"archivedAt"`
-	DeletedAt             string          `json:"deletedAt"`
-	LastError             string          `json:"lastError"`
-	ActiveRunID           string          `json:"activeRunId"`
-	ActivityRunStatus     string          `json:"activityRunStatus"`
-	ActivityRunStartedAt  string          `json:"activityRunStartedAt"`
-	PendingRuntimeRequest *RuntimeRequest `json:"pendingRuntimeRequest"`
-	Lineage               *Lineage        `json:"lineage"`
-	ModelSelection        *ModelSelection `json:"modelSelection"`
-	RuntimeMode           string          `json:"runtimeMode"`
-	InteractionMode       string          `json:"interactionMode"`
-	Branch                string          `json:"branch"`
-	WorktreePath          string          `json:"worktreePath"`
-	LatestRunID           string          `json:"latestRunId"`
-	LinkOrigin            *LinkOrigin     `json:"linkOrigin"`
-	EnvironmentID         string          `json:"-"`
+	ID                    string             `json:"id"`
+	ProjectID             string             `json:"projectId"`
+	Title                 string             `json:"title"`
+	CreatedAt             string             `json:"createdAt"`
+	UpdatedAt             string             `json:"updatedAt"`
+	LatestUserMessageAt   string             `json:"latestUserMessageAt"`
+	LatestRunCompletedAt  string             `json:"latestRunCompletedAt"`
+	LastVisitedAt         string             `json:"lastVisitedAt"`
+	PinnedAt              string             `json:"pinnedAt"`
+	PinOrderKey           string             `json:"pinOrderKey"`
+	ActiveOrderKey        string             `json:"activeOrderKey"`
+	SettledAt             string             `json:"settledAt"`
+	SnoozedUntil          string             `json:"snoozedUntil"`
+	ArchivedAt            string             `json:"archivedAt"`
+	DeletedAt             string             `json:"deletedAt"`
+	LastError             string             `json:"lastError"`
+	ActiveRunID           string             `json:"activeRunId"`
+	ActivityRunStatus     string             `json:"activityRunStatus"`
+	ActivityRunStartedAt  string             `json:"activityRunStartedAt"`
+	PendingRuntimeRequest *RuntimeRequest    `json:"pendingRuntimeRequest"`
+	Lineage               *Lineage           `json:"lineage"`
+	ModelSelection        *ModelSelection    `json:"modelSelection"`
+	RuntimeMode           string             `json:"runtimeMode"`
+	InteractionMode       string             `json:"interactionMode"`
+	Branch                string             `json:"branch"`
+	WorktreePath          string             `json:"worktreePath"`
+	LatestRunID           string             `json:"latestRunId"`
+	LinkOrigin            *LinkOrigin        `json:"linkOrigin"`
+	PullRequests          []PullRequestLink  `json:"pullRequests"`
+	LinkedPullRequest     *LinkedPullRequest `json:"linkedPullRequest"`
+	BranchPullRequest     *LinkedPullRequest `json:"branchPullRequest"`
+	EnvironmentID         string             `json:"-"`
 }
 
 // LinkOrigin is the linked environment whose agent started a thread.
 type LinkOrigin struct {
 	Label string `json:"label"`
+}
+
+// PullRequestLink is a pull request linked to a thread, with the server's
+// last snapshot of it (ThreadPullRequestLink, threadPullRequest.ts:107).
+// Host, Repository and Number are its key.
+type PullRequestLink struct {
+	Host       string               `json:"host"`
+	Repository string               `json:"repository"`
+	Number     int                  `json:"number"`
+	URL        string               `json:"url"`
+	Source     string               `json:"source"` // manual, created, agent, stack, stack-dismissed
+	LinkedAt   string               `json:"linkedAt"`
+	Snapshot   *PullRequestSnapshot `json:"snapshot"`
+	Stack      *PullRequestStack    `json:"stack"`
+	Watch      *PullRequestWatch    `json:"watch"` // set while the agent watches its checks and comments
+}
+
+// PullRequestWatch is the agent watching a linked pull request: it wakes
+// when checks finish, someone comments or the branch conflicts.
+type PullRequestWatch struct {
+	StartedAt string `json:"startedAt"`
+}
+
+// PullRequestSnapshot is what the server last read of a linked pull request.
+type PullRequestSnapshot struct {
+	State      string `json:"state"` // open, closed, merged
+	Title      string `json:"title"`
+	HeadBranch string `json:"headBranch"`
+	BaseBranch string `json:"baseBranch"`
+	IsDraft    bool   `json:"isDraft"`
+	UpdatedAt  string `json:"updatedAt"`
+}
+
+// PullRequestStack is the host's own stack a linked pull request is in,
+// its layers bottom to top.
+type PullRequestStack struct {
+	ID     string                  `json:"id"`
+	Layers []PullRequestStackLayer `json:"layers"`
+}
+
+// PullRequestStackLayer is one pull request of a stack.
+type PullRequestStackLayer struct {
+	Number int `json:"number"`
+}
+
+// LinkedPullRequest is the single pull request older servers link a
+// thread to, and the open one the server finds for its branch.
+type LinkedPullRequest struct {
+	ProjectID  string `json:"projectId"`
+	Repository string `json:"repository"`
+	Number     int    `json:"number"`
+	URL        string `json:"url"`
 }
 
 // ShellItem is one value from orchestration.subscribeShell.
