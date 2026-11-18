@@ -49,8 +49,13 @@ quarantine flag, so Gatekeeper leaves it alone.
   paste a pairing URL from `t3 pair` for a machine that isn't on Connect.
 - Every environment on the account at once, with online status. The inbox
   mixes their threads and tags each with its machine.
-- The inbox: Pinned, Active, Snoozed and Settled, with T3's status chips,
-  live run timers and title search.
+- T3's sidebar: pinned and active cards, then the Working, Snoozed and
+  Settled shelves, with T3's status labels, run timers and ages; Settle,
+  Snooze, Wake and Un-settle on hover and the hover card; search by title,
+  branch or pull request; the project filter; Ctrl-click and Shift-click
+  selections; and the keyboard (arrows, Home, End, Enter, F2 to rename,
+  Shift+F10 for the menu, Ctrl+Shift+[ and ] and Ctrl+1…9 between threads,
+  ⌘ for Ctrl on a Mac).
 - Threads: messages, reasoning, tool calls (click to load their output),
   plans and errors, with finished runs folded into "Worked for…". "Load
   earlier" pages in older history.
@@ -63,8 +68,10 @@ quarantine flag, so Gatekeeper leaves it alone.
   from a browser, or image files copied in Explorer or the Finder (up to 8, 10 MB each).
   Backspace or × removes one, undo brings it back. Sent messages show their
   pictures and chips too.
-- Right-click a thread for Pin, Settle (or Wake up), Mark unread, Archive
-  and Delete; Delete asks for a second click.
+- Right-click a thread for T3's menu: pin, settle, snooze, rename,
+  regenerate the title, mark unread, filter by its project, auto-settle,
+  copy its path, branch or id, archive and delete (Delete asks for a
+  second click). A selection's menu settles, snoozes or deletes them all.
 - One thread at a time, like T3; the sidebar switches. The header's details
   button (⇧⌘B, Ctrl+Shift+B) drops T3's details popover: machine, run, model,
   access, and the branch and folder, which copy on click. The sidebar's

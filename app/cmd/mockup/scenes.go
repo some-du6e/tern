@@ -1,37 +1,65 @@
 package main
 
-import "github.com/some-du6e/tern/app/ui"
+import (
+	"image"
+
+	"github.com/some-du6e/tern/app/ui"
+)
 
 func envs() []ui.Env {
 	return []ui.Env{{Label: "workstation", Status: ui.EnvOnline}, {Label: "bowen", Status: ui.EnvOnline}, {Label: "macbook", Status: ui.EnvOffline}}
 }
 
+// Project icons for the fixtures: monograms in T3's colours.
+var (
+	ternIcon  = ui.ProjectIcon{Text: "TN", Color: "amber"}
+	atlasIcon = ui.ProjectIcon{Text: "AS", Color: "sky"}
+	notesIcon = ui.ProjectIcon{Text: "NS", Color: "violet"}
+)
+
+// sidebar fills the sidebar with a row in each of T3's states: pinned,
+// approval, input, a guest's request, working, waiting, failed, done, woke
+// and seen; the Working shelf open; Snoozed folded; Settled open on two
+// rows with more to show. selected is the open thread.
 func sidebar(s *ui.Scene, selected string) {
 	s.Envs = envs()
-	s.Filter = "All projects"
-	s.Pinned = []ui.ThreadRow{
-		{Title: "tern roadmap", Project: "tern", Branch: "main", Age: "2d"},
-		{Title: "Fleet: bowen nightly backups", Project: "swiss-fleet", Branch: "main", Env: "bowen", Unread: true, Age: "7h"},
-	}
-	s.Active = []ui.ThreadRow{
-		{Title: "Review: thread.stop capability", Project: "t3code", State: ui.ThreadApproval, Note: "pnpm test --filter server", Age: "2h"},
-		{Title: "Watch pairing flow", Project: "tern", State: ui.ThreadQuestion, Note: "Which session should the watch get?", Age: "41m"},
-		{Title: "Port the T3 Connect client to Go", Project: "tern", Branch: "t3/go-client", State: ui.ThreadRunning, Timer: "1m 08s", Age: "now"},
-		{Title: "Restore test: vaultwarden snapshot", Project: "swiss-fleet", Branch: "main", Env: "bowen", State: ui.ThreadRunning, Timer: "12m", Age: "12m"},
-		{Title: "Gio sidebar: virtualize 1k rows", Project: "tern", Branch: "t3/sidebar-virtual", Unread: true, Age: "18m"},
-		{Title: "Relay status polling", Project: "tern", State: ui.ThreadError, Note: "RelayEnvironmentEndpointTimedOutError", Age: "5h"},
-		{Title: "History essay: outline and sources", Project: "schoolwork-writer", Branch: "main", Age: "1d"},
-		{Title: "Bounded snapshot history cursor", Project: "t3code", Branch: "t3/history-cursor", Env: "macbook", Age: "1d"},
-	}
-	s.Snoozed = []ui.ThreadRow{
-		{Title: "Clerk email-code sign-in", Project: "tern", Branch: "t3/clerk", Wakes: "18:00"},
-	}
-	s.Settled = 76
-	for _, list := range [][]ui.ThreadRow{s.Pinned, s.Active, s.Snoozed} {
-		for i := range list {
-			list[i].Selected = list[i].Title == selected
+	card := func(r ui.ThreadRow) ui.SidebarItem {
+		if r.Project == "" {
+			r.Project, r.Icon = "tern", ternIcon
 		}
+		r.ID = r.Title
+		r.Active = r.Title == selected
+		r.Recede = r.Recede && !r.Active
+		r.Providers = []string{"Claude"}
+		r.Machine, r.MachineIcon = "workstation", "server"
+		r.CanSettle, r.CanSnooze, r.CanUnpin = true, true, true
+		return ui.SidebarItem{Row: &r}
 	}
+	slim := func(shelf string, r ui.ThreadRow) ui.SidebarItem {
+		it := card(r)
+		it.Row.Slim, it.Row.Shelf, it.Row.Recede = true, shelf, true
+		return it
+	}
+	s.Sidebar = ui.Sidebar{HasProjects: true, Ticking: true, Items: []ui.SidebarItem{
+		card(ui.ThreadRow{Title: "Roadmap", Pinned: true, Branch: "main", Age: "2d", Recede: true}),
+		card(ui.ThreadRow{Title: "Nightly backup check", Project: "atlas", Icon: atlasIcon, Pinned: true, Status: ui.StatusDone, Label: "Done", Unread: true, Age: "7h"}),
+		card(ui.ThreadRow{Title: "Review the stop capability", Status: ui.StatusApproval, Label: "Approval", Branch: "t3/thread-stop", Worktree: true, Age: "2h"}),
+		card(ui.ThreadRow{Title: "Watch pairing flow", Status: ui.StatusInput, Label: "Input", Age: "41m"}),
+		card(ui.ThreadRow{Title: "Port the T3 Connect client to Go", Status: ui.StatusWorking, Label: "Working", Timer: "1m", Branch: "t3/go-client", Worktree: true, Recede: true,
+			PR: &ui.PRBadge{State: "open", Text: "42"}, Age: "now"}),
+		card(ui.ThreadRow{Title: "A guest's question", Project: "notes", Icon: notesIcon, Status: ui.StatusRequest, Label: "Request", Age: "3m"}),
+		card(ui.ThreadRow{Title: "Relay status polling", Status: ui.StatusFailed, Label: "Failed", Error: "Error occurred", Age: "5h"}),
+		card(ui.ThreadRow{Title: "Sidebar virtualization", Status: ui.StatusWoke, Label: "Woke", Woke: true, Branch: "t3/sidebar-virtual", PR: &ui.PRBadge{State: "merged", Text: "38"}, Age: "18m"}),
+		card(ui.ThreadRow{Title: "Outline and sources", Project: "notes", Icon: notesIcon, Recede: true, Age: "1d", Draft: true}),
+		{Shelf: &ui.Shelf{ID: "working", Label: "Working", Count: 2, Open: true}},
+		card(ui.ThreadRow{Shelf: "working", Title: "Restore test", Project: "atlas", Icon: atlasIcon, Status: ui.StatusWorking, Label: "Working", Timer: "12m", Recede: true, Age: "12m"}),
+		card(ui.ThreadRow{Shelf: "working", Title: "Wait for the subagents", Status: ui.StatusWaiting, Label: "Waiting", Timer: "40s", Recede: true, Age: "4m"}),
+		{Shelf: &ui.Shelf{ID: "snoozed", Label: "Snoozed", Count: 1}},
+		{Shelf: &ui.Shelf{ID: "settled", Label: "Settled", Count: 76, Open: true}},
+		slim("settled", ui.ThreadRow{Title: "Bounded snapshot history", Age: "1d"}),
+		slim("settled", ui.ThreadRow{Title: "Email-code sign-in", Project: "atlas", Icon: atlasIcon, Age: "3d"}),
+		{More: 25},
+	}}
 	s.Net = "workstation  ·  connected through relay in 612 ms  ·  DPoP session renews in 52m"
 	s.Stats = "1,024 threads   ·   2 running   ·   ping 38 ms   ·   frame 0.41 ms"
 }
@@ -126,8 +154,11 @@ func approvalScene() *ui.Scene {
 	s.State = ui.ThreadApproval
 	s.StateLabel = "Needs approval"
 	s.Run.Status = "Waiting"
-	s.Active[2].State = ui.ThreadApproval
-	s.Active[2].Note = "git push -u origin t3/go-client"
+	for _, it := range s.Sidebar.Items {
+		if r := it.Row; r != nil && r.Active {
+			r.Status, r.Label, r.Timer, r.Recede = ui.StatusApproval, "Approval", "", false
+		}
+	}
 	items := threadItems()
 	items = items[:len(items)-2]
 	items = append(items, ui.Item{Kind: ui.ItemTool, Tool: ui.ToolCommand, Title: "git push -u origin t3/go-client", Meta: "waiting for you"})
@@ -290,5 +321,99 @@ func phoneScene() *ui.Scene {
 	s.StateLabel = "Needs approval"
 	s.Approval = &ui.Approval{Kind: "command", Detail: "git push -u origin t3/go-client", Cwd: "tern"}
 	s.Placeholder = "Steer or queue…"
+	return s
+}
+
+// row is the fixture sidebar's row titled title.
+func row(s *ui.Scene, title string) *ui.ThreadRow {
+	for _, it := range s.Sidebar.Items {
+		if it.Row != nil && it.Row.Title == title {
+			return it.Row
+		}
+	}
+	panic("no row " + title)
+}
+
+// sidebarHoverScene has a card hovered, its controls in place of its
+// status, and its hover card out beside it.
+func sidebarHoverScene() *ui.Scene {
+	s := runningScene()
+	r := row(s, "Review the stop capability")
+	r.Hover, r.Provider, r.Model, r.Handoff, r.Terminals = true, "Claude", "Claude Opus 5.5", "Handed off from Codex", 1
+	row(s, "Email-code sign-in").Hover = true
+	return s
+}
+
+// sidebarMenuScene has a row's context menu open from the keyboard.
+func sidebarMenuScene() *ui.Scene {
+	s := runningScene()
+	sub := func(labels ...string) []ui.MenuItem {
+		var out []ui.MenuItem
+		for _, l := range labels {
+			out = append(out, ui.MenuItem{ID: l, Label: l})
+		}
+		return out
+	}
+	snooze := sub("In 1 hour", "In 3 hours", "This evening", "Tomorrow", "Next week")
+	s.Menu = &ui.ContextMenu{At: image.Pt(120, 262), Keyboard: true, Items: []ui.MenuItem{
+		{ID: "pin", Label: "Pin thread", Icon: "pin"},
+		{ID: "settle", Label: "Settle thread", Icon: "circle-check"},
+		{ID: "snooze", Label: "Snooze", Icon: "clock", Children: snooze},
+		{ID: "rename", Label: "Rename thread", Icon: "pencil", Sep: true},
+		{ID: "regenerate-title", Label: "Regenerating…", Icon: "refresh-cw", Off: true},
+		{ID: "mark-unread", Label: "Mark unread", Icon: "mail-open"},
+		{ID: "filter-by-project", Label: "Filter by tern", Icon: "folder-tree"},
+		{ID: "copy", Label: "Copy", Icon: "copy", Sep: true, Children: sub("Path", "Branch", "Thread ID")},
+		{ID: "archive", Label: "Archive thread", Icon: "archive", Sep: true},
+		{ID: "delete", Label: "Delete", Icon: "trash-2", Danger: true},
+	}}
+	return s
+}
+
+// sidebarFilterScene has the project filter open.
+func sidebarFilterScene() *ui.Scene {
+	s := runningScene()
+	s.Sidebar.Filter = &ui.ProjectFilter{Items: []ui.FilterItem{
+		{Label: "All projects", Selected: true},
+		{ID: "tern", Label: "tern", Icon: ternIcon},
+		{ID: "atlas", Label: "atlas", Icon: atlasIcon},
+		{ID: "notes", Label: "notes", Icon: notesIcon},
+	}}
+	return s
+}
+
+// sidebarSnoozeScene has a card's snooze menu open.
+func sidebarSnoozeScene() *ui.Scene {
+	s := runningScene()
+	r := row(s, "Watch pairing flow")
+	r.Hover = true
+	var cs []ui.MenuItem
+	for _, c := range [][2]string{{"In 1 hour", "11:00 AM"}, {"In 3 hours", "1:00 PM"}, {"This evening", "6:00 PM"}, {"Tomorrow", "9:00 AM"}, {"Next week", "Mon 9:00 AM"}} {
+		cs = append(cs, ui.MenuItem{ID: c[0], Label: c[0], Detail: c[1]})
+	}
+	s.Sidebar.Snooze = &ui.SnoozeMenu{Row: r.ID, Choices: cs}
+	return s
+}
+
+// sidebarSearchScene is the sidebar searching: its results in place of
+// the list, the first highlighted, a settled one quieter.
+func sidebarSearchScene() *ui.Scene {
+	s := runningScene()
+	s.Sidebar.Query = "pairing"
+	s.Sidebar.Results = []ui.ThreadRow{
+		{ID: "1", Title: "Watch pairing flow", Project: "tern", Icon: ternIcon, Age: "41m"},
+		{ID: "2", Title: "Pairing URL parser", Project: "tern", Icon: ternIcon, Age: "3d", Shelf: "settled"},
+	}
+	s.Sidebar.Items = nil
+	return s
+}
+
+// sidebarEmptyScene is the list scoped to a project with nothing in it.
+func sidebarEmptyScene() *ui.Scene {
+	s := runningScene()
+	s.Sidebar.Items = nil
+	s.Sidebar.Scope = []ui.ProjectIcon{notesIcon}
+	s.Sidebar.ScopeLabel = "Filter threads by project: notes"
+	s.Sidebar.Empty = &ui.SidebarEmpty{Text: "No threads in notes yet", Button: "Show all projects"}
 	return s
 }

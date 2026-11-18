@@ -19,8 +19,6 @@ func parseTime(s string) time.Time {
 	return t
 }
 
-func later(s string) bool { return s != "" && parseTime(s).After(time.Now()) }
-
 func isSubagent(t *t3.Thread) bool {
 	return t.Lineage != nil && t.Lineage.RelationshipToParent == "subagent"
 }
@@ -32,25 +30,6 @@ func anchor(t *t3.Thread) time.Time {
 		}
 	}
 	return time.Time{}
-}
-
-// age is "now", "4m", "2h", "3d", "5w", as the sidebar writes it.
-func age(t time.Time) string {
-	if t.IsZero() {
-		return ""
-	}
-	d := time.Since(t)
-	switch {
-	case d < time.Minute:
-		return "now"
-	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh", int(d.Hours()))
-	case d < 14*24*time.Hour:
-		return fmt.Sprintf("%dd", int(d.Hours()/24))
-	}
-	return fmt.Sprintf("%dw", int(d.Hours()/24/7))
 }
 
 // duration is "19s", "2m 5s", "1h 3m", as T3 writes them.
@@ -85,91 +64,8 @@ func threadState(t *t3.Thread) ui.ThreadState {
 	return ui.ThreadIdle
 }
 
-func (a *App) unread(r string, t *t3.Thread) bool {
-	return r != a.openID && t.LatestRunCompletedAt != "" && (t.LastVisitedAt == "" || t.LastVisitedAt < t.LatestRunCompletedAt)
-}
-
-// row is one inbox line. tag adds the machine's name, for a list that mixes
-// environments.
-func (a *App) row(e *envState, t *t3.Thread, tag bool) ui.ThreadRow {
-	id := ref(e.id(), t.ID)
-	r := ui.ThreadRow{
-		ID:       id,
-		Title:    t.Title,
-		Project:  e.projects[t.ProjectID].Title,
-		Branch:   t.Branch,
-		State:    threadState(t),
-		Unread:   a.unread(id, t),
-		Selected: id == a.openID,
-		Age:      age(anchor(t)),
-	}
-	if tag {
-		r.Env = e.env.Label
-	}
-	if r.Title == "" {
-		r.Title = "Untitled"
-	}
-	if r.Project == "" {
-		r.Project = "No project"
-	}
-	switch r.State {
-	case ui.ThreadRunning:
-		if st := parseTime(t.ActivityRunStartedAt); !st.IsZero() {
-			r.Timer = duration(time.Since(st))
-		}
-	case ui.ThreadApproval:
-		r.Note = "Needs approval: " + strings.ReplaceAll(t.PendingRuntimeRequest.Kind, "-", " ")
-	case ui.ThreadQuestion:
-		r.Note = "Has a question"
-	case ui.ThreadError:
-		r.Note = t.LastError
-	}
-	if later(t.SnoozedUntil) {
-		r.Wakes = parseTime(t.SnoozedUntil).Local().Format("Mon 15:04")
-		if parseTime(t.SnoozedUntil).Local().YearDay() == time.Now().YearDay() {
-			r.Wakes = parseTime(t.SnoozedUntil).Local().Format("15:04")
-		}
-	}
-	return r
-}
-
-// envThread is a thread with the environment it lives on.
-type envThread struct {
-	*t3.Thread
-	e *envState
-}
-
-// sidebar fills the inbox: one list across projects and machines, in T3's
-// sections.
-func (a *App) sidebar(s *ui.Scene) {
-	q := strings.ToLower(strings.TrimSpace(a.search))
-	var pinned, active, snoozed, settled []envThread
-	sources := 0
-	connected := false
-	for _, e := range a.envs {
-		connected = connected || e.conn != nil
-		if len(e.threads) > 0 {
-			sources++
-		}
-		for _, t := range e.threads {
-			if isSubagent(t) || t.ArchivedAt != "" || t.DeletedAt != "" {
-				continue
-			}
-			if q != "" && !strings.Contains(strings.ToLower(t.Title), q) {
-				continue
-			}
-			a.shelve(envThread{t, e}, &pinned, &active, &snoozed, &settled)
-		}
-	}
-	a.fillSidebar(s, sources > 1, pinned, active, snoozed, settled)
-	switch {
-	case !connected && len(pinned)+len(active)+len(snoozed)+len(settled) == 0:
-		s.SidebarNote = "Connecting…"
-	case q != "":
-		s.SidebarNote = "No titles match."
-	default:
-		s.SidebarNote = "Nothing active."
-	}
+// machines lists the machines for the footer's menu, with their status.
+func (a *App) machines(s *ui.Scene) {
 	for _, e := range a.envs {
 		st := ui.EnvOffline
 		switch e.status {
@@ -180,60 +76,6 @@ func (a *App) sidebar(s *ui.Scene) {
 		}
 		s.Envs = append(s.Envs, ui.Env{ID: e.id(), Label: e.env.Label, Status: st})
 	}
-}
-
-func (a *App) shelve(t envThread, pinned, active, snoozed, settled *[]envThread) {
-	switch {
-	case t.PinnedAt != "":
-		*pinned = append(*pinned, t)
-	case later(t.SnoozedUntil):
-		*snoozed = append(*snoozed, t)
-	case t.SettledAt != "":
-		*settled = append(*settled, t)
-	default:
-		*active = append(*active, t)
-	}
-}
-
-func (a *App) fillSidebar(s *ui.Scene, tag bool, pinned, active, snoozed, settled []envThread) {
-	sort.Slice(pinned, func(i, j int) bool {
-		ki, kj := pinned[i].PinOrderKey, pinned[j].PinOrderKey
-		if ki != kj {
-			return ki < kj
-		}
-		return pinned[i].PinnedAt < pinned[j].PinnedAt
-	})
-	sort.Slice(active, func(i, j int) bool {
-		ki, kj := active[i].ActiveOrderKey, active[j].ActiveOrderKey
-		if (ki != "") != (kj != "") {
-			return ki != ""
-		}
-		if ki != kj {
-			return ki < kj
-		}
-		return anchor(active[i].Thread).After(anchor(active[j].Thread))
-	})
-	sort.Slice(snoozed, func(i, j int) bool { return snoozed[i].SnoozedUntil < snoozed[j].SnoozedUntil })
-	sort.Slice(settled, func(i, j int) bool { return settled[i].SettledAt > settled[j].SettledAt })
-	for _, t := range pinned {
-		s.Pinned = append(s.Pinned, a.row(t.e, t.Thread, tag))
-	}
-	for _, t := range active {
-		s.Active = append(s.Active, a.row(t.e, t.Thread, tag))
-	}
-	for _, t := range snoozed {
-		s.Snoozed = append(s.Snoozed, a.row(t.e, t.Thread, tag))
-	}
-	s.Settled = len(settled)
-	if a.showSettled {
-		for i, t := range settled {
-			if i == 100 {
-				break
-			}
-			s.SettledRows = append(s.SettledRows, a.row(t.e, t.Thread, tag))
-		}
-	}
-	s.ShowSnoozed, s.ShowSettled = a.showSnoozed, a.showSettled
 }
 
 // Scene is the whole window for this frame. Between state changes it
@@ -267,7 +109,8 @@ func (a *App) build(now time.Time) *ui.Scene {
 		s.Login = &l
 		return s
 	}
-	a.sidebar(s)
+	a.machines(s)
+	a.sidebar(s, now)
 	s.Net = a.net
 	s.Error = a.errText
 	s.Notice = a.notice
@@ -307,13 +150,7 @@ func (a *App) build(now time.Time) *ui.Scene {
 		}
 	}
 	s.Stats = fmt.Sprintf("%s threads   ·   %d running", len3(total), running)
-	if _, t := a.thread(a.ctxRef); t != nil {
-		g := ui.Trait{Sel: -1}
-		for _, it := range a.threadItems(t) {
-			g.Choices = append(g.Choices, ui.TraitChoice{Label: it.label, Desc: it.desc, Danger: it.danger, Off: it.off})
-		}
-		s.Context = &ui.Traits{Groups: []ui.Trait{g}}
-	}
+	a.menuScene(s, now)
 	if a.accountOpen {
 		s.Account = &ui.Traits{Groups: []ui.Trait{{Label: "T3 Connect", Sel: -1, Choices: []ui.TraitChoice{{Label: "Sign out", Desc: "Forgets this device's sessions"}}}}}
 	}

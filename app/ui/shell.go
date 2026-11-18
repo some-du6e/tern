@@ -12,6 +12,7 @@ import (
 	"gioui.org/f32"
 	"gioui.org/font"
 	"gioui.org/io/clipboard"
+	"gioui.org/io/event"
 	"gioui.org/io/key"
 	"gioui.org/layout"
 	"gioui.org/op"
@@ -59,6 +60,7 @@ func (th *Theme) Desktop(gtx C, s *Scene) D {
 		th.shellKeys(gtx, s)
 	}
 	size := gtx.Constraints.Max
+	th.in.winSize = size
 	fill(gtx, P.Background, image.Rectangle{Max: size}, 0)
 
 	sw := th.sidebarPx(gtx, s, size.X)
@@ -88,10 +90,14 @@ func (th *Theme) Desktop(gtx C, s *Scene) D {
 	if s.Diff != nil {
 		th.diffWindow(gtx, s.Diff)
 	}
-	if s.Context != nil {
+	if s.Menu != nil {
 		th.contextMenu(gtx, size, s)
+	} else {
+		th.in.menu.open = false
 	}
-	if s.Live && (s.Picker != nil || s.Traits != nil || s.Access != nil || s.Account != nil || s.Machines != nil || s.Projects != nil || s.Context != nil || s.Details) {
+	sb := &s.Sidebar
+	if s.Live && (s.Picker != nil || s.Traits != nil || s.Access != nil || s.Account != nil || s.Machines != nil || s.Projects != nil ||
+		s.Menu != nil || sb.Filter != nil || sb.Snooze != nil || s.Details) {
 		// A click anywhere outside an open menu closes it. The menus are
 		// deferred, so they sit above this.
 		th.hit(gtx, "menus.close", size)
@@ -101,13 +107,24 @@ func (th *Theme) Desktop(gtx C, s *Scene) D {
 
 // shellKeys handles T3's shell shortcuts (keybindings.ts): mod+B the
 // sidebar, mod+J the terminal, mod+Alt+B the right panel, mod+Shift+B the
-// thread details.
+// thread details; and the sidebar's: mod+N a new thread, mod+Shift+[ and ]
+// the thread before and after, mod+1…9 the nth thread, mod+Shift+S settle
+// and mod+Shift+P pin. The last three leave a focused terminal alone.
 func (th *Theme) shellKeys(gtx C, s *Scene) {
+	filters := []event.Filter{
+		key.Filter{Name: "B", Required: key.ModShortcut, Optional: key.ModShift | key.ModAlt},
+		key.Filter{Name: "J", Required: key.ModShortcut},
+		key.Filter{Name: "N", Required: key.ModShortcut},
+		key.Filter{Name: "[", Required: key.ModShortcut | key.ModShift},
+		key.Filter{Name: "]", Required: key.ModShortcut | key.ModShift},
+		key.Filter{Name: "S", Required: key.ModShortcut | key.ModShift},
+		key.Filter{Name: "P", Required: key.ModShortcut | key.ModShift},
+	}
+	for n := 1; n <= 9; n++ {
+		filters = append(filters, key.Filter{Name: key.Name(strconv.Itoa(n)), Required: key.ModShortcut})
+	}
 	for {
-		ev, ok := gtx.Event(
-			key.Filter{Name: "B", Required: key.ModShortcut, Optional: key.ModShift | key.ModAlt},
-			key.Filter{Name: "J", Required: key.ModShortcut},
-		)
+		ev, ok := gtx.Event(filters...)
 		if !ok {
 			return
 		}
@@ -115,7 +132,20 @@ func (th *Theme) shellKeys(gtx C, s *Scene) {
 		if !ok || ke.State != key.Press {
 			continue
 		}
+		term := gtx.Focused(&th.in.term)
 		switch {
+		case ke.Name == "N":
+			th.push(Action{ID: "new", Kind: "click"})
+		case ke.Name == "[":
+			th.push(Action{ID: "thread.prev", Kind: "click"})
+		case ke.Name == "]":
+			th.push(Action{ID: "thread.next", Kind: "click"})
+		case ke.Name == "S" && !term:
+			th.push(Action{ID: "thread.settle", Kind: "click"})
+		case ke.Name == "P" && !term:
+			th.push(Action{ID: "thread.pin", Kind: "click"})
+		case len(ke.Name) == 1 && ke.Name >= "1" && ke.Name <= "9" && !term:
+			th.push(Action{ID: "thread.jump:" + string(ke.Name), Kind: "click"})
 		case ke.Name == "J" && s.Run != nil:
 			th.push(Action{ID: "terminal.toggle", Kind: "click"})
 		case ke.Name == "B" && ke.Modifiers.Contain(key.ModShift) && s.Run != nil:

@@ -34,10 +34,11 @@ type envState struct {
 	projects  map[string]t3.Project
 	threads   map[string]*t3.Thread
 	shellSave time.Time // last time the shell cache was written
+	operate   bool      // the session may change threads, not just read them
 }
 
 func newEnv(e t3.Environment, paired bool) *envState {
-	return &envState{env: e, status: "offline", paired: paired, projects: map[string]t3.Project{}, threads: map[string]*t3.Thread{}}
+	return &envState{env: e, status: "offline", paired: paired, projects: map[string]t3.Project{}, threads: map[string]*t3.Thread{}, operate: true}
 }
 
 func (e *envState) id() string { return e.env.EnvironmentID }
@@ -78,9 +79,33 @@ type App struct {
 	trash   map[string][]pastedImage // their chips were deleted; undo brings them back
 	sent    map[string]*sentThumb    // sent pictures' thumbnails, by env/attachment id
 
-	search       string
-	showSnoozed  bool
-	showSettled  bool
+	// The sidebar: the search and its highlighted result; the project
+	// scope ("<env>/<project>" keys) and the filter's popup; which shelves
+	// are open and how many Settled pages show; the multi-selection and the
+	// row a Shift range starts from; the row being renamed; the card whose
+	// snooze menu is open. working and returned hold threads on the Working
+	// shelf past the end of their work and note when they left it; ordered
+	// is the list's rows top to bottom, for the keyboard and the jump keys.
+	search      string
+	searchSel   int
+	results     []string
+	scope       []string
+	filterOpen  bool
+	filterQuery string
+	filterKeys  []string
+	shelfOpen   map[string]bool
+	settledMore int
+	selected    map[string]bool
+	anchor      string
+	renaming    string
+	snoozeRef   string
+	snoozeMenu  []snoozeChoice
+	working     map[string]workingState
+	returned    map[string]time.Time
+	ordered     []string
+	parked      map[string]bool // the Snoozed and Settled rows, which advancing skips
+	timer       *time.Timer     // a scene due when a Working shelf hold runs out
+
 	picker       *pickerState
 	traitsOpen   bool
 	accessOpen   bool
@@ -98,6 +123,9 @@ type App struct {
 	drawers       map[string]*drawer  // each thread's terminals, by ref
 	browsers      map[string]*browser // each thread's browser panel, by ref
 	ctxRef        string              // the thread whose right-click menu is open
+	ctxBulk       bool                // the open menu is the multi-selection's
+	ctxKeyboard   bool                // it was opened from the keyboard
+	ctxPresets    []snoozeChoice      // its snooze presets, as of when it opened
 	ctxConfirm    bool                // Delete was clicked once and wants a second click
 	errText       string
 	notice        string
@@ -173,12 +201,19 @@ func NewWithStore(store *t3.Store, redraw func()) (*App, error) {
 		drawers:  map[string]*drawer{},
 		browsers: map[string]*browser{},
 		answers:  map[string]map[int]bool{},
+		selected: map[string]bool{},
+		working:  map[string]workingState{},
+		returned: map[string]time.Time{},
 	}
 	_ = store.Delete("env-filter") // from when a machine's chip filtered the inbox
 	a.detailsCard = true
 	_, _ = store.Get("details-card", &a.detailsCard)
 	_, _ = store.Get("sidebar-hidden", &a.sidebarHidden)
 	_, _ = store.Get("sidebar-width", &a.sidebarWidth)
+	// The shelves start folded, as T3's do, and remember being opened.
+	a.shelfOpen = map[string]bool{}
+	_, _ = store.Get("sidebar-shelves", &a.shelfOpen)
+	_, _ = store.Get("sidebar-scope", &a.scope)
 	_ = store.Delete("panel-hidden") // from when details were a side panel
 	return a, nil
 }
@@ -450,6 +485,7 @@ func (a *App) connect(e *envState) {
 		e.conn = conn
 		e.retry = 0
 		e.status = "online"
+		e.operate = conn.Session().CanOperate()
 		a.net = e.env.Label + " · socket open"
 		var openID string
 		if envID, _ := splitRef(a.openID); envID == e.id() {

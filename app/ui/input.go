@@ -72,16 +72,43 @@ type input struct {
 	runs        map[string][2]string          // run buttons' language and code, by click id
 	runFailed   map[string]bool               // a run that couldn't start, for its ✕
 	paste       string                        // an editor to paste text into next frame
-	actions     []Action
+	trans       map[string]transState         // the transitions under way, by name
+	winSize     image.Point                   // the window, for popups kept inside it
+	// The sidebar's list: its keyboard tree from the last layout, each
+	// row's focus tag, the row to focus once it's laid out, and whether
+	// focus came from the keyboard (T3 rings rows on :focus-visible only);
+	// the list's top in the window, its height and how far it's scrolled.
+	nav         listNav
+	rowTags     map[string]*int
+	focusRow    string
+	kbdFocus    bool
+	listTop     int
+	listView    int
+	listScroll  int
+	resultHover int  // the search result under the pointer, plus one
+	renaming    bool // the rename field had focus last frame
+	// The hover card: the row it's for, when the pointer came to rest there
+	// and when the last one closed; tipBusy is a control's tooltip in the
+	// row being drawn, which the card stands aside for.
+	cardRow   string
+	cardSince time.Time
+	cardShut  time.Time
+	tipBusy   bool
+	menu      menuState // the open context menu's submenus and highlight
+	actions   []Action
 }
 
 // Action is one thing the user did this frame: ID is the target, Kind is
 // "click", "context" (a right-click), "middle" (a middle-click), "submit",
-// "change", "key" or "paste" (Ctrl+V in the composer), Text the
-// editor text or key name.
+// "change", "key", "blur" (an editor lost focus), "hover" or "paste"
+// (Ctrl+V in the composer), Text the editor text or key name.
 type Action struct {
 	ID, Kind, Text string
 	Alt            bool
+	// A click's Shift, its shortcut key (Ctrl, or Cmd on a Mac) and how
+	// many clicks in a row it ends: 2 for a double click.
+	Shift, Short bool
+	Clicks       int
 }
 
 // Actions returns and clears what happened since the last call.
@@ -175,7 +202,7 @@ func (th *Theme) events(gtx C, id string) (*gesture.Click, *int) {
 				th.in.focus = f
 				continue
 			}
-			th.push(Action{ID: id, Kind: "click"})
+			th.push(Action{ID: id, Kind: "click", Shift: e.Modifiers.Contain(key.ModShift), Short: e.Modifiers.Contain(key.ModShortcut), Clicks: e.NumClicks})
 		}
 	}
 	if th.in.context == nil {
@@ -213,7 +240,14 @@ func (th *Theme) trackPointer(gtx C, size image.Point) {
 		if !ok {
 			break
 		}
-		if e, ok := ev.(pointer.Event); ok && e.Buttons == pointer.ButtonSecondary {
+		e, ok := ev.(pointer.Event)
+		if !ok {
+			continue
+		}
+		// A press ends keyboard navigation: focus rings show only after the
+		// keyboard moved focus, as :focus-visible does.
+		th.in.kbdFocus = false
+		if e.Buttons == pointer.ButtonSecondary {
 			th.in.ctxAt = e.Position.Round()
 		}
 	}
@@ -258,6 +292,11 @@ func (th *Theme) Tip(id, tip string, up bool, align int, w W) W {
 // offset) once the pointer has rested on it for 600ms, fading and scaling
 // in over 150ms (docs/ui/02-primitives.md §3.7, port note 10).
 func (th *Theme) tipAt(gtx C, id, tip string, size image.Point, up bool, align int) {
+	th.tipDelay(gtx, id, tip, size, up, align, 600*time.Millisecond)
+}
+
+// tipDelay is tipAt after a rest of delay.
+func (th *Theme) tipDelay(gtx C, id, tip string, size image.Point, up bool, align int, delay time.Duration) {
 	c := th.in.clicks[id]
 	if c == nil || !c.Hovered() || tip == "" {
 		delete(th.in.tipSince, id)
@@ -271,9 +310,9 @@ func (th *Theme) tipAt(gtx C, id, tip string, size image.Point, up bool, align i
 		since = gtx.Now
 		th.in.tipSince[id] = since
 	}
-	shown := gtx.Now.Sub(since) - 600*time.Millisecond
+	shown := gtx.Now.Sub(since) - delay
 	if shown < 0 {
-		gtx.Execute(op.InvalidateCmd{At: since.Add(600 * time.Millisecond)})
+		gtx.Execute(op.InvalidateCmd{At: since.Add(delay)})
 		return
 	}
 	t := easeOut(clamp01(float32(shown) / float32(150*time.Millisecond)))
@@ -308,6 +347,64 @@ func (th *Theme) tipAt(gtx C, id, tip string, size image.Point, up bool, align i
 	op.Affine(f32.Affine2D{}.Scale(origin, f32.Pt(k, k))).Add(gtx.Ops)
 	call.Add(gtx.Ops)
 	op.Defer(gtx.Ops, m2.Stop())
+}
+
+// transState is a value easing between 0 and 1.
+type transState struct {
+	from, to float32
+	at       time.Time
+}
+
+func (s transState) value(now time.Time, d time.Duration) float32 {
+	t := clamp01(float32(now.Sub(s.at)) / float32(d))
+	return s.from + (s.to-s.from)*cubicBezier(0.4, 0, 0.2, 1, t)
+}
+
+// transition eases the value named key toward 1 (on) or 0 over d on T3's
+// default curve, cubic-bezier(0.4, 0, 0.2, 1), and returns where it is: a
+// CSS transition. A value seen for the first time starts where it's going.
+func (th *Theme) transition(gtx C, key string, on bool, d time.Duration) float32 {
+	if th.in.trans == nil {
+		th.in.trans = map[string]transState{}
+	}
+	to := float32(0)
+	if on {
+		to = 1
+	}
+	s, ok := th.in.trans[key]
+	if !ok {
+		th.in.trans[key] = transState{from: to, to: to, at: gtx.Now}
+		return to
+	}
+	cur := s.value(gtx.Now, d)
+	if s.to != to {
+		s = transState{from: cur, to: to, at: gtx.Now}
+		th.in.trans[key] = s
+	}
+	if cur != s.to {
+		gtx.Execute(op.InvalidateCmd{})
+	}
+	return cur
+}
+
+// cubicBezier is CSS's cubic-bezier(x1, y1, x2, y2) at progress x: the
+// curve's y where its x is x.
+func cubicBezier(x1, y1, x2, y2, x float32) float32 {
+	at := func(p1, p2, t float32) float32 {
+		u := 1 - t
+		return 3*u*u*t*p1 + 3*u*t*t*p2 + t*t*t
+	}
+	lo, hi := float32(0), float32(1)
+	t := x
+	for range 24 {
+		if at(x1, x2, t) < x {
+			lo = t
+		} else {
+			hi = t
+		}
+		t = (lo + hi) / 2
+	}
+	return at(y1, y2, t)
 }
 
 // tooltip is T3's tooltip popup: popover surface, 1dp border, radius 6,

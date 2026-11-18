@@ -1,5 +1,7 @@
 package ui
 
+import "image"
+
 // The view model. Every field maps to something the T3 protocol sends (see
 // ../docs): shell threads, turn items, runs, runtime requests. The mockups
 // fill it with fixtures; the client will fill it from the socket.
@@ -28,21 +30,169 @@ const (
 	ThreadError
 )
 
-// ThreadRow is one line of the inbox. The sidebar mixes every project and
-// machine into one list, so each row carries its own project and machine.
+// ---------- the sidebar (docs/ui/04-sidebar.md) ----------
+
+// Sidebar is the sidebar's content below its header row: the search and
+// filter row, the thread list and the footer.
+type Sidebar struct {
+	Query       string         // a mockup's search; live, the "search" field holds it
+	HasProjects bool           // there's a project, so the filter shows
+	NoNew       bool           // there's nowhere to start a thread: New thread is disabled
+	Scope       []ProjectIcon  // the projects the filter narrows the list to, none for all
+	ScopeLabel  string         // the filter's label: "Filter threads by project: A, B"
+	Items       []SidebarItem  // the list, top to bottom
+	Empty       *SidebarEmpty  // what the list says when nothing is active
+	Results     []ThreadRow    // while searching, the matches in place of the list
+	Highlight   int            // the highlighted result
+	NoResults   string         // what the list says when nothing matches
+	Filter      *ProjectFilter // the filter's popup, while it's open
+	Snooze      *SnoozeMenu    // a card's snooze menu, while it's open
+	Renaming    string         // the row whose title is being edited
+	Ticking     bool           // a row shows a run timer, which moves each second
+}
+
+// SidebarItem is one entry in the thread list: a thread's row, a shelf's
+// header, or the Settled shelf's "Show N more".
+type SidebarItem struct {
+	Row   *ThreadRow
+	Shelf *Shelf
+	More  int // "Show <More> more"
+}
+
+// Shelf is the header of the Working, Snoozed or Settled shelf.
+type Shelf struct {
+	ID    string // "working", "snoozed", "settled": click target "shelf:<ID>"
+	Label string
+	Count int
+	Open  bool
+}
+
+// RowStatus is the state a card's status label shows (§3.6); StatusNone
+// shows the row's age instead.
+type RowStatus int
+
+const (
+	StatusNone RowStatus = iota
+	StatusWorking
+	StatusWaiting
+	StatusApproval
+	StatusInput
+	StatusRequest
+	StatusLimited
+	StatusFailed
+	StatusWoke
+	StatusDone
+)
+
+// ThreadRow is a thread in the sidebar: a card for pinned, active and
+// working threads, a slim row on the Snoozed and Settled shelves.
 type ThreadRow struct {
-	ID       string // click target "thread:<ID>" when set
-	Title    string
-	Project  string
-	Branch   string
-	Env      string // machine label for threads on another environment, "" for this one
-	State    ThreadState
-	Unread   bool // a run finished since the last visit: the "Done" chip
+	ID    string // "<environment>/<thread>": click target "thread:<ID>"
+	Slim  bool   // the one-line row of the Snoozed and Settled shelves
+	Shelf string // the shelf it's on, "" for pinned and active
+	Title string
+
+	Project string // the project's name
+	Icon    ProjectIcon
+
+	Status RowStatus
+	Label  string // the status label: "Working", "Goal", "Approval"…
+	Timer  string // after a working or waiting label: "4h 12m"
+	Age    string // "now", "4m", "2h", "3d"
+	Wake   string // a snoozed row's wake label: "3h"
+
+	Recede       bool // quieter: it's working, or done and seen
+	Unread       bool // its last run finished since the last visit
+	Woke         bool // it woke from a snooze since the last visit
+	Active       bool // the open thread
+	Selected     bool // in the multi-selection
+	Pinned       bool
+	Draft        bool // its composer holds unsent text
+	Regenerating bool // its title is being regenerated
+
+	Branch      string
+	Worktree    bool     // the branch is checked out in a worktree
+	Machine     string   // the machine it's on
+	MachineIcon string   // that machine's kind: "server", "laptop"…
+	Remote      bool     // the row shows its machine's icon
+	Scratch     string   // a "No project" thread's machine, for the meta line
+	Providers   []string // the provider stack, oldest first: "Codex", "Claude"
+	Provider    string   // the current provider, for the hover card's model line
+	Model       string   // the hover card's model
+	Handoff     string   // "Handed off from Codex"
+	Terminals   int      // terminals with a command running
+	Error       string   // "Error occurred", "Usage limit reached"
+	Limited     bool     // the error is a usage limit
+	PR          *PRBadge
+
+	CanSettle bool // Settle (or Un-settle, Wake) is offered
+	CanSnooze bool // the snooze clock is offered
+	CanUnpin  bool // the pin is a button
+	Hover     bool // a mockup draws it hovered
+}
+
+// ProjectIcon is a project's monogram (ProjectMonogram.tsx) in one of T3's
+// 18 icon colours, or a lucide icon in that colour.
+type ProjectIcon struct {
+	Text   string // one or two glyphs
+	Color  string // "amber", "blue"…
+	Lucide string // a lucide icon instead of the monogram
+}
+
+// PRBadge is the meta line's pull request: its state's glyph and its number,
+// or "+N" for several linked.
+type PRBadge struct {
+	State string // "open", "draft", "merged", "closed", "" while unknown
+	Text  string
+	URL   string
+}
+
+// SidebarEmpty is the empty list's message and its one button.
+type SidebarEmpty struct {
+	Text   string
+	Button string // click target "filter.clear"
+}
+
+// ProjectFilter is the project filter's popup: "All projects", then each
+// project. Its search field is the "filter.search" editor.
+type ProjectFilter struct {
+	Items []FilterItem
+}
+
+// FilterItem is one of the filter's projects; ID "" is "All projects".
+type FilterItem struct {
+	ID       string // click target "filter.project:<ID>"
+	Label    string
+	Icon     ProjectIcon
 	Selected bool
-	Age      string // "4m", "2h", "3d"
-	Timer    string // run duration for the Working chip
-	Note     string // what the thread waits on, or its error
-	Wakes    string // snoozed until, "18:00"
+}
+
+// SnoozeMenu is the menu a card's clock opens: when to wake it.
+type SnoozeMenu struct {
+	Row     string     // the row it opened on
+	Choices []MenuItem // click targets "snooze.pick:<ID>"
+}
+
+// ContextMenu is the menu a right-click (or the context menu key) opens on
+// a row: the browser's DOM menu in T3 (contextMenuFallback.ts).
+type ContextMenu struct {
+	Items    []MenuItem
+	Keyboard bool        // opened from the keyboard: the first item has focus
+	At       image.Point // where a mockup's opens; a live one opens at the click
+}
+
+// MenuItem is one row of a menu.
+type MenuItem struct {
+	ID       string // click target "ctx:<ID>"
+	Label    string
+	Icon     string // lucide
+	Detail   string // a trailing value: "6:00 PM"
+	Danger   bool
+	Off      bool       // shown, but can't be picked now
+	Sep      bool       // a separator above it
+	Radio    bool       // a radio row: a check when Checked, else a gap
+	Checked  bool       //
+	Children []MenuItem // a submenu
 }
 
 type ItemKind int
@@ -214,15 +364,8 @@ type RunInfo struct {
 }
 
 type Scene struct {
-	Envs        []Env
-	Search      string
-	Filter      string // project filter, "All projects"
-	Pinned      []ThreadRow
-	Active      []ThreadRow
-	Snoozed     []ThreadRow
-	Settled     int         // folded, loaded N at a time
-	SettledRows []ThreadRow // live: the settled threads, once unfolded
-	SidebarNote string      // live: why the inbox is empty ("Connecting…")
+	Envs    []Env
+	Sidebar Sidebar
 
 	Tabs   []string
 	TabIDs []string // click targets "tab:<ID>" and "tabclose:<ID>"
@@ -230,24 +373,23 @@ type Scene struct {
 
 	// Live marks a scene from the real client: fields become editors and
 	// rows become click targets. Mockups leave it off.
-	Live                     bool
-	Booting                  bool         // live: still reading the saved session; draw a blank window
-	Error                    string       // shown as a dismissable banner
-	Notice                   string       // a quiet status line over the composer, like "Sending…"
-	Empty                    string       // shown instead of messages when no thread is open
-	Access                   *Traits      // the access-mode menu, open over the lock
-	Account                  *Traits      // the account menu, open over the sidebar footer
-	Projects                 *Traits      // the new-thread project menu, one group per machine
-	Context                  *Traits      // a thread's right-click menu, at the click
-	Details                  bool         // the thread details popover is open
-	DetailsCard              bool         // the details card is shown inline, where it fits
-	SidebarHidden            bool         // the sidebar is collapsed
-	SidebarW                 float32      // the sidebar's width in dp, 0 for T3's default
-	Machines                 *Traits      // the footer's machines menu, when open
-	Term                     *TermView    // the open thread's terminal drawer, when open
-	Web                      *BrowserView // the open thread's browser panel, when open
-	PickProject              bool         // the header's project is a dropdown (a draft)
-	ShowSnoozed, ShowSettled bool
+	Live          bool
+	Booting       bool         // live: still reading the saved session; draw a blank window
+	Error         string       // shown as a dismissable banner
+	Notice        string       // a quiet status line over the composer, like "Sending…"
+	Empty         string       // shown instead of messages when no thread is open
+	Access        *Traits      // the access-mode menu, open over the lock
+	Account       *Traits      // the account menu, open over the sidebar footer
+	Projects      *Traits      // the new-thread project menu, one group per machine
+	Menu          *ContextMenu // a sidebar row's context menu, at the click
+	Details       bool         // the thread details popover is open
+	DetailsCard   bool         // the details card is shown inline, where it fits
+	SidebarHidden bool         // the sidebar is collapsed
+	SidebarW      float32      // the sidebar's width in dp, 0 for T3's default
+	Machines      *Traits      // the footer's machines menu, when open
+	Term          *TermView    // the open thread's terminal drawer, when open
+	Web           *BrowserView // the open thread's browser panel, when open
+	PickProject   bool         // the header's project is a dropdown (a draft)
 
 	Title      string
 	State      ThreadState

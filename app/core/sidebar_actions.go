@@ -1,0 +1,1116 @@
+package core
+
+import (
+	"errors"
+	"fmt"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/some-du6e/tern/app/t3"
+	"github.com/some-du6e/tern/app/ui"
+)
+
+// The sidebar's search, its project filter, its menus, and the thread
+// actions they send (Sidebar.tsx, threadActionMenu.logic.ts).
+
+// ---------- search ----------
+
+// searchScene lists, in place of the list, every listed thread in scope
+// whose title, branch or pull request has all the query's words, in the
+// list's order.
+func (a *App) searchScene(sb *ui.Sidebar, l sidebarList, q string, now time.Time) {
+	words := strings.Fields(strings.ToLower(q))
+	match := func(t *t3.Thread) bool {
+		hay := strings.ToLower(t.Title + " " + t.Branch)
+		for _, pr := range t.PullRequests {
+			hay += fmt.Sprintf(" #%d", pr.Number)
+		}
+		for _, w := range words {
+			if !strings.Contains(hay, w) {
+				return false
+			}
+		}
+		return true
+	}
+	a.results = a.results[:0]
+	for i, shelf := range [][]sideThread{l.pinned, l.active, l.working, l.snoozed, l.settled} {
+		for _, t := range shelf {
+			if !match(t.Thread) {
+				continue
+			}
+			r := a.row(t, "", now)
+			if i == 4 {
+				r.Shelf = "settled"
+			}
+			sb.Results = append(sb.Results, r)
+			a.results = append(a.results, t.ref)
+		}
+	}
+	if len(sb.Results) == 0 {
+		sb.NoResults = "No threads found"
+		return
+	}
+	a.searchSel = min(max(0, a.searchSel), len(sb.Results)-1)
+	sb.Highlight = a.searchSel
+}
+
+// ---------- the project filter ----------
+
+// scopeSet is the projects the list is narrowed to, by "<env>/<project>",
+// or nil for all of them. Stored keys whose project is gone or archived
+// don't count, and with none left the list shows everything.
+func (a *App) scopeSet() map[string]bool {
+	var out map[string]bool
+	for _, k := range a.scope {
+		envID, id := splitRef(k)
+		if e := a.env(envID); e != nil {
+			if p, ok := e.projects[id]; ok && p.ArchivedAt == "" {
+				if out == nil {
+					out = map[string]bool{}
+				}
+				out[k] = true
+			}
+		}
+	}
+	return out
+}
+
+func (a *App) scopeTitle(k string) string {
+	envID, id := splitRef(k)
+	if e := a.env(envID); e != nil {
+		return e.projects[id].Title
+	}
+	return ""
+}
+
+// scopeIcons is the filter trigger's projects and its label.
+func (a *App) scopeIcons(scope map[string]bool) ([]ui.ProjectIcon, string) {
+	if len(scope) == 0 {
+		return nil, "Filter threads by project"
+	}
+	var icons []ui.ProjectIcon
+	var names []string
+	for _, k := range a.scope {
+		if !scope[k] {
+			continue
+		}
+		envID, id := splitRef(k)
+		p := a.env(envID).projects[id]
+		icons = append(icons, projectIcon(p))
+		names = append(names, p.Title)
+	}
+	return icons, "Filter threads by project: " + strings.Join(names, ", ")
+}
+
+// filterOrder is every project the filter offers, most recently active
+// first. It's fixed when the popup opens, so rows don't move under it.
+func (a *App) filterOrder() []string {
+	last := map[string]time.Time{}
+	var keys []string
+	for _, e := range a.envs {
+		for _, t := range e.threads {
+			k := ref(e.id(), t.ProjectID)
+			if at := parseTime(t.LatestUserMessageAt); at.After(last[k]) {
+				last[k] = at
+			}
+		}
+		for id, p := range e.projects {
+			if p.ArchivedAt == "" {
+				keys = append(keys, ref(e.id(), id))
+			}
+		}
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if !last[keys[i]].Equal(last[keys[j]]) {
+			return last[keys[i]].After(last[keys[j]])
+		}
+		return a.scopeTitle(keys[i]) < a.scopeTitle(keys[j])
+	})
+	return keys
+}
+
+// filterScene is the filter's popup: "All projects" (not while searching
+// it), then the projects whose name has the query.
+func (a *App) filterScene(sb *ui.Sidebar, scope map[string]bool) {
+	f := &ui.ProjectFilter{}
+	q := strings.ToLower(strings.TrimSpace(a.filterQuery))
+	if q == "" {
+		f.Items = append(f.Items, ui.FilterItem{Label: "All projects", Selected: len(scope) == 0})
+	}
+	for _, k := range a.filterKeys {
+		envID, id := splitRef(k)
+		e := a.env(envID)
+		if e == nil {
+			continue
+		}
+		p, ok := e.projects[id]
+		if !ok || !strings.Contains(strings.ToLower(p.Title), q) {
+			continue
+		}
+		f.Items = append(f.Items, ui.FilterItem{ID: k, Label: p.Title, Icon: projectIcon(p), Selected: scope[k]})
+	}
+	sb.Filter = f
+}
+
+// setScope narrows the list to keys and saves it. A new scope starts the
+// list afresh: the selection clears and the Settled shelf folds back to its
+// first page. Call with the lock held.
+func (a *App) setScope(keys []string) {
+	a.scope = keys
+	a.selected, a.anchor = map[string]bool{}, ""
+	a.settledMore = 0
+	_ = a.store.Put("sidebar-scope", keys)
+}
+
+// pickProject is a click on one of the filter's projects: it scopes the
+// list to it, or with Shift adds or drops it and keeps the popup open.
+func (a *App) pickProject(k string, shift bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	switch {
+	case k == "":
+		a.setScope(nil)
+	case shift:
+		keys := []string{}
+		found := false
+		for _, s := range a.scope {
+			if s == k {
+				found = true
+				continue
+			}
+			keys = append(keys, s)
+		}
+		if !found {
+			keys = append(keys, k)
+		}
+		a.setScope(keys)
+		return
+	default:
+		a.setScope([]string{k})
+	}
+	a.filterOpen = false
+}
+
+// ---------- snooze presets ----------
+
+// defaultSnoozePresets are T3's, for servers whose settings have none.
+var defaultSnoozePresets = []t3.SnoozePreset{
+	{Kind: "after", Minutes: 60}, {Kind: "after", Minutes: 180},
+	{Kind: "at", Day: "today", Time: "18:00"}, {Kind: "at", Day: "tomorrow", Time: "09:00"}, {Kind: "at", Day: "monday", Time: "09:00"},
+}
+
+var weekdays = map[string]time.Weekday{"sunday": time.Sunday, "monday": time.Monday, "tuesday": time.Tuesday,
+	"wednesday": time.Wednesday, "thursday": time.Thursday, "friday": time.Friday, "saturday": time.Saturday}
+
+// snoozeChoice is one resolved preset: what the menu says and when it wakes.
+type snoozeChoice struct {
+	id, label, when string
+	until           time.Time
+	preset          t3.SnoozePreset
+}
+
+func presetID(p t3.SnoozePreset) string {
+	if p.Kind == "after" {
+		return "after:" + strconv.Itoa(p.Minutes)
+	}
+	return "at:" + p.Day + ":" + p.Time
+}
+
+func plural(n int, unit string) string {
+	if n == 1 {
+		return "1 " + unit
+	}
+	return strconv.Itoa(n) + " " + unit + "s"
+}
+
+// clock is a wake time as the snooze menu writes it: "6:00 PM".
+func clock(t time.Time) string { return t.Format("3:04 PM") }
+
+// resolvePreset is one preset as of now (resolveSnoozePreset): its label and
+// wake time. A time today that has passed is left out.
+func resolvePreset(p t3.SnoozePreset, now time.Time) (snoozeChoice, bool) {
+	c := snoozeChoice{id: presetID(p), preset: p}
+	ahead := 0
+	if p.Kind == "after" {
+		c.until = now.Add(time.Duration(p.Minutes) * time.Minute)
+		switch {
+		case p.Minutes%(24*60) == 0:
+			c.label = "In " + plural(p.Minutes/(24*60), "day")
+		case p.Minutes%60 == 0:
+			c.label = "In " + plural(p.Minutes/60, "hour")
+		default:
+			c.label = "In " + plural(p.Minutes, "minute")
+		}
+	} else {
+		switch p.Day {
+		case "today":
+		case "tomorrow":
+			ahead = 1
+		default:
+			if ahead = (int(weekdays[p.Day]) - int(now.Weekday()) + 7) % 7; ahead == 0 {
+				ahead = 7
+			}
+		}
+		hh, mm, _ := strings.Cut(p.Time, ":")
+		h, _ := strconv.Atoi(hh)
+		m, _ := strconv.Atoi(mm)
+		y, mo, d := now.Date()
+		c.until = time.Date(y, mo, d+ahead, h, m, 0, 0, now.Location())
+		if !c.until.After(now) {
+			return c, false
+		}
+		switch {
+		case ahead == 0 && h < 12:
+			c.label = "This morning"
+		case ahead == 0 && h < 17:
+			c.label = "This afternoon"
+		case ahead == 0:
+			c.label = "This evening"
+		case ahead == 1:
+			c.label = "Tomorrow"
+		case p.Day == "monday":
+			c.label = "Next week"
+		case ahead == 7:
+			c.label = "Next " + strings.ToUpper(p.Day[:1]) + p.Day[1:]
+		default:
+			c.label = strings.ToUpper(p.Day[:1]) + p.Day[1:]
+		}
+	}
+	// Durations and "Next week" don't name the day, so a wake on another
+	// day says which.
+	c.when = clock(c.until)
+	namesDay := p.Kind == "at" && c.label != "Next week"
+	if y1, m1, d1 := c.until.Date(); !namesDay && (y1 != now.Year() || m1 != now.Month() || d1 != now.Day()) {
+		c.when = c.until.Format("Mon") + " " + c.when
+	}
+	return c, true
+}
+
+// snoozeChoices is the snooze menu for an environment: soonest first, one
+// row per wake minute (resolveSnoozePresets).
+func snoozeChoices(e *envState, now time.Time) []snoozeChoice {
+	presets := defaultSnoozePresets
+	if e != nil && e.config != nil && len(e.config.Settings.SnoozePresets) > 0 {
+		presets = e.config.Settings.SnoozePresets
+	}
+	var out []snoozeChoice
+	for _, p := range presets {
+		if c, ok := resolvePreset(p, now); ok {
+			out = append(out, c)
+		}
+	}
+	minute := func(c snoozeChoice) int64 { return c.until.Unix() / 60 }
+	sort.SliceStable(out, func(i, j int) bool { return minute(out[i]) < minute(out[j]) })
+	seen := map[int64]bool{}
+	kept := out[:0]
+	for _, c := range out {
+		if !seen[minute(c)] {
+			seen[minute(c)] = true
+			kept = append(kept, c)
+		}
+	}
+	return kept
+}
+
+// pickSnooze is a menu choice as picked (pickSnoozePreset): a duration
+// counts from now, a set time keeps the wake the menu showed while that's
+// still ahead.
+func pickSnooze(shown []snoozeChoice, id string, now time.Time) (time.Time, error) {
+	for _, c := range shown {
+		if c.id != id {
+			continue
+		}
+		if c.preset.Kind == "after" {
+			return now.Add(time.Duration(c.preset.Minutes) * time.Minute), nil
+		}
+		if c.until.After(now) {
+			return c.until, nil
+		}
+	}
+	return time.Time{}, errors.New("could not snooze thread: that snooze time has passed, choose another time")
+}
+
+func snoozeItems(cs []snoozeChoice, prefix string, off bool) []ui.MenuItem {
+	var out []ui.MenuItem
+	for _, c := range cs {
+		out = append(out, ui.MenuItem{ID: prefix + c.id, Label: c.label, Detail: c.when, Off: off})
+	}
+	return out
+}
+
+// ---------- the row menus ----------
+
+// running reports a thread that can't be archived (threadRuntimeCanArchive).
+func running(t *t3.Thread) bool {
+	switch threadRuntime(t) {
+	case "queued":
+		return t.ActiveRunID != ""
+	case "preparing", "starting", "running":
+		return true
+	}
+	return false
+}
+
+// threadMenu is a row's context menu (buildThreadActionMenuItems). Without
+// write access, the items that change the thread are disabled.
+func (a *App) threadMenu(e *envState, t *t3.Thread, now time.Time) []ui.MenuItem {
+	loaded := e.config != nil
+	child := childRequests(e.threads)[t.ID]
+	var m []ui.MenuItem
+	if loaded {
+		if t.PinnedAt != "" {
+			m = append(m, ui.MenuItem{ID: "unpin", Label: "Unpin thread", Icon: "pin-off"})
+		} else {
+			m = append(m, ui.MenuItem{ID: "pin", Label: "Pin thread", Icon: "pin"})
+		}
+		if t.SettledOverride == "settled" {
+			m = append(m, ui.MenuItem{ID: "unsettle", Label: "Un-settle thread", Icon: "circle-check"})
+		} else {
+			m = append(m, ui.MenuItem{ID: "settle", Label: "Settle thread", Icon: "circle-check"})
+		}
+		if snoozed(t, child, now) {
+			m = append(m, ui.MenuItem{ID: "unsnooze", Label: "Wake thread", Icon: "clock"})
+		} else {
+			m = append(m, ui.MenuItem{ID: "snooze", Label: "Snooze", Icon: "clock", Off: !canSnooze(t, child, now),
+				Children: snoozeItems(a.ctxPresets, "snooze:", false)})
+		}
+	}
+	m = append(m, ui.MenuItem{ID: "rename", Label: "Rename thread", Icon: "pencil", Sep: true})
+	if loaded {
+		regen := ui.MenuItem{ID: "regenerate-title", Label: "Regenerate title", Icon: "refresh-cw"}
+		if t.TitleRegeneration != nil {
+			regen.Label, regen.Off = "Regenerating…", true
+		}
+		m = append(m, regen)
+	}
+	m = append(m, ui.MenuItem{ID: "mark-unread", Label: "Mark unread", Icon: "mail-open"})
+	if p, ok := e.projects[t.ProjectID]; ok && p.ArchivedAt == "" {
+		k := ref(e.id(), t.ProjectID)
+		filter := ui.MenuItem{ID: "filter-by-project", Label: "Filter by " + p.Title, Icon: "folder-tree"}
+		if a.scopeSet()[k] {
+			filter.Label = "Show all projects"
+		}
+		m = append(m, filter)
+	}
+	if loaded && e.config.Environment.Capabilities.ThreadAutoSettleOptOut {
+		on := t.AutoSettleDisabledAt == ""
+		m = append(m, ui.MenuItem{ID: "auto-settle", Label: "Auto-settle behavior", Icon: "timer", Children: []ui.MenuItem{
+			{ID: "auto-settle:enabled", Label: "Follow settings", Radio: true, Checked: on},
+			{ID: "auto-settle:disabled", Label: "Never", Radio: true, Checked: !on},
+		}})
+	}
+	copyItems := []ui.MenuItem{{ID: "copy-path", Label: "Path", Icon: "folder"}}
+	if t.Branch != "" {
+		copyItems = append(copyItems, ui.MenuItem{ID: "copy-branch", Label: "Branch", Icon: "git-branch"})
+	}
+	copyItems = append(copyItems, ui.MenuItem{ID: "copy-thread-id", Label: "Thread ID", Icon: "hash"})
+	m = append(m, ui.MenuItem{ID: "copy", Label: "Copy", Icon: "copy", Sep: true, Children: copyItems})
+	m = append(m, ui.MenuItem{ID: "archive", Label: "Archive thread", Icon: "archive", Off: running(t), Sep: true})
+	del := ui.MenuItem{ID: "delete", Label: "Delete", Icon: "trash-2", Danger: true}
+	if a.ctxConfirm {
+		del.Label = "Click again to delete"
+	}
+	m = append(m, del)
+	if !e.operate {
+		for i := range m {
+			if needsOperate(m[i].ID) {
+				m[i].Off = true
+				for j := range m[i].Children {
+					m[i].Children[j].Off = true
+				}
+			}
+		}
+	}
+	return m
+}
+
+// needsOperate reports the menu items that change a thread; reading,
+// marking unread, copying and filtering work without write access.
+func needsOperate(id string) bool {
+	switch id {
+	case "mark-unread", "copy", "copy-path", "copy-branch", "copy-thread-id", "filter-by-project":
+		return false
+	}
+	return true
+}
+
+// selection is the multi-selection's threads, in list order.
+func (a *App) selection() []sideThread {
+	var out []sideThread
+	for _, r := range a.ordered {
+		if !a.selected[r] {
+			continue
+		}
+		if e, t := a.thread(r); t != nil {
+			out = append(out, sideThread{Thread: t, e: e, ref: r, child: childRequests(e.threads)[t.ID]})
+		}
+	}
+	return out
+}
+
+// bulkMenu is the menu for a right-click on a selected row: the actions
+// that apply to the whole selection, with counts and no icons.
+func (a *App) bulkMenu(now time.Time) []ui.MenuItem {
+	sel := a.selection()
+	n := len(sel)
+	operate := true
+	var pinned, settling, regen, regenerable, snoozable int
+	for _, t := range sel {
+		operate = operate && t.e.operate
+		loaded := t.e.config != nil
+		if loaded && t.PinnedAt != "" {
+			pinned++
+		}
+		if t.SettledOverride != "settled" {
+			settling++
+		}
+		if loaded {
+			regen++
+			if t.TitleRegeneration == nil {
+				regenerable++
+			}
+		}
+		if loaded && canSnooze(t.Thread, t.child, now) {
+			snoozable++
+		}
+	}
+	var m []ui.MenuItem
+	if pinned > 0 {
+		m = append(m, ui.MenuItem{ID: "bulk-unpin", Label: fmt.Sprintf("Unpin (%d)", pinned), Off: !operate})
+	}
+	m = append(m, ui.MenuItem{ID: "bulk-settle", Label: fmt.Sprintf("Settle (%d)", n), Off: settling == 0 || !operate})
+	if snoozable == n {
+		m = append(m, ui.MenuItem{ID: "bulk-snooze", Label: fmt.Sprintf("Snooze (%d)", n), Off: !operate,
+			Children: snoozeItems(a.ctxPresets, "bulk-snooze:", !operate)})
+	}
+	switch {
+	case regen > 0 && regenerable == 0:
+		m = append(m, ui.MenuItem{ID: "bulk-regenerate-title", Label: fmt.Sprintf("Regenerating… (%d)", regen), Off: true})
+	case regen > 0:
+		m = append(m, ui.MenuItem{ID: "bulk-regenerate-title", Label: fmt.Sprintf("Regenerate titles (%d)", regenerable), Off: !operate})
+	}
+	m = append(m, ui.MenuItem{ID: "bulk-mark-unread", Label: fmt.Sprintf("Mark unread (%d)", n)})
+	del := ui.MenuItem{ID: "bulk-delete", Label: fmt.Sprintf("Delete (%d)", n), Danger: true, Off: !operate}
+	if a.ctxConfirm {
+		del.Label = "Click again to delete"
+	}
+	return append(m, del)
+}
+
+// menuScene is the open context menu. Call with the lock held.
+func (a *App) menuScene(s *ui.Scene, now time.Time) {
+	switch {
+	case a.ctxBulk && len(a.selection()) > 0:
+		s.Menu = &ui.ContextMenu{Items: a.bulkMenu(now), Keyboard: a.ctxKeyboard}
+	case a.ctxRef != "":
+		if e, t := a.thread(a.ctxRef); t != nil {
+			s.Menu = &ui.ContextMenu{Items: a.threadMenu(e, t, now), Keyboard: a.ctxKeyboard}
+		}
+	}
+}
+
+// openMenu opens a row's context menu, or the selection's when the row is
+// part of it. Call with the lock held.
+func (a *App) openMenu(r string, keyboard bool) {
+	a.closeMenusLocked()
+	a.ctxKeyboard = keyboard
+	e, t := a.thread(r)
+	if t == nil {
+		return
+	}
+	a.ctxPresets = snoozeChoices(e, time.Now())
+	if a.selected[r] && len(a.selected) > 0 {
+		a.ctxBulk = true
+		return
+	}
+	a.ctxRef = r
+}
+
+// menuPick runs the context menu's item id.
+func (a *App) menuPick(th *ui.Theme, id string) {
+	a.mu.Lock()
+	if a.ctxBulk {
+		a.mu.Unlock()
+		a.bulkPick(th, id)
+		return
+	}
+	e, t := a.thread(a.ctxRef)
+	r := a.ctxRef
+	if t == nil {
+		a.closeMenusLocked()
+		a.mu.Unlock()
+		return
+	}
+	if id == "delete" && !a.ctxConfirm {
+		a.ctxConfirm = true
+		a.mu.Unlock()
+		return
+	}
+	presets := a.ctxPresets
+	a.closeMenusLocked()
+	a.mu.Unlock()
+	if !e.operate && needsOperate(id) {
+		a.failf("Thread action unavailable: this connection cannot change one or more selected threads.")
+		return
+	}
+	verb, arg, _ := strings.Cut(id, ":")
+	switch verb {
+	case "pin", "unpin", "unsettle", "unsnooze", "mark-unread", "archive", "delete":
+		a.threadAction(th, r, verb)
+	case "settle":
+		a.settle([]string{r})
+	case "snooze":
+		until, err := pickSnooze(presets, arg, time.Now())
+		if err != nil {
+			a.failf("%v", err)
+			return
+		}
+		a.snooze([]string{r}, until)
+	case "rename":
+		a.startRename(r)
+	case "regenerate-title":
+		a.dispatch(e, map[string]any{"type": "thread.metadata.update", "threadId": t.ID, "regenerateTitle": true})
+	case "auto-settle":
+		a.dispatch(e, map[string]any{"type": "thread.auto-settle.set", "threadId": t.ID, "enabled": arg == "enabled"})
+	case "filter-by-project":
+		k := ref(e.id(), t.ProjectID)
+		a.mu.Lock()
+		if a.scopeSet()[k] {
+			a.setScope(nil)
+		} else {
+			a.setScope([]string{k})
+		}
+		a.mu.Unlock()
+	case "copy-path":
+		path := t.WorktreePath
+		if path == "" {
+			path = e.projects[t.ProjectID].WorkspaceRoot
+		}
+		if path == "" {
+			a.failf("Path unavailable: this thread does not have a workspace path to copy.")
+			return
+		}
+		th.WriteClipboard(path)
+	case "copy-branch":
+		th.WriteClipboard(t.Branch)
+	case "copy-thread-id":
+		th.WriteClipboard(t.ID)
+	}
+}
+
+// bulkPick runs an item of the selection's menu, then clears the selection.
+func (a *App) bulkPick(th *ui.Theme, id string) {
+	a.mu.Lock()
+	if id == "bulk-delete" && !a.ctxConfirm {
+		a.ctxConfirm = true
+		a.mu.Unlock()
+		return
+	}
+	sel := a.selection()
+	presets := a.ctxPresets
+	a.closeMenusLocked()
+	a.selected, a.anchor = map[string]bool{}, ""
+	a.mu.Unlock()
+	verb, arg, _ := strings.Cut(strings.TrimPrefix(id, "bulk-"), ":")
+	var refs []string
+	for _, t := range sel {
+		switch {
+		case verb == "unpin" && t.PinnedAt == "",
+			verb == "settle" && t.SettledOverride == "settled",
+			verb == "regenerate-title" && t.TitleRegeneration != nil:
+			continue
+		}
+		refs = append(refs, t.ref)
+	}
+	switch verb {
+	case "settle":
+		a.settle(refs)
+	case "snooze":
+		until, err := pickSnooze(presets, arg, time.Now())
+		if err != nil {
+			a.failf("%v", err)
+			return
+		}
+		a.snooze(refs, until)
+	case "regenerate-title":
+		for _, r := range refs {
+			e, t := a.thread(r)
+			a.dispatch(e, map[string]any{"type": "thread.metadata.update", "threadId": t.ID, "regenerateTitle": true})
+		}
+	default:
+		for _, r := range refs {
+			a.threadAction(th, r, verb)
+		}
+	}
+}
+
+// ---------- thread actions ----------
+
+// failf shows an error banner.
+func (a *App) failf(format string, args ...any) {
+	a.mu.Lock()
+	a.errText = fmt.Sprintf(format, args...)
+	a.mu.Unlock()
+	a.changed()
+}
+
+// dispatch sends a command to the thread's environment, and reports a
+// failure in the banner. done, if set, runs after the server accepts it.
+func (a *App) dispatch(e *envState, cmd map[string]any, done ...func()) {
+	a.mu.Lock()
+	conn := e.conn
+	a.mu.Unlock()
+	if conn == nil {
+		a.failf("%s isn't connected", e.env.Label)
+		return
+	}
+	go func() {
+		if err := conn.Dispatch(cmd); err != nil {
+			a.failf("%v", err)
+			return
+		}
+		for _, f := range done {
+			f()
+		}
+	}()
+}
+
+// threadAction sends one of the simple thread commands for ref.
+func (a *App) threadAction(th *ui.Theme, r, verb string) {
+	a.mu.Lock()
+	e, t := a.thread(r)
+	a.mu.Unlock()
+	if t == nil {
+		return
+	}
+	cmd := map[string]any{"threadId": t.ID}
+	switch verb {
+	case "pin", "unpin", "archive", "delete":
+		cmd["type"] = "thread." + verb
+	case "unsettle", "unsnooze":
+		cmd["type"], cmd["reason"] = "thread."+verb, "user"
+	case "mark-unread":
+		cmd["type"] = "thread.mark-unread"
+	default:
+		return
+	}
+	if verb == "archive" || verb == "delete" {
+		// It's leaving the list, so close its tab too.
+		a.closeTab(th, r)
+	}
+	a.dispatch(e, cmd)
+}
+
+// advance plans where to go when the open thread is parked
+// (planForwardNavigation): the next card row after it, wrapping around,
+// past the settled and snoozed rows and the others being parked with it;
+// with none, a new thread in its project. nil when the open thread isn't
+// being parked. Call with the lock held.
+func (a *App) advance(parking []string) func(th *ui.Theme) {
+	open := a.openID
+	i := -1
+	skip := map[string]bool{}
+	for _, r := range parking {
+		skip[r] = true
+	}
+	for j, r := range a.ordered {
+		if r == open {
+			i = j
+		}
+	}
+	if i < 0 || !skip[open] {
+		return nil
+	}
+	order := append(append([]string{}, a.ordered[i+1:]...), a.ordered[:i]...)
+	for _, r := range order {
+		if !a.parked[r] && !skip[r] {
+			return func(th *ui.Theme) { a.switchTo(th, func() { a.openThread(r) }) }
+		}
+	}
+	return func(th *ui.Theme) { a.switchTo(th, a.newDraft) }
+}
+
+// park settles or snoozes threads with cmd; if the open one is among
+// them, the next thread opens once the server has parked it (§5.15).
+func (a *App) park(refs []string, cmd map[string]any) {
+	a.mu.Lock()
+	next := a.advance(refs)
+	open := a.openID
+	type target struct {
+		e  *envState
+		id string
+		r  string
+	}
+	var ts []target
+	for _, r := range refs {
+		if e, t := a.thread(r); t != nil {
+			ts = append(ts, target{e, t.ID, r})
+		}
+	}
+	a.mu.Unlock()
+	for _, t := range ts {
+		c := map[string]any{"threadId": t.id}
+		for k, v := range cmd {
+			c[k] = v
+		}
+		var done []func()
+		if t.r == open && next != nil {
+			done = append(done, func() { a.onUI(next) })
+		}
+		a.dispatch(t.e, c, done...)
+	}
+}
+
+func (a *App) settle(refs []string) { a.park(refs, map[string]any{"type": "thread.settle"}) }
+
+func (a *App) snooze(refs []string, until time.Time) {
+	a.park(refs, map[string]any{"type": "thread.snooze", "snoozedUntil": until.UTC().Format(time.RFC3339Nano)})
+}
+
+// acknowledgeWoke clears a row's Woke label by recording a visit at the
+// moment it woke. It doesn't open the thread.
+func (a *App) acknowledgeWoke(r string) {
+	a.mu.Lock()
+	e, t := a.thread(r)
+	var at string
+	if t != nil {
+		at = wokeAt(t, childRequests(e.threads)[t.ID], time.Now())
+	}
+	a.mu.Unlock()
+	if at == "" {
+		return
+	}
+	a.dispatch(e, map[string]any{"type": "thread.visit", "threadId": t.ID, "visitedAt": parseTime(at).UTC().Format(time.RFC3339Nano)})
+}
+
+// startRename puts the row's title in an editor.
+func (a *App) startRename(r string) {
+	a.mu.Lock()
+	e, t := a.thread(r)
+	if t == nil || !e.operate {
+		a.mu.Unlock()
+		return
+	}
+	a.renaming = r
+	title := t.Title
+	a.mu.Unlock()
+	a.onUI(func(th *ui.Theme) {
+		th.SetEditorText("rename", title)
+		th.Focus("rename")
+	})
+}
+
+// commitRename sends the edited title. An empty or unchanged one just ends
+// the edit.
+func (a *App) commitRename(title string) {
+	a.mu.Lock()
+	r := a.renaming
+	a.renaming = ""
+	e, t := a.thread(r)
+	a.mu.Unlock()
+	title = strings.TrimSpace(title)
+	if t == nil || title == "" || title == t.Title {
+		return
+	}
+	a.dispatch(e, map[string]any{"type": "thread.metadata.update", "threadId": t.ID, "title": title})
+}
+
+// rowClick is a click on a row (Sidebar.tsx:1573–1592): it opens the thread
+// and clears the selection; with the shortcut key it toggles the row's
+// selection, with Shift it selects the range from the last row clicked. A
+// double click renames instead of opening the thread again.
+func (a *App) rowClick(th *ui.Theme, act ui.Action) {
+	r := strings.TrimPrefix(act.ID, "thread:")
+	a.mu.Lock()
+	switch {
+	case r == a.renaming:
+		// The click is in its title's editor.
+		a.mu.Unlock()
+		return
+	case act.Clicks > 1:
+		a.mu.Unlock()
+		if !act.Short && !act.Shift {
+			a.startRename(r)
+		}
+		return
+	case act.Short:
+		if a.selected[r] {
+			delete(a.selected, r)
+		} else {
+			a.selected[r] = true
+		}
+		a.anchor = r
+		a.mu.Unlock()
+		return
+	case act.Shift && a.anchor != "":
+		from, to := -1, -1
+		for i, k := range a.ordered {
+			if k == a.anchor {
+				from = i
+			}
+			if k == r {
+				to = i
+			}
+		}
+		if from >= 0 && to >= 0 {
+			a.selected = map[string]bool{}
+			for _, k := range a.ordered[min(from, to) : max(from, to)+1] {
+				a.selected[k] = true
+			}
+			a.mu.Unlock()
+			return
+		}
+	}
+	a.selected, a.anchor = map[string]bool{}, r
+	a.mu.Unlock()
+	a.switchTo(th, func() { a.openThread(r) })
+}
+
+// step opens the thread before or after the open one in the list
+// (thread.previous, thread.next), not wrapping; with none open, the last or
+// the first.
+func (a *App) step(th *ui.Theme, dir int) {
+	a.mu.Lock()
+	ordered, open := a.ordered, a.openID
+	a.mu.Unlock()
+	if len(ordered) == 0 {
+		return
+	}
+	next := ""
+	i := -1
+	for j, r := range ordered {
+		if r == open {
+			i = j
+		}
+	}
+	switch {
+	case open == "" && dir < 0:
+		next = ordered[len(ordered)-1]
+	case open == "":
+		next = ordered[0]
+	case i >= 0 && i+dir >= 0 && i+dir < len(ordered):
+		next = ordered[i+dir]
+	}
+	if next != "" {
+		a.switchTo(th, func() { a.openThread(next) })
+	}
+}
+
+// jump opens the nth thread in the list (thread.jump.1…9).
+func (a *App) jump(th *ui.Theme, n int) {
+	a.mu.Lock()
+	ordered := a.ordered
+	a.mu.Unlock()
+	if n >= 1 && n <= len(ordered) {
+		r := ordered[n-1]
+		a.switchTo(th, func() { a.openThread(r) })
+	}
+}
+
+// openThreadShortcut runs thread.settle and thread.pin on the open thread:
+// settle (and move on) or un-settle, pin or unpin.
+func (a *App) openThreadShortcut(th *ui.Theme, what string) {
+	a.mu.Lock()
+	r := a.openID
+	e, t := a.thread(r)
+	a.mu.Unlock()
+	if t == nil || e.config == nil {
+		return
+	}
+	switch {
+	case what == "settle" && t.SettledOverride == "settled":
+		a.threadAction(th, r, "unsettle")
+	case what == "settle":
+		a.settle([]string{r})
+	case t.PinnedAt != "":
+		a.threadAction(th, r, "unpin")
+	default:
+		a.threadAction(th, r, "pin")
+	}
+}
+
+// ---------- input ----------
+
+// sidebarAction handles the sidebar's input, and reports whether act was
+// the sidebar's.
+func (a *App) sidebarAction(th *ui.Theme, act ui.Action) bool {
+	id := act.ID
+	verb, arg, _ := strings.Cut(id, ":")
+	switch {
+	case id == "search":
+		a.searchInput(th, act)
+		return true
+	case id == "rename":
+		switch act.Kind {
+		case "submit", "blur":
+			a.commitRename(th.EditorText("rename"))
+		case "key":
+			a.mu.Lock()
+			a.renaming = ""
+			a.mu.Unlock()
+		}
+		return true
+	case id == "filter.search":
+		a.mu.Lock()
+		switch act.Kind {
+		case "change":
+			a.filterQuery = act.Text
+		case "key":
+			a.filterOpen = false
+		}
+		a.mu.Unlock()
+		return true
+	case verb == "result" && act.Kind == "hover":
+		a.mu.Lock()
+		a.searchSel = atoi(arg)
+		a.mu.Unlock()
+		return true
+	case verb == "thread" && act.Kind == "context":
+		a.mu.Lock()
+		a.openMenu(arg, act.Text == "keyboard")
+		a.mu.Unlock()
+		return true
+	case act.Kind != "click":
+		return false
+	}
+	switch verb {
+	case "thread":
+		a.rowClick(th, act)
+	case "result":
+		a.openResult(th, atoi(arg))
+	case "shelf":
+		a.mu.Lock()
+		a.shelfOpen[arg] = !a.shelfOpen[arg]
+		open := a.shelfOpen
+		a.mu.Unlock()
+		_ = a.store.Put("sidebar-shelves", open)
+	case "settled.more":
+		a.mu.Lock()
+		a.settledMore++
+		a.mu.Unlock()
+	case "settle":
+		a.settle([]string{arg})
+	case "unsettle", "unpin":
+		a.threadAction(th, arg, verb)
+	case "wake":
+		a.threadAction(th, arg, "unsnooze")
+	case "woke":
+		a.acknowledgeWoke(arg)
+	case "discard":
+		saveDraft(arg, "")
+		a.mu.Lock()
+		delete(a.images, arg)
+		a.mu.Unlock()
+	case "terminal":
+		a.switchTo(th, func() { a.openThread(arg) })
+		a.mu.Lock()
+		if d := a.drawers[arg]; d != nil {
+			d.open = true
+		}
+		a.mu.Unlock()
+	case "snooze":
+		a.mu.Lock()
+		open := a.snoozeRef != arg
+		a.closeMenusLocked()
+		if open {
+			e, _ := a.thread(arg)
+			a.snoozeRef, a.snoozeMenu = arg, snoozeChoices(e, time.Now())
+		}
+		a.mu.Unlock()
+	case "snooze.pick":
+		a.mu.Lock()
+		r, shown := a.snoozeRef, a.snoozeMenu
+		a.closeMenusLocked()
+		a.mu.Unlock()
+		until, err := pickSnooze(shown, arg, time.Now())
+		if err != nil {
+			a.failf("%v", err)
+			return true
+		}
+		a.snooze([]string{r}, until)
+	case "ctx":
+		a.menuPick(th, arg)
+	case "rename":
+		a.startRename(arg)
+	case "filter":
+		a.mu.Lock()
+		open := !a.filterOpen
+		a.closeMenusLocked()
+		a.filterOpen, a.filterQuery = open, ""
+		if open {
+			a.filterKeys = a.filterOrder()
+		}
+		a.mu.Unlock()
+		if open {
+			th.SetEditorText("filter.search", "")
+			th.Focus("filter.search")
+		}
+	case "filter.project":
+		a.pickProject(arg, act.Shift)
+	case "filter.clear":
+		a.mu.Lock()
+		a.setScope(nil)
+		a.mu.Unlock()
+	case "search.clear":
+		th.SetEditorText("search", "")
+		th.Focus("search")
+		a.mu.Lock()
+		a.search, a.searchSel = "", 0
+		a.mu.Unlock()
+	case "thread.prev":
+		a.step(th, -1)
+	case "thread.next":
+		a.step(th, 1)
+	case "thread.jump":
+		a.jump(th, atoi(arg))
+	case "thread.settle", "thread.pin":
+		a.openThreadShortcut(th, strings.TrimPrefix(verb, "thread."))
+	default:
+		return false
+	}
+	return true
+}
+
+// searchInput is the search field's typing and keys: the arrows move the
+// highlight through the results, wrapping; Enter opens it; Escape clears
+// the search.
+func (a *App) searchInput(th *ui.Theme, act ui.Action) {
+	a.mu.Lock()
+	n := len(a.results)
+	switch {
+	case act.Kind == "change":
+		a.search, a.searchSel = act.Text, 0
+	case act.Kind == "key" && act.Text == "⎋":
+		a.search, a.searchSel = "", 0
+		a.mu.Unlock()
+		th.SetEditorText("search", "")
+		return
+	case act.Kind == "key" && n > 0 && (act.Text == "↓" || act.Text == "↑"):
+		step := 1
+		if act.Text == "↑" {
+			step = -1
+		}
+		a.searchSel = (a.searchSel + step + n) % n
+	case act.Kind == "submit":
+		i := a.searchSel
+		a.mu.Unlock()
+		a.openResult(th, i)
+		return
+	}
+	a.mu.Unlock()
+}
+
+// openResult opens search result i.
+func (a *App) openResult(th *ui.Theme, i int) {
+	a.mu.Lock()
+	r := ""
+	if i >= 0 && i < len(a.results) {
+		r = a.results[i]
+	}
+	a.mu.Unlock()
+	if r != "" {
+		a.switchTo(th, func() { a.openThread(r) })
+	}
+}

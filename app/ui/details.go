@@ -2,7 +2,6 @@ package ui
 
 import (
 	"image"
-	"image/color"
 	"time"
 
 	"gioui.org/f32"
@@ -30,18 +29,6 @@ func ShortcutAlt(k string) string {
 		return "⌥" + s
 	}
 	return "Ctrl+Alt+" + k
-}
-
-// iconToggle is an icon button with a lucide icon, lit while what it opens
-// is open.
-func (th *Theme) iconToggle(icon string, on bool) W {
-	return func(gtx C) D {
-		bg, col := color.NRGBA{}, ColDim
-		if on {
-			bg, col = ColFrameActive, ColText
-		}
-		return Box{Bg: bg, Radius: 6, Pad: pad(6, 6, 6, 6)}.Layout(gtx, LucideW(icon, col, 16))
-	}
 }
 
 // popIn plays a popover's opening the way T3's do: it fades in over 150ms,
@@ -178,28 +165,4 @@ func (th *Theme) copiedRecently(gtx C, id string) bool {
 	}
 	delete(th.in.copied, id)
 	return false
-}
-
-// sidebarFooter is T3's: icon buttons with tooltips. One lists the
-// machines, the other is the account.
-func (th *Theme) sidebarFooter(gtx C, s *Scene) D {
-	return pad(6, 8, 8, 8).Layout(gtx, func(gtx C) D {
-		button := func(id, icon, tip string, menu *Traits) layout.FlexChild {
-			return rigid(func(gtx C) D {
-				if menu != nil {
-					tip = ""
-				}
-				dims := th.Tip(id, tip, true, -1, th.iconToggle(icon, menu != nil))(gtx)
-				th.deferAbove(gtx, image.Pt(0, -dp(gtx, 1)), func(gtx C) D {
-					return th.popIn(gtx, id, menu != nil, nil, func(gtx C) D { return th.traitsMenu(gtx, s, id, menu) })
-				})
-				return dims
-			})
-		}
-		return Row(gtx,
-			button("machines", "server", "Machines", s.Machines),
-			rigid(Spacer(2, 0)),
-			button("account", "circle-user", "Account", s.Account),
-		)
-	})
 }

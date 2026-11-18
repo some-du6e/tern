@@ -94,10 +94,21 @@ func run(w *app.Window) error {
 			} else if moving(s) {
 				// Spinners and run timers: about 30 fps while anything is live.
 				gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(33 * time.Millisecond)})
+			} else {
+				gtx.Execute(op.InvalidateCmd{At: nextTick(gtx.Now, s)})
 			}
 			e.Frame(gtx.Ops)
 		}
 	}
+}
+
+// nextTick is when the sidebar's clocks next change: its run timers each
+// second, its ages on the minute.
+func nextTick(now time.Time, s *ui.Scene) time.Time {
+	if s.Sidebar.Ticking {
+		return now.Truncate(time.Second).Add(time.Second)
+	}
+	return now.Truncate(time.Minute).Add(time.Minute)
 }
 
 // moving reports whether anything on screen animates. The sign-in screen
@@ -105,11 +116,6 @@ func run(w *app.Window) error {
 func moving(s *ui.Scene) bool {
 	if s.State == ui.ThreadRunning {
 		return true
-	}
-	for _, r := range s.Active {
-		if r.State == ui.ThreadRunning {
-			return true
-		}
 	}
 	for _, it := range s.Items {
 		if it.Live {

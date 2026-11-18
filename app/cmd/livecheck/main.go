@@ -114,6 +114,14 @@ func (h *harness) wait(what string, ok func(*ui.Scene) bool) *ui.Scene {
 	return nil
 }
 
+// firstRow is the sidebar list's first row, if the list starts with one.
+func firstRow(s *ui.Scene) *ui.ThreadRow {
+	if items := s.Sidebar.Items; len(items) > 0 {
+		return items[0].Row
+	}
+	return nil
+}
+
 func main() {
 	storeDir := flag.String("store", "", "store with a paired session")
 	out := flag.String("out", "/tmp/livecheck", "screenshot directory")
@@ -135,17 +143,21 @@ func main() {
 	}
 	h.c.Start()
 	start := time.Now()
-	s := h.wait("threads", func(s *ui.Scene) bool { return s.Login == nil && len(s.Active)+len(s.Pinned) > 0 })
-	fmt.Printf("inbox: %d pinned, %d active, %d snoozed, %d settled after %s\n", len(s.Pinned), len(s.Active), len(s.Snoozed), s.Settled, time.Since(start).Round(time.Millisecond))
+	s := h.wait("threads", func(s *ui.Scene) bool { return s.Login == nil && firstRow(s) != nil })
+	shelves := map[string]int{}
+	for _, it := range s.Sidebar.Items {
+		if it.Shelf != nil {
+			shelves[it.Shelf.ID] = it.Shelf.Count
+		}
+	}
+	fmt.Printf("inbox: %d working, %d snoozed, %d settled after %s\n", shelves["working"], shelves["snoozed"], shelves["settled"], time.Since(start).Round(time.Millisecond))
 	h.wait("config", func(s *ui.Scene) bool { return true })
 	h.shot("inbox")
 
-	// A real pointer click on the first row of the first section.
-	first := s.Active[0]
-	if len(s.Pinned) > 0 {
-		first = s.Pinned[0]
-	}
-	h.click(130, 30+42+31+23)
+	// A real pointer click on the list's first card: the list starts at
+	// y 100, the card's surface 2dp below that.
+	first := firstRow(s)
+	h.click(130, 100+2+24)
 	s = h.wait("thread open", func(s *ui.Scene) bool { return len(s.Items) > 0 || s.Empty == "No messages yet." })
 	fmt.Printf("opened %q (expected %q): %d rows, more=%v, model=%q effort=%q\n", s.Title, first.Title, len(s.Items), s.MoreAbove, s.Model, s.Effort)
 	h.shot("thread")
