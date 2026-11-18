@@ -16,8 +16,7 @@ import (
 // -apple-system, BlinkMacSystemFont, "Inter Variable", "Segoe UI", so a Mac
 // renders SF Pro and everything else the Inter Variable it bundles. tern
 // embeds that same Inter (4.001), instanced at the four weights T3 uses by
-// tools/t3ui/instance-inter.py, one face per unicode-range subset as Chrome
-// loads it. Code is ui-monospace, "SF Mono", Menlo, Consolas, "Liberation
+// tools/t3ui/instance-inter.py. Code is ui-monospace, "SF Mono", Menlo, Consolas, "Liberation
 // Mono": SF Mono on a Mac, Consolas on Windows. JetBrains Mono is only the
 // last resort when none of those is installed.
 
@@ -30,7 +29,7 @@ var sans, mono font.Typeface
 
 // faces is every embedded face, then the platform's own (systemFaces).
 // The Inter instances all name their style "Regular", so each gets its
-// weight from its file name, Inter-<Weight>-<subset>.ttf, instead.
+// weight from its file name, Inter-<Weight>.ttf, instead.
 func faces() []font.FontFace {
 	var out []font.FontFace
 	fs.WalkDir(fontFiles, "fonts", func(name string, d fs.DirEntry, err error) error {
@@ -61,11 +60,11 @@ func faces() []font.FontFace {
 
 // interWeight is the weight of an embedded Inter instance, from its name.
 func interWeight(file string) (font.Weight, bool) {
-	name, ok := strings.CutPrefix(path.Base(file), "Inter-")
+	name, ok := strings.CutPrefix(strings.TrimSuffix(path.Base(file), ".ttf"), "Inter-")
 	if !ok {
 		return 0, false
 	}
-	w, ok := map[string]font.Weight{"Regular": font.Normal, "Medium": font.Medium, "SemiBold": font.SemiBold, "Bold": font.Bold}[strings.Split(name, "-")[0]]
+	w, ok := map[string]font.Weight{"Regular": font.Normal, "Medium": font.Medium, "SemiBold": font.SemiBold, "Bold": font.Bold}[name]
 	return w, ok
 }
 
