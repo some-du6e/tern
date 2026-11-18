@@ -409,9 +409,11 @@ func (th *Theme) chatColumn(gtx C, s *Scene, collapsed, panelOpen bool) {
 		if collapsed {
 			left = th.contentLeft()
 		}
-		right := float32(96) // the fixed controls' reserve
+		// The header's own 20dp end padding plus its content's reserve for
+		// the fixed controls (pr-24), or pr-10 while the panel is open.
+		right := float32(20 + 96)
 		if panelOpen {
-			right = 40
+			right = 20 + 40
 		}
 		if s.Title != "" || !s.Live {
 			pad(0, right, 0, left).Layout(g, func(gtx C) D { return th.threadHeader(gtx, s) })
