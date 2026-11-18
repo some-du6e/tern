@@ -73,7 +73,7 @@ func (a *App) handleHeader(th *ui.Theme, act ui.Action) bool {
 	case id == "branch.search" && act.Kind == "key":
 		// The arrows move the highlight, round from either end.
 		a.mu.Lock()
-		if p, _ := a.pickerScene(); p != nil {
+		if p, _ := a.refPickerNow(); p != nil {
 			n := len(p.Refs)
 			if p.Create != "" {
 				n++
@@ -325,9 +325,9 @@ func (a *App) runPrimaryScript() {
 	}
 }
 
-// pickerScene is the open branch picker as the card lists it, and the
+// refPickerNow is the open branch picker as the card lists it, and the
 // checkout it's for. Call with the lock held.
-func (a *App) pickerScene() (*ui.BranchPicker, *vcsState) {
+func (a *App) refPickerNow() (*ui.BranchPicker, *vcsState) {
 	_, t, p, v := a.checkout()
 	if v == nil || a.branchPicker == nil {
 		return nil, v
@@ -338,7 +338,7 @@ func (a *App) pickerScene() (*ui.BranchPicker, *vcsState) {
 // pickerRef is the branch picker's ref i, as the scene lists them. Call
 // with the lock held.
 func (a *App) pickerRef(i int) (t3.VcsRef, bool) {
-	p, v := a.pickerScene()
+	p, v := a.refPickerNow()
 	if p == nil || i < 0 || i >= len(p.Refs) || p.Refs[i].Disabled {
 		return t3.VcsRef{}, false
 	}
@@ -354,7 +354,7 @@ func (a *App) pickerRef(i int) (t3.VcsRef, bool) {
 // the ref to create after them.
 func (a *App) pickHighlighted(th *ui.Theme) {
 	a.mu.Lock()
-	p, _ := a.pickerScene()
+	p, _ := a.refPickerNow()
 	if p == nil {
 		a.mu.Unlock()
 		return
