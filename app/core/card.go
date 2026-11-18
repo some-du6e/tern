@@ -176,6 +176,11 @@ func (a *App) cardScene(s *ui.Scene, e *envState, t *t3.Thread, p t3.Project, ha
 		d.Menu = &ui.CardMenu{For: "scripts", Rows: rows}
 	}
 
+	// The pull requests go under the branch row, or without one where it
+	// would be, with nothing from Git to fall back on.
+	if show("branch") && t != nil {
+		d.PRs = a.prsScene(prItems(e, t, a.branchPR(e, t, p, v)), termsFor(st))
+	}
 	if !offersGit {
 		return
 	}

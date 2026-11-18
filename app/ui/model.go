@@ -242,6 +242,7 @@ type ThreadDetails struct {
 	OpenIn  *OpenIn
 	Scripts *Scripts
 	Branch  *BranchRow
+	PRs     *PullRequests // under the branch row, or in its place without one
 	Git     *GitActions
 	InitGit bool // "Initialize Git", for a folder that isn't a repository
 	Initing bool // vcs.init is running: "Initializing...", and it can't be pressed again
@@ -282,6 +283,25 @@ type Scripts struct {
 type BranchRow struct {
 	Label    string // the branch, "From <branch>" for a new worktree's base, "Select ref"
 	Disabled bool   // until the refs load, and while a branch action runs
+}
+
+// PullRequests are the thread's pull request rows (ThreadDetailsPrRows.tsx):
+// the one it shows, then "Show N more" folding its other linked ones,
+// which Rows holds too while Expanded. Row i's target is "card.pr:<i>",
+// its eye "card.prwatch:<i>", the fold "card.prs".
+type PullRequests struct {
+	Rows     []PullRequestRow
+	Others   int
+	Expanded bool
+}
+
+// PullRequestRow is one pull request: its state's icon in its tone and
+// "#N: <title>".
+type PullRequestRow struct {
+	State    string // open, draft, closed or merged; "" until it's read
+	Label    string
+	Tip      string // "PR #12 - Open: <title>"
+	Watching bool   // the agent watches it: an eye after the row stops that
 }
 
 // GitActions is the quick action split (GitActionsControl.tsx).

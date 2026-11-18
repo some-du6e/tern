@@ -95,10 +95,25 @@ func (a *App) handleHeader(th *ui.Theme, act ui.Action) bool {
 	case id == "branch.search" && act.Kind == "submit":
 		a.pickHighlighted(th)
 		return true
+	case strings.HasPrefix(id, "card.pr:") && (act.Kind == "click" || act.Kind == "middle"):
+		// A pull request row opens it, as a middle click does.
+		a.openPR(atoi(strings.TrimPrefix(id, "card.pr:")))
+		return true
 	case act.Kind != "click":
 		return false
 	}
 	verb, arg, _ := strings.Cut(id, ":")
+	switch verb {
+	case "card.prwatch":
+		a.stopWatchingPR(atoi(arg))
+		return true
+	case "card.prs":
+		// "Show N more" and "Show less".
+		a.mu.Lock()
+		a.prsOpen = !a.prsOpen
+		a.mu.Unlock()
+		return true
+	}
 	if menu, ok := strings.CutPrefix(verb, "card."); ok && arg != "" {
 		// A row of one of the card's menus: "card.<menu>:<row>".
 		a.cardMenuPick(th, menu, atoi(arg))

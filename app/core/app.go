@@ -103,6 +103,7 @@ type App struct {
 	cardMenu      string
 	cardAtPointer bool            // the card's menu opened at a right-click
 	itemsHidden   map[string]bool // the card's items turned off (persisted)
+	prsOpen       bool            // the pull request rows show the thread's other links
 	branchPicker  *refPicker
 	confirm       *pendingGit
 	vcs           map[string]*vcsState
@@ -791,7 +792,7 @@ func (a *App) closeThreadLocked() {
 	a.view = nil
 	a.openID = ""
 	a.picker, a.traitsOpen, a.accessOpen, a.projectsOpen = nil, false, false, false
-	a.renaming, a.cardMenu, a.branchPicker, a.confirm = "", "", nil, nil
+	a.renaming, a.cardMenu, a.branchPicker, a.confirm, a.prsOpen = "", "", nil, nil, false
 }
 
 // openThread shows a thread, by ref, and subscribes to it. Call without the

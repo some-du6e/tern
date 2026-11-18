@@ -347,6 +347,19 @@ func draftMenuScene() *ui.Scene {
 	return s
 }
 
+// pullRequestsScene has the thread's pull requests under its branch row,
+// unfolded: the open one the agent watches, then the merged base it
+// stacks on and an older closed one.
+func pullRequestsScene() *ui.Scene {
+	s := runningScene()
+	s.Card.PRs = &ui.PullRequests{Others: 2, Expanded: true, Rows: []ui.PullRequestRow{
+		{State: "open", Label: "#214: Retry relay reads on a dropped socket", Tip: "PR #214 - Open: Retry relay reads on a dropped socket", Watching: true},
+		{State: "merged", Label: "#209: Split the relay out of the RPC client", Tip: "PR #209 - Merged: Split the relay out of the RPC client"},
+		{State: "closed", Label: "#187: Try a second socket for streams", Tip: "PR #187 - Closed: Try a second socket for streams"},
+	}}
+	return s
+}
+
 // renameScene renames the thread in place in the header; the thread came
 // from an agent on a linked machine.
 func renameScene() *ui.Scene {

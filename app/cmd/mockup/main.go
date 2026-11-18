@@ -55,6 +55,7 @@ func main() {
 			th.SetEditorText("header.title", "Port the T3 Connect client to Go")
 			return th.Desktop(gtx, renameScene())
 		}},
+		{"14-details-pull-requests", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, pullRequestsScene()) }},
 	}
 	if *anim != "" {
 		if err := renderAnims(th, float32(*scale), *anim); err != nil {

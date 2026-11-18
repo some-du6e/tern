@@ -134,7 +134,7 @@ func (th *Theme) details(gtx C, s *Scene, avail int) D {
 		m := op.Record(gtx.Ops)
 		g := gtx
 		g.Constraints = layout.Constraints{Max: image.Pt(w-2*px, 1<<20)}
-		h := th.cardContent(g, s, dn).Size.Y
+		h := th.cardContent(g, s, dn, true).Size.Y
 		m.Stop()
 		return h + 2*px
 	}
@@ -148,7 +148,7 @@ func (th *Theme) details(gtx C, s *Scene, avail int) D {
 	m := op.Record(gtx.Ops)
 	g := gtx
 	g.Constraints = layout.Constraints{Max: image.Pt(w-2*px, 1<<20)}
-	content := th.cardContent(g, s, dn)
+	content := th.cardContent(g, s, dn, false)
 	call := m.Stop()
 	h := min(content.Size.Y+2*px, most)
 	r := image.Rect(0, 0, w, h)
@@ -204,8 +204,10 @@ func edgeFade(gtx C, col color.NRGBA, r image.Rectangle, down bool) {
 }
 
 // cardContent is the card's sections at density dn, gtx.Constraints.Max.X
-// wide (the scroll area's 278).
-func (th *Theme) cardContent(gtx C, s *Scene, dn density) D {
+// wide (the scroll area's 278). Measuring for the density, it leaves out
+// the lists that scroll rather than drop sections (a thread's other pull
+// requests), as T3's measure does.
+func (th *Theme) cardContent(gtx C, s *Scene, dn density, measuring bool) D {
 	d := s.Card
 	w := gtx.Constraints.Max.X
 	if d.Picker == nil {
@@ -231,6 +233,9 @@ func (th *Theme) cardContent(gtx C, s *Scene, dn density) D {
 	}
 	if d.Branch != nil {
 		vcs = append(vcs, row{th.branchRow(d), "branch"})
+	}
+	if d.PRs != nil {
+		vcs = append(vcs, row{th.prRows(d.PRs, measuring), ""})
 	}
 	if d.InitGit {
 		vcs = append(vcs, row{th.initGitRow(d), ""})
@@ -423,10 +428,16 @@ func (k corners) scaled(gtx C) corners {
 	return corners{dp(gtx, float32(k.nw)), dp(gtx, float32(k.ne)), dp(gtx, float32(k.se)), dp(gtx, float32(k.sw))}
 }
 
-// split is a split group: primary and secondary controls sharing one
-// fill, with the hairline between them while the pair is hovered or its
-// menu is open. primary draws the left half's content.
+// split is a split group whose secondary is a chevron that opens a menu.
 func (th *Theme) split(gtx C, p, sec ctl, primary func(gtx C, w int)) D {
+	return th.splitWith(gtx, p, sec, primary, func(gtx C, x int, _ bool) { chevron(gtx, x) })
+}
+
+// splitWith is a split group: primary and secondary controls sharing one
+// fill, with the hairline between them while the pair is hovered or its
+// menu is open. primary draws the left half's content, second the 32dp
+// right half's from x, told whether it's hovered.
+func (th *Theme) splitWith(gtx C, p, sec ctl, primary func(gtx C, w int), second func(gtx C, x int, hovered bool)) D {
 	w := gtx.Constraints.Max.X
 	h := dp(gtx, rowH)
 	pw := w - dp(gtx, 1+32)
@@ -448,7 +459,7 @@ func (th *Theme) split(gtx C, p, sec ctl, primary func(gtx C, w int)) D {
 	}
 	r8 := dp(gtx, 8)
 	th.control(gtx, p, pr, corners{nw: r8, sw: r8}, group, func(gtx C) { primary(gtx, pw) })
-	th.control(gtx, sec, sr, corners{ne: r8, se: r8}, group, func(gtx C) { chevron(gtx, sr.Min.X) })
+	th.control(gtx, sec, sr, corners{ne: r8, se: r8}, group, func(gtx C) { second(gtx, sr.Min.X, sh) })
 	return D{Size: image.Pt(w, h)}
 }
 

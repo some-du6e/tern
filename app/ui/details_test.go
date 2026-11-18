@@ -55,6 +55,52 @@ func TestCardDensity(t *testing.T) {
 	}
 }
 
+// A pull request row sits under the branch row, then the muted "Show N
+// more", 32dp each. Expanded, the others join them, but the density still
+// judges the card without them, as T3's measure leaves scrolling lists out
+// (§5.4). The row's icon is its state's: violet for merged.
+func TestPRRows(t *testing.T) {
+	defer SetDark(false)
+	th := NewTheme()
+	s := cardScene()
+	s.Card.PRs = &PullRequests{Rows: []PullRequestRow{{State: "merged", Label: "#4: Ship the parser", Tip: "PR #4 - Merged: Ship the parser"}}, Others: 2}
+	var ops op.Ops
+	size := func(avail int) int {
+		ops.Reset()
+		gtx := layout.Context{Ops: &ops, Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Now: time.Now(),
+			Constraints: layout.Constraints{Max: image.Pt(280, 2000)}}
+		return th.details(gtx, s, avail).Size.Y
+	}
+	full := 1 + (8 + 3*32 + 10) + 1 + (8 + 5*32 + 10) + 1
+	if got := size(1000); got != full {
+		t.Errorf("with a pull request: %d tall, want %d", got, full)
+	}
+	s.Card.PRs.Expanded = true
+	s.Card.PRs.Rows = append(s.Card.PRs.Rows, PullRequestRow{State: "open", Label: "#5"}, PullRequestRow{State: "closed", Label: "#6"})
+	if got := size(full); got != full+2*32 {
+		t.Errorf("expanded, with room for it folded: %d tall, want full density's %d", got, full+2*32)
+	}
+
+	for _, d := range []bool{false, true} {
+		SetDark(d)
+		s.Card.PRs.Expanded, s.Card.PRs.Rows = false, s.Card.PRs.Rows[:1]
+		img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return NewTheme().Desktop(gtx, s) })
+		// The icon's 16dp box, 11dp into the row under the branch row
+		// (bottom 220): a grey icon has as much green as blue.
+		violet := false
+		for y := 220 + 8; y < 220+24; y++ {
+			for x := 1157 + 11; x < 1157+27; x++ {
+				if c := img.RGBAAt(x, y); int(c.B) > int(c.G)+20 {
+					violet = true
+				}
+			}
+		}
+		if !violet {
+			t.Errorf("dark %v: the merged pull request's icon isn't violet", d)
+		}
+	}
+}
+
 // With every row turned off, the card offers "Choose what to show",
 // padded 8, which opens the items menu under itself.
 func TestCardFallback(t *testing.T) {
