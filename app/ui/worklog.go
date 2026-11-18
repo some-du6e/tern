@@ -94,6 +94,9 @@ func workIcon(name string, col color.NRGBA) W {
 		return t3Wordmark(col, 16)
 	case "browser", "computer":
 		return browserGlyph(col, 16)
+	case "pull-request":
+		// PullRequestGlyph.pullRequest (pullRequestIcons.tsx:14).
+		name = "git-pull-request-arrow"
 	}
 	return lucideStroke(name, col, 16, 2)
 }
