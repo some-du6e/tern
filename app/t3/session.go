@@ -23,9 +23,27 @@ type Session struct {
 	AccessToken   string    `json:"accessToken"`
 	ExpiresAt     time.Time `json:"expiresAt"`
 	Bearer        bool      `json:"bearer"` // paired: no DPoP
+	// Scope is what the session may do, space separated, as the token
+	// exchange granted it: "orchestration:read orchestration:operate …".
+	// Empty means everything (sessions saved before tern kept it).
+	Scope string `json:"scope"`
 }
 
 func sessionName(envID string) string { return "env." + envID + ".json" }
+
+// CanOperate reports whether the session may change threads (T3's
+// orchestration:operate scope), not just read them.
+func (s *Session) CanOperate() bool {
+	if s.Scope == "" {
+		return true
+	}
+	for _, sc := range strings.Fields(s.Scope) {
+		if sc == "orchestration:operate" {
+			return true
+		}
+	}
+	return false
+}
 
 // CachedSession is a stored session with at least two minutes left.
 func CachedSession(s *Store, envID string) *Session {
@@ -52,6 +70,7 @@ func OpenSession(r *Relay, s *Store, env Environment) (*Session, error) {
 	var body struct {
 		AccessToken string `json:"access_token"`
 		ExpiresIn   int64  `json:"expires_in"`
+		Scope       string `json:"scope"`
 	}
 	err = r.withClockRetry(func() (*http.Response, error) {
 		return postForm(u, url.Values{
@@ -73,6 +92,7 @@ func OpenSession(r *Relay, s *Store, env Environment) (*Session, error) {
 		WSBaseURL:     c.Endpoint.WSBaseURL,
 		AccessToken:   body.AccessToken,
 		ExpiresAt:     time.Now().Add(time.Duration(body.ExpiresIn) * time.Second),
+		Scope:         body.Scope,
 	}
 	return sess, s.Put(sessionName(env.EnvironmentID), sess)
 }
@@ -115,6 +135,7 @@ func Pair(s *Store, pairURL string) (*Session, error) {
 	var body struct {
 		AccessToken string `json:"access_token"`
 		ExpiresIn   int64  `json:"expires_in"`
+		Scope       string `json:"scope"`
 	}
 	if err := readJSON(resp, "Pairing", &body); err != nil {
 		return nil, err
@@ -128,6 +149,7 @@ func Pair(s *Store, pairURL string) (*Session, error) {
 		AccessToken:   body.AccessToken,
 		ExpiresAt:     time.Now().Add(time.Duration(body.ExpiresIn) * time.Second),
 		Bearer:        true,
+		Scope:         body.Scope,
 	}
 	if err := s.Put(sessionName(desc.EnvironmentID), sess); err != nil {
 		return nil, err
