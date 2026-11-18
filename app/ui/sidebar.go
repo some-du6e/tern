@@ -502,11 +502,14 @@ func (th *Theme) sideItems(gtx C, s *Scene) []sideItem {
 		return items
 	}
 	if e := sb.Empty; e != nil {
-		h := float32(24 + 16 + 24)
+		// Its message wraps, so its height is the message's.
+		m := op.Record(gtx.Ops)
+		h := 2*dp(gtx, 24) + th.emptyText(gtx, e, gtx.Constraints.Max.X-2*dp(gtx, sideInset+8)).Size.Y
+		m.Stop()
 		if e.Button != "" {
-			h += 8 + 26
+			h += dp(gtx, 8+26)
 		}
-		add(h, "", "", -1, func(gtx C, _ int) D { return th.emptyState(gtx, s, e) })
+		items = append(items, sideItem{h: h, open: -1, draw: func(gtx C, _ int) D { return th.emptyState(gtx, s, e) }})
 	}
 	for _, it := range sb.Items {
 		switch {
@@ -1466,49 +1469,59 @@ func (th *Theme) moreRow(gtx C, s *Scene, n int) D {
 	)
 }
 
-// emptyState is what an empty list says (§2.9, §3.13): 12/16 in the muted
-// foreground at 60%, centred in 24 by 8 of padding, and its 26dp outline
-// button below.
+// emptyState is what an empty list says (§2.9, §3.13): a column centred in
+// 24 by 8 of padding, its message and then, 8dp below, its button.
 func (th *Theme) emptyState(gtx C, s *Scene, e *SidebarEmpty) D {
 	w := gtx.Constraints.Max.X
 	y := dp(gtx, 24)
 	func() {
-		defer op.Offset(image.Pt(0, y)).Push(gtx.Ops).Pop()
-		g := gtx
-		g.Constraints = layout.Exact(image.Pt(w, dp(gtx, 16)))
-		th.Text(g, Txt{Size: 12, LineH: 16.0 / 12, Color: over(alpha(SP.MutedForeground, 0x99), SP.Sidebar), MaxLines: 1, Align: text.Middle}, e.Text)
+		defer op.Offset(image.Pt(dp(gtx, 8), y)).Push(gtx.Ops).Pop()
+		y += th.emptyText(gtx, e, w-2*dp(gtx, 8)).Size.Y
 	}()
-	y += dp(gtx, 16)
 	if e.Button != "" {
-		y += dp(gtx, 8)
-		id := liveID(s, "filter.clear")
-		hovered := false
-		if id != "" {
-			c, _ := th.events(gtx, id)
-			hovered = c.Hovered()
-		}
-		col, bg := SP.SidebarMutedForeground, SP.Sidebar
-		if hovered {
-			col, bg = SP.SidebarForeground, over(SP.SidebarRowHover, SP.Sidebar)
-		}
-		t := Txt{Size: 11, LineH: 16.0 / 11, Font: UI(font.Medium), Color: col, MaxLines: 1}
-		m := op.Record(gtx.Ops)
-		ld := th.Text(gtx, t, e.Button)
-		call := m.Stop()
-		bw, bh := ld.Size.X+2*dp(gtx, 10), dp(gtx, 26)
-		defer op.Offset(image.Pt((w-bw)/2, y)).Push(gtx.Ops).Pop()
-		r := image.Rect(0, 0, bw, bh)
-		fill(gtx, bg, r, dp(gtx, 6))
-		strokeRect(gtx, over(SP.SidebarBorder, bg), r, dp(gtx, 6), float32(max(1, dp(gtx, 1))))
-		func() {
-			defer op.Offset(image.Pt(dp(gtx, 10), (bh-ld.Size.Y)/2)).Push(gtx.Ops).Pop()
-			call.Add(gtx.Ops)
-		}()
-		if id != "" {
-			th.hit(gtx, id, r.Max)
-		}
+		defer op.Offset(image.Pt(0, y+dp(gtx, 8))).Push(gtx.Ops).Pop()
+		th.emptyButton(gtx, liveID(s, "filter.clear"), e.Button, w)
 	}
 	return D{Size: image.Pt(w, gtx.Constraints.Max.Y)}
+}
+
+// emptyText is the empty list's message, w wide: 12/16 in the muted
+// foreground at 60%, centred, wrapping when it's long.
+func (th *Theme) emptyText(gtx C, e *SidebarEmpty, w int) D {
+	gtx.Constraints = layout.Constraints{Min: image.Pt(w, 0), Max: image.Pt(w, 1<<20)}
+	return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: over(alpha(SP.MutedForeground, 0x99), SP.Sidebar), Align: text.Middle}, e.Text)
+}
+
+// emptyButton is the empty list's button, centred in w: 26dp, padded 4 by
+// 10 inside a 1dp border in the sidebar border, radius 6, 11/16 medium in
+// the sidebar's muted foreground; hovered, the row hover fill and the
+// foreground, eased in over 150ms.
+func (th *Theme) emptyButton(gtx C, id, label string, w int) {
+	hovered := false
+	if id != "" {
+		c, _ := th.events(gtx, id)
+		hovered = c.Hovered()
+	}
+	k := th.transition(gtx, "empty.hover", hovered, 150*time.Millisecond)
+	col := lerpCol(SP.SidebarMutedForeground, SP.SidebarForeground, k)
+	bg := lerpCol(SP.Sidebar, over(SP.SidebarRowHover, SP.Sidebar), k)
+	g := gtx
+	g.Constraints.Min = image.Point{}
+	m := op.Record(gtx.Ops)
+	ld := th.Text(g, Txt{Size: 11, LineH: 16.0 / 11, Font: UI(font.Medium), Color: col, MaxLines: 1}, label)
+	call := m.Stop()
+	px := max(1, dp(gtx, 1))
+	r := image.Rect(0, 0, ld.Size.X+2*(dp(gtx, 10)+px), dp(gtx, 26))
+	defer op.Offset(image.Pt((w-r.Dx())/2, 0)).Push(gtx.Ops).Pop()
+	fill(gtx, bg, r, dp(gtx, 6))
+	strokeRect(gtx, over(SP.SidebarBorder, bg), r, dp(gtx, 6), float32(px))
+	func() {
+		defer op.Offset(image.Pt(px+dp(gtx, 10), (r.Dy()-ld.Size.Y)/2)).Push(gtx.Ops).Pop()
+		call.Add(gtx.Ops)
+	}()
+	if id != "" {
+		th.hit(gtx, id, r.Max)
+	}
 }
 
 // listNote is the search's status line: 12/16 in the sidebar's muted
@@ -1902,12 +1915,17 @@ func (th *Theme) listTip(gtx C, id, tip string, size image.Point) {
 
 // snoozeMenu is the menu a card's clock opens (SnoozeMenuButton): T3's
 // menu 4dp under the clock (trigger is its size), its right edge on the
-// clock's, a row per preset with its wake time after it in the secondary
-// label.
+// clock's, as wide as its widest row and at least 160dp; a row per preset
+// with its wake time at the end in the secondary label.
 func (th *Theme) snoozeMenu(gtx C, s *Scene, trigger image.Point) {
 	sm := s.Sidebar.Snooze
 	x := trigger.X
 	th.deferBelow(gtx, image.Pt(0, trigger.Y+dp(gtx, 4)), func(gtx C) D {
+		// Inside the 1dp border and 4dp of padding.
+		w := dp(gtx, 160-2*5)
+		for _, c := range sm.Choices {
+			w = max(w, th.snoozeChoiceWidth(gtx, c))
+		}
 		m := op.Record(gtx.Ops)
 		d := th.popUp(gtx, s, "snooze:"+sm.Row, nil, func(gtx C) D {
 			return popupFrame(gtx, func(gtx C) D {
@@ -1916,7 +1934,7 @@ func (th *Theme) snoozeMenu(gtx C, s *Scene, trigger image.Point) {
 					for _, c := range sm.Choices {
 						c := c
 						kids = append(kids, rigid(th.menuItem(liveID(s, "snooze.pick:"+c.ID), func(gtx C) D {
-							return th.snoozeChoice(gtx, c)
+							return th.snoozeChoice(gtx, c, w)
 						})))
 					}
 					return Col(gtx, kids...)
@@ -1930,22 +1948,28 @@ func (th *Theme) snoozeMenu(gtx C, s *Scene, trigger image.Point) {
 	})
 }
 
-// snoozeChoice is a snooze menu row: T3's menu item, 28dp, 14/20 padded 4
-// by 8, with its detail 16dp after the label.
-func (th *Theme) snoozeChoice(gtx C, c MenuItem) D {
-	gtx.Constraints.Min = image.Pt(dp(gtx, 160-8), dp(gtx, 28))
-	return pad(4, 8, 4, 8).Layout(gtx, func(gtx C) D {
-		gtx.Constraints.Min.X = gtx.Constraints.Max.X
+// snoozeChoice is a snooze menu row w wide: T3's menu item, 28dp, 14/20
+// padded 4 by 8, the label and, at the end, its detail.
+func (th *Theme) snoozeChoice(gtx C, c MenuItem, w int) D {
+	gtx.Constraints = layout.Exact(image.Pt(w, dp(gtx, 28)))
+	return pad(0, 8, 0, 8).Layout(gtx, func(gtx C) D {
 		return Row(gtx,
 			flexed(func(gtx C) D {
 				return th.Text(gtx, Txt{Size: 14, LineH: 20.0 / 14, Color: P.PopoverForeground, MaxLines: 1}, c.Label)
 			}),
-			rigid(Spacer(16, 0)),
 			rigid(func(gtx C) D {
 				return th.Text(gtx, Txt{Size: 14, LineH: 20.0 / 14, Color: P.SecondaryLabel, MaxLines: 1}, c.Detail)
 			}),
 		)
 	})
+}
+
+// snoozeChoiceWidth is what a snooze menu row needs: its label, then the
+// row's 8dp gap and the detail's 16dp of padding, then the detail, all
+// inside 8dp each side (MenuItemDetail: ms-auto ps-4).
+func (th *Theme) snoozeChoiceWidth(gtx C, c MenuItem) int {
+	t := Txt{Size: 14, LineH: 20.0 / 14}
+	return dp(gtx, 8) + th.textWidth(gtx, t, c.Label) + dp(gtx, 8+16) + th.textWidth(gtx, t, c.Detail) + dp(gtx, 8)
 }
 
 // ---------- the footer ----------

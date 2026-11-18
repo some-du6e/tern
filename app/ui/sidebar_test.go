@@ -120,6 +120,89 @@ func TestRowTextCentred(t *testing.T) {
 	}
 }
 
+// The empty list's message sits 24dp down, and 8dp under it its button:
+// 26dp of 1dp border round its label, centred in the list's 8..247.
+func TestEmptyState(t *testing.T) {
+	th := NewTheme()
+	s := &Scene{Sidebar: Sidebar{HasProjects: true, Empty: &SidebarEmpty{Text: "No threads in notes yet", Button: "Show all projects"}}}
+	img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, s) })
+	if top, bottom, ok := inkRows(img, image.Rect(8, 100, 248, 147), SP.Sidebar); !ok || top < 124 || bottom >= 140 {
+		t.Errorf("the message's ink is on rows %d..%d, want within 124..139", top, bottom)
+	}
+	border := over(SP.SidebarBorder, SP.Sidebar)
+	left, right := -1, -1
+	for x := 0; x < 256; x++ {
+		if nearPixel(img.RGBAAt(x, 160), border) {
+			if left < 0 {
+				left = x
+			}
+			right = x
+		}
+	}
+	if mid := (left + right) / 2; left < 8 || right > 247 || mid < 126 || mid > 128 {
+		t.Fatalf("the button's sides are at x %d and %d, want them either side of 127", left, right)
+	}
+	mid := (left + right) / 2
+	wantPixel(t, img, image.Pt(mid, 147), SP.Sidebar, "above the button")
+	wantPixel(t, img, image.Pt(mid, 148), border, "the button's top")
+	wantPixel(t, img, image.Pt(mid, 173), border, "the button's bottom")
+	wantPixel(t, img, image.Pt(mid, 174), SP.Sidebar, "below the button")
+	// The label is 10dp inside the border, give or take its glyphs' sides.
+	if l, r, ok := inkCols(img, image.Rect(left+1, 149, right, 173), SP.Sidebar); !ok || l-left < 10 || l-left > 13 || right-r < 10 || right-r > 13 {
+		t.Errorf("the label is at x %d..%d in a button at %d..%d", l, r, left, right)
+	}
+}
+
+// The snooze menu hangs 4dp under its clock with its right edge on the
+// clock's, as wide as its widest row needs (its detail 8 + 16dp past the
+// label) and at least 160dp, each label at the start of its row and each
+// wake time at the end.
+func TestSnoozeMenu(t *testing.T) {
+	defer SetDark(false)
+	SetDark(true) // black under it, where its shadow doesn't show
+	th := NewTheme()
+	s := &Scene{Sidebar: Sidebar{Snooze: &SnoozeMenu{Row: "e/1", Choices: []MenuItem{
+		{ID: "a", Label: "In 1 hour", Detail: "11:00 AM"},
+		{ID: "b", Label: "Next week", Detail: "Mon 9:00 AM"},
+	}}}}
+	black := rgb(0)
+	img := drawn(t, image.Pt(600, 300), 1, func(gtx C) D {
+		fill(gtx, black, image.Rect(0, 0, 600, 300), 0)
+		// The clock's box: 24 by 20 at 400, 50.
+		defer op.Offset(image.Pt(400, 50)).Push(gtx.Ops).Pop()
+		th.snoozeMenu(gtx, s, image.Pt(24, 20))
+		return D{}
+	})
+	// Its 1dp border, at the middle of the first row (79..107).
+	left, right, ok := inkCols(img, image.Rect(0, 93, 600, 94), black)
+	if !ok || right != 423 || right-left+1 < 160 {
+		t.Fatalf("the menu spans x %d..%d, want it to end at 423 and be at least 160 wide", left, right)
+	}
+	if top, _, _ := inkRows(img, image.Rect(left+20, 60, left+21, 120), black); top != 74 {
+		t.Errorf("the menu's top is at %d, want 74", top)
+	}
+	for i, row := range []image.Rectangle{image.Rect(left+2, 83, right-1, 103), image.Rect(left+2, 111, right-1, 131)} {
+		l, r, ok := inkCols(img, row, black)
+		if !ok || l-left < 12 || l-left > 15 || right-r < 12 || right-r > 15 {
+			t.Errorf("row %d's text spans x %d..%d in a menu at %d..%d", i, l, r, left, right)
+		}
+	}
+	// The widest row, the second: its widest gap in ink is the one between
+	// label and detail.
+	gap, run := 0, 0
+	for x := left + 14; x < right-13; x++ {
+		if _, _, ok := inkRows(img, image.Rect(x, 111, x+1, 131), black); ok {
+			run = 0
+			continue
+		}
+		run++
+		gap = max(gap, run)
+	}
+	if gap < 22 || gap > 27 {
+		t.Errorf("the widest row's label and detail are %d apart, want 24 give or take their glyphs' sides", gap)
+	}
+}
+
 // In light the open row is rung 1dp inside with the sidebar border at 70%.
 func TestOpenRowRing(t *testing.T) {
 	th := NewTheme()
