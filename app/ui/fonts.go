@@ -3,6 +3,8 @@ package ui
 import (
 	"embed"
 	"io/fs"
+	"path"
+	"strings"
 
 	"gioui.org/font"
 	"gioui.org/font/opentype"
@@ -27,15 +29,25 @@ var fontFiles embed.FS
 var sans, mono font.Typeface
 
 // faces is every embedded face, then the platform's own (systemFaces).
+// The Inter instances all name their style "Regular", so each gets its
+// weight from its file name, Inter-<Weight>-<subset>.ttf, instead.
 func faces() []font.FontFace {
 	var out []font.FontFace
-	fs.WalkDir(fontFiles, "fonts", func(path string, d fs.DirEntry, err error) error {
+	fs.WalkDir(fontFiles, "fonts", func(name string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
-		data, err := fontFiles.ReadFile(path)
+		data, err := fontFiles.ReadFile(name)
 		if err != nil {
 			panic(err)
+		}
+		if w, ok := interWeight(name); ok {
+			face, err := opentype.Parse(data)
+			if err != nil {
+				panic(err)
+			}
+			out = append(out, font.FontFace{Font: font.Font{Typeface: "Inter", Weight: w}, Face: face})
+			return nil
 		}
 		parsed, err := opentype.ParseCollection(data)
 		if err != nil {
@@ -45,6 +57,16 @@ func faces() []font.FontFace {
 		return nil
 	})
 	return append(out, systemFaces()...)
+}
+
+// interWeight is the weight of an embedded Inter instance, from its name.
+func interWeight(file string) (font.Weight, bool) {
+	name, ok := strings.CutPrefix(path.Base(file), "Inter-")
+	if !ok {
+		return 0, false
+	}
+	w, ok := map[string]font.Weight{"Regular": font.Normal, "Medium": font.Medium, "SemiBold": font.SemiBold, "Bold": font.Bold}[strings.Split(name, "-")[0]]
+	return w, ok
 }
 
 // cssWeights are the weights T3 uses, as Gio's weights and CSS's.
