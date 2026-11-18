@@ -1566,10 +1566,14 @@ func (th *Theme) emptyState(gtx C, s *Scene, e *SidebarEmpty) D {
 }
 
 // emptyText is the empty list's message, w wide: 12/16 in the muted
-// foreground at 60%, centred, wrapping when it's long.
+// foreground at 60%, centred, wrapping when it's long. It takes whole 16dp
+// lines, as CSS's line boxes do; Gio sizes the first by its glyphs.
 func (th *Theme) emptyText(gtx C, e *SidebarEmpty, w int) D {
 	gtx.Constraints = layout.Constraints{Min: image.Pt(w, 0), Max: image.Pt(w, 1<<20)}
-	return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: over(alpha(SP.MutedForeground, 0x99), SP.Sidebar), Align: text.Middle}, e.Text)
+	d := th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: over(alpha(SP.MutedForeground, 0x99), SP.Sidebar), Align: text.Middle}, e.Text)
+	lh := dp(gtx, 16)
+	d.Size.Y = (d.Size.Y + lh - 1) / lh * lh
+	return d
 }
 
 // emptyButton is the empty list's button, centred in w: 26dp, padded 4 by
