@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"bytes"
 	"fmt"
 	"image"
 	"image/color"
@@ -495,6 +496,23 @@ func TestProjectMonogram(t *testing.T) {
 	tile := over(alpha(Tailwind["amber-600"], 0x24), bg)
 	wantPixel(t, img, image.Pt(1, 8), tile, "the tile")
 	wantPixel(t, img, image.Pt(21, 8), over(alpha(grey(tile), 0x66), bg), "the quiet tile")
+}
+
+// A project's lucide icon draws in its colour; one tern doesn't have is
+// folder-code, as T3 draws one it can't find.
+func TestProjectLucideIcon(t *testing.T) {
+	th := NewTheme()
+	bg := rgb(0xffffff)
+	icon := func(name string) *image.RGBA {
+		return drawn(t, image.Pt(16, 16), 1, func(gtx C) D {
+			fill(gtx, bg, image.Rect(0, 0, 16, 16), 0)
+			return th.projectIcon(gtx, ProjectIcon{Lucide: name, Color: "gray"}, 16, bg, 0)
+		})
+	}
+	got, want := icon("not-an-icon"), icon("folder-code")
+	if _, _, ok := inkRows(got, got.Bounds(), bg); !ok || !bytes.Equal(got.Pix, want.Pix) {
+		t.Fatal("an unknown lucide icon should draw as folder-code")
+	}
 }
 
 // A branch keeps its end (T3's MiddleTruncate tests).

@@ -1,6 +1,7 @@
 package core
 
 import (
+	"cmp"
 	"fmt"
 	"math"
 	"sort"
@@ -1083,12 +1084,20 @@ func prBadge(t *t3.Thread) *ui.PRBadge {
 var projectIconColors = []string{"gray", "red", "orange", "amber", "yellow", "lime", "green", "emerald", "teal",
 	"cyan", "sky", "blue", "indigo", "violet", "purple", "fuchsia", "pink", "rose"}
 
-// projectIcon is the project's chosen monogram, else one made from its name
-// (deriveProjectIdentity). tern loads no favicons, so this is the fallback
-// T3 draws until a project's favicon loads.
+// projectIcon is the project's chosen icon, a monogram or a lucide icon in
+// its colour (a lucide one carrying a monogram from older servers is that
+// monogram), else one made from its name (deriveProjectIdentity), which is
+// also what an emoji gets: Gio sets no colour emoji. tern loads no
+// favicons, so the made one is what T3 draws until a project's favicon
+// loads.
 func projectIcon(p t3.Project) ui.ProjectIcon {
-	if i := p.ProjectIcon; i != nil && i.Kind == "monogram" && i.Text != "" {
-		return ui.ProjectIcon{Text: i.Text, Color: i.Color}
+	if i := p.ProjectIcon; i != nil {
+		switch text := cmp.Or(i.Text, i.MonogramText, i.Monogram); {
+		case (i.Kind == "monogram" || i.Kind == "lucide") && text != "":
+			return ui.ProjectIcon{Text: text, Color: i.Color}
+		case i.Kind == "lucide" && i.Name != "":
+			return ui.ProjectIcon{Lucide: i.Name, Color: i.Color}
+		}
 	}
 	return ui.ProjectIcon{Text: monogram(p.Title), Color: monogramColor(p.Title)}
 }

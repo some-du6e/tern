@@ -1,6 +1,7 @@
 package core
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"sort"
@@ -104,29 +105,52 @@ func (a *App) scopeIcons(scope map[string]bool) ([]ui.ProjectIcon, string) {
 	return icons, "Filter threads by project: " + strings.Join(names, ", ")
 }
 
-// filterOrder is every project the filter offers, most recently active
-// first. It's fixed when the popup opens, so rows don't move under it.
+// filterOrder is every project the filter offers: the pinned ones, then
+// the rest, each most recently active first. A project goes by its
+// threads' newest user message (else when one changed or began), and with
+// none by when it changed itself; ties by title (sortLogicalProjectsForSidebar,
+// by updated_at). It's fixed when the popup opens, so rows don't move
+// under it.
 func (a *App) filterOrder() []string {
-	last := map[string]time.Time{}
+	at := map[string]time.Time{}
 	var keys []string
 	for _, e := range a.envs {
 		for _, t := range e.threads {
+			if t.ArchivedAt != "" {
+				continue
+			}
 			k := ref(e.id(), t.ProjectID)
-			if at := parseTime(t.LatestUserMessageAt); at.After(last[k]) {
-				last[k] = at
+			ts := parseTime(cmp.Or(t.LatestUserMessageAt, t.UpdatedAt, t.CreatedAt))
+			if v, ok := at[k]; !ok || ts.After(v) {
+				at[k] = ts
 			}
 		}
 		for id, p := range e.projects {
-			if p.ArchivedAt == "" {
-				keys = append(keys, ref(e.id(), id))
+			if p.ArchivedAt != "" {
+				continue
+			}
+			k := ref(e.id(), id)
+			keys = append(keys, k)
+			if _, ok := at[k]; !ok {
+				at[k] = parseTime(cmp.Or(p.UpdatedAt, p.CreatedAt))
 			}
 		}
 	}
+	project := func(k string) t3.Project {
+		envID, id := splitRef(k)
+		return a.env(envID).projects[id]
+	}
 	sort.Slice(keys, func(i, j int) bool {
-		if !last[keys[i]].Equal(last[keys[j]]) {
-			return last[keys[i]].After(last[keys[j]])
+		pi, pj := project(keys[i]), project(keys[j])
+		switch ti, tj := strings.ToLower(pi.Title), strings.ToLower(pj.Title); {
+		case (pi.PinnedAt != "") != (pj.PinnedAt != ""):
+			return pi.PinnedAt != ""
+		case !at[keys[i]].Equal(at[keys[j]]):
+			return at[keys[i]].After(at[keys[j]])
+		case ti != tj:
+			return ti < tj
 		}
-		return a.scopeTitle(keys[i]) < a.scopeTitle(keys[j])
+		return keys[i] < keys[j]
 	})
 	return keys
 }

@@ -534,7 +534,8 @@ func TestProjectFilter(t *testing.T) {
 func TestProjectFilterKeys(t *testing.T) {
 	now := time.Now()
 	a := sideApp(t, t3.Thread{ID: "1", Title: "in tern", CreatedAt: ago(now, time.Minute)})
-	a.envs[0].projects["g"] = t3.Project{ID: "g", Title: "atlas", WorkspaceRoot: "/srv/atlas"}
+	// atlas changed since tern's thread began, so it comes first.
+	a.envs[0].projects["g"] = t3.Project{ID: "g", Title: "atlas", WorkspaceRoot: "/srv/atlas", UpdatedAt: ago(now, time.Second)}
 	th := ui.NewTheme()
 	lit := func() string {
 		s := a.build(now)
@@ -607,6 +608,50 @@ func TestSearch(t *testing.T) {
 	a.handle(th, ui.Action{ID: "search", Kind: "change", Text: "zebra"})
 	if s = a.build(now); s.Sidebar.NoResults != "No threads found" {
 		t.Fatalf("no results: %q", s.Sidebar.NoResults)
+	}
+}
+
+// A project's chosen icon is its monogram or its lucide icon in its colour;
+// a lucide one carrying an older server's monogram is that monogram, and
+// an emoji, which Gio can't set, gets the monogram made from the name
+// (§3.7).
+func TestProjectIcons(t *testing.T) {
+	made := ui.ProjectIcon{Text: "TN", Color: "amber"}
+	for _, c := range []struct {
+		icon *t3.ProjectIcon
+		want ui.ProjectIcon
+	}{
+		{&t3.ProjectIcon{Kind: "monogram", Text: "Q1", Color: "teal"}, ui.ProjectIcon{Text: "Q1", Color: "teal"}},
+		{&t3.ProjectIcon{Kind: "lucide", Name: "rocket", Color: "blue"}, ui.ProjectIcon{Lucide: "rocket", Color: "blue"}},
+		{&t3.ProjectIcon{Kind: "lucide", Name: "rocket", Color: "blue", MonogramText: "RK"}, ui.ProjectIcon{Text: "RK", Color: "blue"}},
+		{&t3.ProjectIcon{Kind: "emoji", Emoji: "🚀"}, made},
+		{nil, made},
+	} {
+		if got := projectIcon(t3.Project{Title: "tern", ProjectIcon: c.icon}); got != c.want {
+			t.Errorf("%+v: %+v, want %+v", c.icon, got, c.want)
+		}
+	}
+}
+
+// The filter lists pinned projects first, then the rest, each most
+// recently active first: by its threads' newest user message, else by when
+// the project itself changed; ties by title, whatever its case (§5.3).
+func TestFilterOrder(t *testing.T) {
+	now := time.Now()
+	a := sideApp(t, t3.Thread{ID: "1", Title: "in tern", CreatedAt: ago(now, 3*time.Hour), LatestUserMessageAt: ago(now, time.Hour)})
+	e := a.envs[0]
+	e.projects["b"] = t3.Project{ID: "b", Title: "beta", WorkspaceRoot: "/srv/beta", PinnedAt: ago(now, time.Hour), UpdatedAt: ago(now, 48*time.Hour)}
+	e.projects["g"] = t3.Project{ID: "g", Title: "gamma", WorkspaceRoot: "/srv/gamma", UpdatedAt: ago(now, 30*time.Minute)}
+	e.projects["z"] = t3.Project{ID: "z", Title: "Zeta", WorkspaceRoot: "/srv/zeta", UpdatedAt: ago(now, 5*time.Hour)}
+	e.projects["e"] = t3.Project{ID: "e", Title: "eta", WorkspaceRoot: "/srv/eta", UpdatedAt: ago(now, 5*time.Hour)}
+	e.projects["d"] = t3.Project{ID: "d", Title: "delta", WorkspaceRoot: "/srv/delta", ArchivedAt: ago(now, time.Hour)}
+	a.handle(ui.NewTheme(), ui.Action{ID: "filter", Kind: "click"})
+	var got []string
+	for _, it := range a.build(now).Sidebar.Filter.Items {
+		got = append(got, it.Label)
+	}
+	if want := "All projects, beta, gamma, tern, eta, Zeta"; strings.Join(got, ", ") != want {
+		t.Fatalf("filter order:\n got %s\nwant %s", strings.Join(got, ", "), want)
 	}
 }
 

@@ -1873,8 +1873,10 @@ func (th *Theme) projectIcon(gtx C, ic ProjectIcon, sizeDp float32, bg color.NRG
 	}
 	s := dp(gtx, sizeDp)
 	if ic.Lucide != "" || ic.Text == "" {
+		// A lucide icon tern hasn't is folder-code, as T3 draws one it can't
+		// find.
 		name := ic.Lucide
-		if name == "" {
+		if _, ok := lucide[name]; !ok {
 			name = "folder-code"
 		}
 		return LucideW(name, ink(col), sizeDp)(gtx)

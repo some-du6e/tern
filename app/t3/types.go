@@ -22,15 +22,23 @@ type Project struct {
 	WorkspaceRoot         string          `json:"workspaceRoot"`
 	DefaultModelSelection *ModelSelection `json:"defaultModelSelection"`
 	ProjectIcon           *ProjectIcon    `json:"projectIcon"`
+	PinnedAt              string          `json:"pinnedAt"` // pinned projects lead project pickers
 	ArchivedAt            string          `json:"archivedAt"`
+	CreatedAt             string          `json:"createdAt"`
+	UpdatedAt             string          `json:"updatedAt"`
 }
 
-// ProjectIcon is a project's chosen icon: a monogram in one of T3's icon
-// colours, a lucide icon or an emoji. tern draws the monograms.
+// ProjectIcon is a project's chosen icon: a monogram or a lucide icon in
+// one of T3's icon colours, or an emoji. A lucide icon from older servers
+// may carry a monogram, which it then is.
 type ProjectIcon struct {
-	Kind  string `json:"kind"` // "monogram", "lucide", "emoji"
-	Text  string `json:"text"` // a monogram's glyphs
-	Color string `json:"color"`
+	Kind         string `json:"kind"` // "monogram", "lucide", "emoji"
+	Text         string `json:"text"` // a monogram's glyphs
+	Name         string `json:"name"` // a lucide icon's
+	Emoji        string `json:"emoji"`
+	Color        string `json:"color"`
+	MonogramText string `json:"monogramText"`
+	Monogram     string `json:"monogram"`
 }
 
 type RuntimeRequest struct {
