@@ -30,7 +30,7 @@ func liveApp(t *testing.T, st *t3.VcsStatus, refs ...t3.VcsRef) (*App, *fakeEnv)
 	e.conn = f.dial(a)
 	a.openThread("swiss/t1")
 	eventually(t, "the status and refs load", func() bool {
-		a.build(time.Now())
+		built(a, time.Now())
 		a.mu.Lock()
 		defer a.mu.Unlock()
 		_, _, _, v := a.checkout()
@@ -45,11 +45,11 @@ func liveApp(t *testing.T, st *t3.VcsStatus, refs ...t3.VcsRef) (*App, *fakeEnv)
 func TestQuickActionAsksOnTheDefaultBranch(t *testing.T) {
 	a, f := liveApp(t, status(func(s *t3.VcsStatus) { s.RefName, s.IsDefaultRef, s.HasWorkingTreeChanges = "main", true, true }))
 	th := ui.NewTheme()
-	if s := a.build(time.Now()); s.Card.Git.Label != "Commit & push" {
+	if s := built(a, time.Now()); s.Card.Git.Label != "Commit & push" {
 		t.Fatalf("quick action %+v", s.Card.Git)
 	}
 	a.handle(th, ui.Action{ID: "card.git", Kind: "click"})
-	s := a.build(time.Now())
+	s := built(a, time.Now())
 	if c := s.Confirm; c == nil || c.Title != "Commit & push to default ref?" || c.Continue != "Commit & push to main" || c.BranchOff != "" {
 		t.Fatalf("confirm %+v", s.Confirm)
 	}
@@ -61,14 +61,14 @@ func TestQuickActionAsksOnTheDefaultBranch(t *testing.T) {
 	if r.Payload["action"] != "commit_push" || r.Payload["cwd"] != "/root/code/goog" || r.Payload["threadId"] != "t1" || r.Payload["featureBranch"] != nil || r.Payload["actionId"] == "" {
 		t.Fatalf("payload %v", r.Payload)
 	}
-	if s := a.build(time.Now()); s.Confirm != nil {
+	if s := built(a, time.Now()); s.Confirm != nil {
 		t.Fatal("the dialog should close")
 	}
 	f.chunk(r, map[string]any{"kind": "phase_started", "phase": "commit", "label": "Committing..."})
 	f.chunk(r, map[string]any{"kind": "hook_started", "hookName": "pre-commit"})
 	f.chunk(r, map[string]any{"kind": "hook_output", "hookName": "pre-commit", "text": "lint\nlint ok\n"})
 	eventually(t, "the progress shows", func() bool {
-		g := a.build(time.Now()).Card.Git
+		g := built(a, time.Now()).Card.Git
 		return g.Running != nil && g.Running.Status == "Committing..." && g.Running.Output == "lint ok" && strings.HasSuffix(g.Running.Elapsed, "s")
 	})
 	f.chunk(r, map[string]any{"kind": "action_finished", "result": map[string]any{
@@ -76,10 +76,10 @@ func TestQuickActionAsksOnTheDefaultBranch(t *testing.T) {
 		"toast": map[string]any{"title": "Pushed to main", "description": "1 commit"}}})
 	f.exit(r, nil)
 	eventually(t, "the result shows", func() bool {
-		g := a.build(time.Now()).Card.Git
+		g := built(a, time.Now()).Card.Git
 		return g.Running == nil && g.Success != nil && g.Success.Title == "Pushed to main" && g.Success.Description == "1 commit"
 	})
-	if g := a.build(time.Now().Add(11 * time.Second)).Card.Git; g.Success != nil {
+	if g := built(a, time.Now().Add(11*time.Second)).Card.Git; g.Success != nil {
 		t.Fatal("the result should go after ten seconds")
 	}
 }
@@ -90,7 +90,7 @@ func TestConfirmFeatureBranchAndAbort(t *testing.T) {
 	a, f := liveApp(t, status(func(s *t3.VcsStatus) { s.RefName, s.IsDefaultRef, s.AheadCount = "main", true, 2 }))
 	th := ui.NewTheme()
 	a.handle(th, ui.Action{ID: "card.git", Kind: "click"})
-	s := a.build(time.Now())
+	s := built(a, time.Now())
 	if c := s.Confirm; c == nil || c.Title != "Push to default ref?" || c.Continue != "Push to main" || !strings.Contains(c.BranchOff, "no changes to commit") {
 		t.Fatalf("confirm %+v", s.Confirm)
 	}
@@ -98,7 +98,7 @@ func TestConfirmFeatureBranchAndAbort(t *testing.T) {
 	a.handle(th, ui.Action{ID: "card.git", Kind: "click"})
 	a.handle(th, ui.Action{ID: "confirm:abort", Kind: "click"})
 	time.Sleep(50 * time.Millisecond)
-	if s := a.build(time.Now()); s.Confirm != nil || len(f.requests("git.runStackedAction")) != 0 {
+	if s := built(a, time.Now()); s.Confirm != nil || len(f.requests("git.runStackedAction")) != 0 {
 		t.Fatal("a clean tree's feature branch and Abort should run nothing")
 	}
 
@@ -116,7 +116,7 @@ func TestGitMenuActions(t *testing.T) {
 	a, f := liveApp(t, status(func(s *t3.VcsStatus) { s.AheadCount = 1 }))
 	th := ui.NewTheme()
 	a.handle(th, ui.Action{ID: "card.gitmenu", Kind: "click"})
-	m := a.build(time.Now()).Card.Menu
+	m := built(a, time.Now()).Card.Menu
 	if m == nil || m.For != "git" || len(m.Rows) != 3 || !m.Rows[0].Disabled || m.Rows[1].Label != "Push" || m.Rows[2].Label != "Create PR" {
 		t.Fatalf("menu %+v", m)
 	}
@@ -130,7 +130,7 @@ func TestGitMenuActions(t *testing.T) {
 	}
 	f.chunk(r, map[string]any{"kind": "action_finished", "result": map[string]any{"pr": map[string]any{"status": "created", "number": 43}, "toast": map[string]any{"title": "Pushed"}}})
 	f.exit(r, nil)
-	eventually(t, "push finishes", func() bool { g := a.build(time.Now()).Card.Git; return g.Success != nil })
+	eventually(t, "push finishes", func() bool { g := built(a, time.Now()).Card.Git; return g.Success != nil })
 	a.handle(th, ui.Action{ID: "card.gitmenu", Kind: "click"})
 	a.handle(th, ui.Action{ID: "card.git:2", Kind: "click"})
 	r = f.wait("git.runStackedAction", 2)
@@ -140,7 +140,7 @@ func TestGitMenuActions(t *testing.T) {
 	f.chunk(r, map[string]any{"kind": "action_finished", "result": map[string]any{"pr": map[string]any{"status": "created", "number": 44}, "toast": map[string]any{"title": "Created PR #44"}}})
 	f.exit(r, nil)
 	eventually(t, "the PR's result", func() bool {
-		g := a.build(time.Now()).Card.Git
+		g := built(a, time.Now()).Card.Git
 		return g.Success != nil && g.Success.Title == "Created PR" && g.Success.Description == ""
 	})
 }
@@ -156,7 +156,7 @@ func TestGitActionFails(t *testing.T) {
 	f.chunk(r, map[string]any{"kind": "action_failed", "phase": "push", "message": "rejected"})
 	f.failWith(r, "rejected")
 	eventually(t, "the failure shows", func() bool {
-		s := a.build(time.Now())
+		s := built(a, time.Now())
 		return s.Card.Git.Running == nil && s.Error == "Action failed: rejected"
 	})
 }
@@ -173,13 +173,13 @@ func TestPullAndInit(t *testing.T) {
 		t.Fatalf("pull payload %v", r.Payload)
 	}
 	eventually(t, "pulled", func() bool {
-		g := a.build(time.Now()).Card.Git
+		g := built(a, time.Now()).Card.Git
 		return g.Success != nil && g.Success.Title == "Pulled" && g.Success.Description == "Updated feature from origin/feature"
 	})
 
 	a, f = liveApp(t, &t3.VcsStatus{})
 	f.on("vcs.init", func(f *fakeEnv, r fakeReq) { f.failWith(r, "permission denied") })
-	if s := a.build(time.Now()); !s.Card.InitGit {
+	if s := built(a, time.Now()); !s.Card.InitGit {
 		t.Fatal("no Initialize Git row")
 	}
 	a.handle(ui.NewTheme(), ui.Action{ID: "card.initgit", Kind: "click"})
@@ -187,7 +187,7 @@ func TestPullAndInit(t *testing.T) {
 		t.Fatalf("init payload %v", r.Payload)
 	}
 	eventually(t, "the failure shows", func() bool {
-		return a.build(time.Now()).Error == "Git initialization failed: permission denied"
+		return built(a, time.Now()).Error == "Git initialization failed: permission denied"
 	})
 }
 
@@ -201,12 +201,12 @@ func TestBranchPicker(t *testing.T) {
 	f.on("vcs.createRef", func(f *fakeEnv, r fakeReq) { f.exit(r, map[string]any{"refName": "spike"}) })
 	th := ui.NewTheme()
 	a.handle(th, ui.Action{ID: "card.branch", Kind: "click"})
-	p := a.build(time.Now()).Card.Picker
+	p := built(a, time.Now()).Card.Picker
 	if p == nil || len(p.Refs) != 3 || p.Refs[0].Tag != "current" || p.Refs[1].Tag != "default" || p.Refs[2].Tag != "remote" || p.Create != "" {
 		t.Fatalf("picker %+v", p)
 	}
 	a.handle(th, ui.Action{ID: "branch.search", Kind: "change", Text: "MAI"})
-	p = a.build(time.Now()).Card.Picker
+	p = built(a, time.Now()).Card.Picker
 	if len(p.Refs) != 2 || p.Refs[0].Name != "main" || p.Create != `Create new ref "MAI"` {
 		t.Fatalf("filtered %+v", p)
 	}
@@ -217,7 +217,7 @@ func TestBranchPicker(t *testing.T) {
 	if d := f.wait("orchestration.dispatchCommand:thread.metadata.update", 1); d.Payload["branch"] != "main" || d.Payload["threadId"] != "t1" {
 		t.Fatalf("branch update %v", d.Payload)
 	}
-	if s := a.build(time.Now()); s.Card.Picker != nil {
+	if s := built(a, time.Now()); s.Card.Picker != nil {
 		t.Fatal("picking closes the picker")
 	}
 	a.handle(th, ui.Action{ID: "card.branch", Kind: "click"})
@@ -235,7 +235,7 @@ func TestOpenInEditorHere(t *testing.T) {
 	a.envs[0].config.AvailableEditors = []string{"zed", "vscode"}
 	f.on("shell.openInEditor", func(f *fakeEnv, r fakeReq) { f.exit(r, nil) })
 	th := ui.NewTheme()
-	if o := a.build(time.Now()).Card.OpenIn; o.Label != "Open in VS Code" || o.Disabled {
+	if o := built(a, time.Now()).Card.OpenIn; o.Label != "Open in VS Code" || o.Disabled {
 		t.Fatalf("open in %+v", o)
 	}
 	a.handle(th, ui.Action{ID: "card.openin", Kind: "click"})
@@ -243,12 +243,12 @@ func TestOpenInEditorHere(t *testing.T) {
 		t.Fatalf("payload %v", r.Payload)
 	}
 	a.handle(th, ui.Action{ID: "card.editors", Kind: "click"})
-	m := a.build(time.Now()).Card.Menu
+	m := built(a, time.Now()).Card.Menu
 	if m == nil || len(m.Rows) != 2 || m.Rows[0].Label != "VS Code" || m.Rows[0].Shortcut == "" || m.Rows[1].Label != "Zed" {
 		t.Fatalf("editors %+v", m)
 	}
 	a.handle(th, ui.Action{ID: "card.openin:1", Kind: "click"})
-	if o := a.build(time.Now()).Card.OpenIn; o.Label != "Open in Zed" || len(f.requests("shell.openInEditor")) != 1 {
+	if o := built(a, time.Now()).Card.OpenIn; o.Label != "Open in Zed" || len(f.requests("shell.openInEditor")) != 1 {
 		t.Fatalf("picking only prefers it: %+v", o)
 	}
 }
@@ -263,12 +263,12 @@ func TestOpenInEditorElsewhere(t *testing.T) {
 	e := a.envs[0]
 	e.config = &t3.ServerConfig{RemoteOpenTargets: []t3.RemoteOpenTarget{{Kind: "tailscale", Host: "box.example.ts.net", Username: "dev"}}}
 	a.openThread("swiss/t1")
-	s := a.build(time.Now())
+	s := built(a, time.Now())
 	if o := s.Card.OpenIn; o.Label != "Open in Cursor" || o.Disabled {
 		t.Fatalf("open in %+v", o)
 	}
 	a.handle(ui.NewTheme(), ui.Action{ID: "card.editors", Kind: "click"})
-	if m := a.build(time.Now()).Card.Menu; len(m.Rows) != 2 || m.Rows[1].Label != "Opens over SSH. Needs your key on swiss" {
+	if m := built(a, time.Now()).Card.Menu; len(m.Rows) != 2 || m.Rows[1].Label != "Opens over SSH. Needs your key on swiss" {
 		t.Fatalf("menu %+v", m)
 	}
 	a.handle(ui.NewTheme(), ui.Action{ID: "card.openin", Kind: "click"})
@@ -277,7 +277,7 @@ func TestOpenInEditorElsewhere(t *testing.T) {
 	}
 	e.config.RemoteOpenTargets = nil
 	a.handle(ui.NewTheme(), ui.Action{ID: "card.editors", Kind: "click"})
-	s = a.build(time.Now())
+	s = built(a, time.Now())
 	if o := s.Card.OpenIn; !o.Disabled || s.Card.Menu.Rows[0].Label != "No SSH route to swiss" {
 		t.Fatalf("no route: %+v %+v", o, s.Card.Menu)
 	}
@@ -289,11 +289,11 @@ func TestRenameThread(t *testing.T) {
 	a, f := liveApp(t, status(nil))
 	th := ui.NewTheme()
 	a.handle(th, ui.Action{ID: "header.title", Kind: "double"})
-	if s := a.build(time.Now()); !s.Header.Renaming || th.EditorText("header.title") != "On swiss" {
+	if s := built(a, time.Now()); !s.Header.Renaming || th.EditorText("header.title") != "On swiss" {
 		t.Fatalf("renaming %v, %q", s.Header.Renaming, th.EditorText("header.title"))
 	}
 	a.handle(th, ui.Action{ID: "header.title", Kind: "submit", Text: "   "})
-	if s := a.build(time.Now()); s.Header.Renaming || s.Error != "Thread title cannot be empty" {
+	if s := built(a, time.Now()); s.Header.Renaming || s.Error != "Thread title cannot be empty" {
 		t.Fatalf("empty: renaming %v, error %q", s.Header.Renaming, s.Error)
 	}
 	a.handle(th, ui.Action{ID: "header.title", Kind: "double"})
@@ -322,7 +322,7 @@ func TestRunScript(t *testing.T) {
 		f.chunk(r, map[string]any{"type": "snapshot", "snapshot": map[string]any{"status": "running", "history": ""}})
 	})
 	f.on("terminal.write", func(f *fakeEnv, r fakeReq) { f.exit(r, nil) })
-	if sc := a.build(time.Now()).Card.Scripts; sc.Primary != "Dev" || sc.Icon != "play" {
+	if sc := built(a, time.Now()).Card.Scripts; sc.Primary != "Dev" || sc.Icon != "play" {
 		t.Fatalf("scripts %+v", sc)
 	}
 	a.handle(ui.NewTheme(), ui.Action{ID: "card.script", Kind: "click"})
@@ -332,7 +332,7 @@ func TestRunScript(t *testing.T) {
 	if w := f.wait("terminal.write", 1); w.Payload["data"] != " npm run dev\r" {
 		t.Fatalf("write %v", w.Payload)
 	}
-	if s := a.build(time.Now()); s.Term == nil || a.lastScripts["p1"] != "dev" {
+	if s := built(a, time.Now()); s.Term == nil || a.lastScripts["p1"] != "dev" {
 		t.Fatalf("drawer %v, last %q", s.Term != nil, a.lastScripts["p1"])
 	}
 }

@@ -180,7 +180,7 @@ func TestRemoteOpenURL(t *testing.T) {
 	}
 	// A plus in the user goes as hex JSON, which Remote-SSH reads back.
 	got := remoteOpenURL("vscode", "ssh.example.com", "vm+demo", "/workspace/project")
-	if want := "vscode://vscode-remote/ssh-remote%2B7b22686f73744e616d65223a227373682e6578616d706c652e636f6d222c2275736572223a22766d2b64656d6f227d/workspace/project"; got != want {
+	if want := "vscode://vscode-remote/ssh-remote+7b22686f73744e616d65223a227373682e6578616d706c652e636f6d222c2275736572223a22766d2b64656d6f227d/workspace/project"; got != want {
 		t.Errorf("plus: %q, want %q", got, want)
 	}
 }
@@ -202,7 +202,7 @@ func cardApp(t *testing.T, st *t3.VcsStatus, edit func(a *App, e *envState, th *
 	v := a.watchVcsLocked(e, gitCwd(th, e.projects[th.ProjectID]))
 	v.status, v.refs = st, &t3.VcsRefs{IsRepo: true}
 	a.mu.Unlock()
-	return a, a.build(time.Now())
+	return a, built(a, time.Now())
 }
 
 // The card's rows follow the thread (§4.4): a started thread's machine row
@@ -309,17 +309,17 @@ func TestDraftWorkspace(t *testing.T) {
 	v.status, v.refs = status(func(s *t3.VcsStatus) { s.RefName = "main" }), &t3.VcsRefs{}
 	a.mu.Unlock()
 	th := ui.NewTheme()
-	s := a.build(time.Now())
+	s := built(a, time.Now())
 	if s.Card.Run.Locked || s.Header.Server || s.Title != "New thread" {
 		t.Fatalf("draft: run %+v header %+v", s.Card.Run, s.Header)
 	}
 	a.handle(th, ui.Action{ID: "card.run", Kind: "click"})
-	s = a.build(time.Now())
+	s = built(a, time.Now())
 	if s.Card.Menu == nil || s.Card.Menu.For != "run" || len(s.Card.Menu.Rows) != 3 || !s.Card.Menu.Rows[1].Checked {
 		t.Fatalf("run menu: %+v", s.Card.Menu)
 	}
 	a.handle(th, ui.Action{ID: "card.run:2", Kind: "click"})
-	s = a.build(time.Now())
+	s = built(a, time.Now())
 	if s.Card.Menu != nil || s.Card.Run.Workspace != "folder-git-2" || s.Card.Run.Label != "swiss" || s.Card.Branch.Label != "From main" {
 		t.Fatalf("new worktree: run %+v branch %+v", s.Card.Run, s.Card.Branch)
 	}
@@ -348,15 +348,15 @@ func TestHeaderMenu(t *testing.T) {
 	th := ui.NewTheme()
 	a.openThread("swiss/t1")
 	a.handle(th, ui.Action{ID: "header.title", Kind: "click"})
-	if s := a.build(time.Now()); s.Context == nil || a.ctxRef != "swiss/t1" {
+	if s := built(a, time.Now()); s.Context == nil || a.ctxRef != "swiss/t1" {
 		t.Fatal("the title should open the thread's menu")
 	}
 	a.handle(th, ui.Action{ID: "header.title", Kind: "click"})
-	if s := a.build(time.Now()); s.Context != nil {
+	if s := built(a, time.Now()); s.Context != nil {
 		t.Fatal("a second click should close it")
 	}
 	a.handle(th, ui.Action{ID: "header", Kind: "context"})
-	if s := a.build(time.Now()); s.Context == nil {
+	if s := built(a, time.Now()); s.Context == nil {
 		t.Fatal("a right-click in the header should open it")
 	}
 }
@@ -368,13 +368,13 @@ func TestCardItemsMenu(t *testing.T) {
 	a, _ := cardApp(t, status(nil), nil)
 	th := ui.NewTheme()
 	a.handle(th, ui.Action{ID: "card", Kind: "context"})
-	m := a.build(time.Now()).Card.Menu
+	m := built(a, time.Now()).Card.Menu
 	if m == nil || m.For != "items" || !m.AtPointer || len(m.Rows) != 9 || m.Rows[0].Label != "Show in thread details" ||
 		m.Rows[5].Label != "Git actions" || !m.Rows[5].Checked || m.Rows[8].Label != "Reset to default" || !m.Rows[8].Disabled {
 		t.Fatalf("menu %+v", m)
 	}
 	a.handle(th, ui.Action{ID: "card.items:5", Kind: "click"})
-	if d := a.build(time.Now()).Card; d.Git != nil || d.Changes == nil || d.Menu != nil {
+	if d := built(a, time.Now()).Card; d.Git != nil || d.Changes == nil || d.Menu != nil {
 		t.Fatalf("Git actions off: %+v", d)
 	}
 	var stored map[string]bool
@@ -382,19 +382,19 @@ func TestCardItemsMenu(t *testing.T) {
 		t.Fatalf("stored %v", stored)
 	}
 	a.handle(th, ui.Action{ID: "card.openin", Kind: "context"})
-	if m := a.build(time.Now()).Card.Menu; m.Rows[5].Checked || m.Rows[8].Disabled {
+	if m := built(a, time.Now()).Card.Menu; m.Rows[5].Checked || m.Rows[8].Disabled {
 		t.Fatalf("after: %+v", m)
 	}
 	a.handle(th, ui.Action{ID: "card.items:8", Kind: "click"})
-	if d := a.build(time.Now()).Card; d.Git == nil {
+	if d := built(a, time.Now()).Card; d.Git == nil {
 		t.Fatal("Reset should bring the row back")
 	}
 	a.handle(th, ui.Action{ID: "card.branch", Kind: "context"})
-	if m := a.build(time.Now()).Card.Menu; m == nil || m.For != "copybranch" || m.Rows[0].Label != "Copy branch name" {
+	if m := built(a, time.Now()).Card.Menu; m == nil || m.For != "copybranch" || m.Rows[0].Label != "Copy branch name" {
 		t.Fatalf("branch's menu %+v", m)
 	}
 	a.handle(th, ui.Action{ID: "card.copybranch:0", Kind: "click"})
-	if m := a.build(time.Now()).Card.Menu; m != nil {
+	if m := built(a, time.Now()).Card.Menu; m != nil {
 		t.Fatal("copying closes it")
 	}
 }
@@ -404,15 +404,15 @@ func TestCardToggle(t *testing.T) {
 	a := testApp(t)
 	th := ui.NewTheme()
 	a.openThread("swiss/t1")
-	if s := a.build(time.Now()); !s.DetailsCard {
+	if s := built(a, time.Now()); !s.DetailsCard {
 		t.Fatal("the card is shown by default")
 	}
 	a.handle(th, ui.Action{ID: "details:card", Kind: "click"})
-	if s := a.build(time.Now()); s.DetailsCard {
+	if s := built(a, time.Now()); s.DetailsCard {
 		t.Fatal("toggled off")
 	}
 	a.openThread("mac/same")
-	if s := a.build(time.Now()); !s.DetailsCard {
+	if s := built(a, time.Now()); !s.DetailsCard {
 		t.Fatal("another thread keeps its card")
 	}
 	var hidden map[string]bool

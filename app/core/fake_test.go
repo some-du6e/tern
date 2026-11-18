@@ -13,6 +13,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/some-du6e/tern/app/t3"
+	"github.com/some-du6e/tern/app/ui"
 )
 
 // fakeEnv is an environment's RPC socket for tests: a local server that
@@ -152,6 +153,14 @@ func (f *fakeEnv) wait(tag string, n int) fakeReq {
 	defer f.mu.Unlock()
 	f.t.Fatalf("no request %d for %s; got %+v", n, tag, f.reqs)
 	return fakeReq{}
+}
+
+// built is the scene for now, built with the lock held as Scene builds it:
+// the fake's streams change the app from their own goroutine.
+func built(a *App, now time.Time) *ui.Scene {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.build(now)
 }
 
 // eventually fails unless ok turns true within five seconds.
