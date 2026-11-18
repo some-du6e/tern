@@ -46,6 +46,22 @@ func main() {
 		{"5-new-thread-commands", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, draftScene()) }},
 		{"6-sign-in", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.SignInScreen(gtx, signInScene()) }},
 		{"7-phone", 390, 844, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Phone(gtx, phoneScene()) }},
+		{"c1-composer-chips", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, composerScene()) }},
+		{"c2-composer-mentions", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, mentionScene()) }},
+		{"c3-composer-busy", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, busyScene()) }},
+		{"c4-composer-answers", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, answersScene()) }},
+		{"c5-new-thread-hero", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, heroScene()) }},
+		{"c6-new-thread-scratch", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, scratchScene()) }},
+		{"c7-composer-dark", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions {
+			ui.SetDark(true)
+			defer ui.SetDark(false)
+			return th.Desktop(gtx, busyScene())
+		}},
+		{"c8-new-thread-hero-dark", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions {
+			ui.SetDark(true)
+			defer ui.SetDark(false)
+			return th.Desktop(gtx, heroScene())
+		}},
 	}
 	if *anim != "" {
 		if err := renderAnims(th, float32(*scale), *anim); err != nil {
