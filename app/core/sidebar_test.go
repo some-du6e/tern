@@ -894,3 +894,234 @@ func TestMonogram(t *testing.T) {
 		t.Errorf("tern's colour: %q, want amber", got)
 	}
 }
+
+// The selection's menu works on its threads as they were when it was
+// picked: one the servers drop meanwhile doesn't stop the rest, as T3's
+// bulk actions run on the selection they were handed.
+func TestSelectionMenuOutlivesItsThreads(t *testing.T) {
+	now := time.Now()
+	a := sideApp(t,
+		t3.Thread{ID: "1", Title: "one", CreatedAt: ago(now, time.Minute)},
+		t3.Thread{ID: "2", Title: "two", CreatedAt: ago(now, 2*time.Minute)},
+	)
+	th := ui.NewTheme()
+	a.build(now)
+	a.handle(th, ui.Action{ID: "thread:m/1", Kind: "click", Short: true})
+	a.handle(th, ui.Action{ID: "thread:m/2", Kind: "click", Short: true})
+	a.handle(th, ui.Action{ID: "thread:m/1", Kind: "context"})
+	if got := menuLabels(a.build(now)); !strings.Contains(got, "Regenerate titles (2)") {
+		t.Fatalf("selection's menu: %s", got)
+	}
+	// The second thread goes as the first one's command goes out, which,
+	// with no connection, is when the banner says so.
+	a.redraw = func() {
+		a.mu.Lock()
+		delete(a.envs[0].threads, "2")
+		a.mu.Unlock()
+	}
+	a.handle(th, ui.Action{ID: "ctx:bulk-regenerate-title", Kind: "click"})
+	a.redraw = nil
+	if got := a.build(now).Error; got != "workstation isn't connected" {
+		t.Fatalf("banner %q, want the commands' failure", got)
+	}
+}
+
+// mod+Shift+S and mod+Shift+P read the open thread's machine under the
+// lock, as its config can land from the network at any moment (the race
+// detector, which CI runs, holds the test to it).
+func TestOpenThreadShortcutsTakeTheLock(t *testing.T) {
+	a := sideApp(t, t3.Thread{ID: "1", Title: "one", CreatedAt: ago(time.Now(), time.Minute)})
+	a.openID = "m/1"
+	th := ui.NewTheme()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 200 {
+			a.mu.Lock()
+			a.envs[0].config = &t3.ServerConfig{}
+			a.mu.Unlock()
+		}
+	}()
+	for range 200 {
+		a.handle(th, ui.Action{ID: "thread.pin", Kind: "click"})
+	}
+	<-done
+}
+
+// sceneAt builds the scene under the lock, as Scene does: the timers that
+// redraw it take the lock too.
+func sceneAt(a *App, now time.Time) *ui.Scene {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.build(now)
+}
+
+// redraws is a channel that gets a value each time a asks for a new scene.
+func redraws(a *App) chan struct{} {
+	c := make(chan struct{}, 16)
+	a.redraw = func() {
+		select {
+		case c <- struct{}{}:
+		default:
+		}
+	}
+	return c
+}
+
+// waitRedraw waits for a new scene asked for no sooner than at.
+func waitRedraw(t *testing.T, c chan struct{}, at time.Time, what string) {
+	t.Helper()
+	select {
+	case <-c:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("no new scene for %s", what)
+	}
+	if early := time.Until(at); early > 0 {
+		t.Fatalf("a new scene for %s %v early", what, early)
+	}
+}
+
+// A snooze ends when it's due, not at the next minute's tick: the list asks
+// for a new scene at the wake (useSnoozeWakeClock), and the thread is back
+// in it.
+func TestSnoozeWakesOnTime(t *testing.T) {
+	now := time.Now()
+	wake := now.Add(300 * time.Millisecond)
+	a := sideApp(t, t3.Thread{ID: "1", Title: "snoozed", CreatedAt: ago(now, time.Hour), SnoozedAt: ago(now, time.Minute), SnoozedUntil: wake.UTC().Format(time.RFC3339Nano)})
+	a.shelfOpen["snoozed"] = true
+	redrawn := redraws(a)
+	if got, want := listing(sceneAt(a, time.Now())), "[Snoozed 1 true], snoozed, [Settled 0 false]"; got != want {
+		t.Fatalf("snoozed: %s, want %s", got, want)
+	}
+	waitRedraw(t, redrawn, wake, "the wake")
+	if got, want := listing(sceneAt(a, time.Now())), "snoozed, [Settled 0 false]"; got != want {
+		t.Fatalf("woken: %s, want %s", got, want)
+	}
+}
+
+// The snooze clock, held back while a message from the last two minutes
+// hasn't started its turn, comes back as that grace runs out, not at the
+// next minute's tick (SidebarThreadRow.tsx's snooze gate).
+func TestSnoozeClockComesBackOnTime(t *testing.T) {
+	now := time.Now()
+	sent := now.Add(-queuedTurnGrace + 300*time.Millisecond)
+	a := sideApp(t, t3.Thread{ID: "1", Title: "one", CreatedAt: ago(now, time.Hour), LatestUserMessageAt: sent.UTC().Format(time.RFC3339Nano)})
+	redrawn := redraws(a)
+	if rows(sceneAt(a, time.Now()))[0].CanSnooze {
+		t.Fatal("the clock shows with a turn about to start")
+	}
+	waitRedraw(t, redrawn, sent.Add(queuedTurnGrace), "the grace's end")
+	if !rows(sceneAt(a, time.Now()))[0].CanSnooze {
+		t.Fatal("the clock isn't back once the grace is up")
+	}
+}
+
+// A connection that can only read still gets Settle, Un-settle and Wake,
+// as T3 offers them wherever the server's config has loaded, and a click
+// on one says why it can't; the snooze clock and Unpin need write access
+// (SidebarThreadRow.tsx: canOperateThread).
+func TestReadOnlyRows(t *testing.T) {
+	now := time.Now()
+	a := sideApp(t,
+		t3.Thread{ID: "c", Title: "card", PinnedAt: ago(now, time.Hour), CreatedAt: ago(now, time.Hour)},
+		t3.Thread{ID: "z", Title: "snoozed", SnoozedUntil: now.Add(time.Hour).UTC().Format(time.RFC3339Nano), CreatedAt: ago(now, time.Hour)},
+		t3.Thread{ID: "s", Title: "settled", SettledOverride: "settled", SettledAt: ago(now, time.Hour), CreatedAt: ago(now, time.Hour)},
+	)
+	a.envs[0].operate = false
+	a.shelfOpen["snoozed"], a.shelfOpen["settled"] = true, true
+	rs := rows(a.build(now))
+	if len(rs) != 3 {
+		t.Fatalf("%d rows, want 3", len(rs))
+	}
+	for _, r := range rs {
+		if !r.CanSettle || r.CanSnooze || r.CanUnpin {
+			t.Errorf("%s: settle %v, snooze %v, unpin %v; want Settle (or Un-settle, Wake) alone", r.Title, r.CanSettle, r.CanSnooze, r.CanUnpin)
+		}
+	}
+	for id, want := range map[string]string{
+		"settle:m/c":   "Failed to settle thread",
+		"unsettle:m/s": "Failed to un-settle thread",
+		"wake:m/z":     "Failed to wake thread",
+	} {
+		a.handle(ui.NewTheme(), ui.Action{ID: id, Kind: "click"})
+		if got := a.build(now).Error; got != want+": this connection cannot change threads or projects." {
+			t.Errorf("%s: banner %q", id, got)
+		}
+	}
+}
+
+// A card's snooze menu closes when the card stops offering the clock (a
+// queued turn) or leaves the list (onto the folded Working shelf), and
+// stays closed when the clock comes back (SidebarThreadRow.tsx).
+func TestSnoozeMenuClosesWithItsCard(t *testing.T) {
+	now := time.Now()
+	a := sideApp(t, t3.Thread{ID: "1", Title: "one", CreatedAt: ago(now, time.Hour)})
+	th := ui.NewTheme()
+	a.build(now)
+	a.handle(th, ui.Action{ID: "snooze:m/1", Kind: "click"})
+	if a.build(now).Sidebar.Snooze == nil {
+		t.Fatal("the menu didn't open")
+	}
+	// A message queues a turn: the clock goes for two minutes.
+	one := a.envs[0].threads["1"]
+	one.LatestUserMessageAt = ago(now, 0)
+	if a.build(now).Sidebar.Snooze != nil {
+		t.Fatal("the menu stayed with the clock gone")
+	}
+	later := now.Add(3 * time.Minute)
+	if s := a.build(later); s.Sidebar.Snooze != nil || !rows(s)[0].CanSnooze {
+		t.Fatalf("with the clock back: menu %v, clock %v; want the clock and no menu", s.Sidebar.Snooze, rows(s)[0].CanSnooze)
+	}
+	// Open again, then the run starts and the card goes to the Working
+	// shelf, which is folded.
+	a.handle(th, ui.Action{ID: "snooze:m/1", Kind: "click"})
+	if a.build(later).Sidebar.Snooze == nil {
+		t.Fatal("the menu didn't open again")
+	}
+	one.LatestRunID, one.Status, one.ActiveRunID, one.ActivityRunStatus = "r", "running", "r", "running"
+	if s := a.build(later); s.Sidebar.Snooze != nil {
+		t.Fatalf("the menu stayed with its card on the folded shelf: %s", listing(s))
+	}
+}
+
+// An undo runs what it took off the notice, even when parks land while it
+// runs: they join the notice in the space the undone ones left, and don't
+// take their place in the undo (showThreadUndoNotice.ts).
+func TestUndoKeepsItsGroup(t *testing.T) {
+	a := sideApp(t)
+	var ran []string
+	undo := func(name string) func(*ui.Theme) { return func(*ui.Theme) { ran = append(ran, name) } }
+	a.noteUndo("Settled", func(*ui.Theme) {
+		ran = append(ran, "one")
+		// Two snoozes the servers take as the undo runs.
+		a.noteUndo("Snoozed", undo("three"))
+		a.noteUndo("Snoozed", undo("four"))
+	})
+	a.noteUndo("Settled", undo("two"))
+	if got := a.build(time.Now()).Sidebar.Undo; got != "Settled 2" {
+		t.Fatalf("notice %q, want Settled 2", got)
+	}
+	a.undoLast(ui.NewTheme())
+	if got := strings.Join(ran, " "); got != "one two" {
+		t.Fatalf("the undo ran %q, want one two", got)
+	}
+	if got := a.build(time.Now()).Sidebar.Undo; got != "Snoozed 2" {
+		t.Fatalf("notice %q after the undo, want Snoozed 2", got)
+	}
+}
+
+// The notice lasts 5s from the last park in it: the earlier one's timer,
+// caught already firing as the later park arrives, doesn't end it early.
+func TestUndoNoticeLasts(t *testing.T) {
+	a := sideApp(t)
+	a.noteUndo("Settled", func(*ui.Theme) {})
+	a.noteUndo("Settled", func(*ui.Theme) {})
+	a.endUndo(1) // the first park's timer, running late
+	if got := a.build(time.Now()).Sidebar.Undo; got != "Settled 2" {
+		t.Fatalf("notice %q after the first park's timer, want Settled 2", got)
+	}
+	a.endUndo(2)
+	if got := a.build(time.Now()).Sidebar.Undo; got != "" {
+		t.Fatalf("notice %q after the last park's timer, want none", got)
+	}
+}

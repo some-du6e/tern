@@ -406,23 +406,33 @@ func (a *App) onWorkingShelf(ref string, t *t3.Thread, child string, now time.Ti
 	a.working[ref] = workingState{working: w, deadline: deadline, placement: pl}
 	if !deadline.IsZero() {
 		// Look again when the grace runs out.
-		a.redrawAfter(deadline.Sub(now))
+		a.redrawAt(deadline)
 	}
 	return w
 }
 
-// redrawAfter asks for a new scene after d, for state that changes with
-// time.
-func (a *App) redrawAfter(d time.Duration) {
-	if a.timer != nil || d <= 0 {
+// redrawAt asks for a new scene at t, for state that changes with time:
+// one timer, for the soonest time asked for. Call with the lock held.
+func (a *App) redrawAt(t time.Time) {
+	d := time.Until(t)
+	if d <= 0 || (a.timer != nil && !a.timerAt.After(t)) {
 		return
 	}
-	a.timer = time.AfterFunc(d, func() {
+	if a.timer != nil {
+		a.timer.Stop()
+	}
+	// A timer stopped as it fires is already waiting for the lock: it
+	// finds it's been replaced and leaves the new one be.
+	var timer *time.Timer
+	timer = time.AfterFunc(d, func() {
 		a.mu.Lock()
-		a.timer = nil
+		if a.timer == timer {
+			a.timer = nil
+		}
 		a.mu.Unlock()
 		a.changed()
 	})
+	a.timer, a.timerAt = timer, t
 }
 
 // ---------- order ----------
@@ -614,6 +624,11 @@ func (a *App) shelve(now time.Time, scope map[string]bool) sidebarList {
 			}
 			st := sideThread{Thread: t, e: e, ref: ref(e.id(), t.ID), child: children[t.ID]}
 			present[st.ref] = true
+			if wake := parseTime(t.SnoozedUntil); wake.After(now) {
+				// A snooze ends when it's due, not on the minute's tick
+				// after (useSnoozeWakeClock).
+				a.redrawAt(wake)
+			}
 			// Every thread is watched, so one filed elsewhere loses its hold.
 			w := a.onWorkingShelf(st.ref, t, st.child, now)
 			switch {
@@ -717,10 +732,8 @@ func (a *App) sidebar(s *ui.Scene, now time.Time) {
 		a.filterScene(sb, scope)
 	}
 	sb.Renaming = a.renamingRow
-	if a.snoozeRef != "" {
-		sb.Snooze = &ui.SnoozeMenu{Row: a.snoozeRef, Choices: snoozeItems(a.snoozeMenu, "", false)}
-	}
 	sb.Undo, sb.UndoClaim = a.undoSummary(), a.undoClaim
+	defer a.snoozeScene(sb)
 	if q := strings.TrimSpace(a.search); q != "" {
 		a.searchScene(sb, l, q, now)
 		return
@@ -769,6 +782,25 @@ func (a *App) sidebar(s *ui.Scene, now time.Time) {
 	if draft == nil && len(l.pinned)+len(l.active)+len(l.working)+len(l.snoozed) == 0 && (len(l.settled) == 0 || scope != nil) {
 		sb.Empty = a.emptyState(scope, len(l.settled) > 0)
 	}
+}
+
+// snoozeScene shows the snooze menu while its card is in the list and still
+// offers the clock. A card that leaves (onto a folded shelf, or under a
+// search's results) or stops offering it (a queued turn) closes its menu,
+// so the menu doesn't hang where nothing draws it, nor come back with the
+// clock (SidebarThreadRow.tsx). Call with the lock held, once the list is
+// built.
+func (a *App) snoozeScene(sb *ui.Sidebar) {
+	if a.snoozeRef == "" {
+		return
+	}
+	for _, it := range sb.Items {
+		if r := it.Row; r != nil && r.ID == a.snoozeRef && !r.Slim && r.CanSnooze {
+			sb.Snooze = &ui.SnoozeMenu{Row: a.snoozeRef, Choices: snoozeItems(a.snoozeMenu, "", false)}
+			return
+		}
+	}
+	a.snoozeRef, a.snoozeMenu = "", nil
 }
 
 // draftRow is the new thread's unsent draft as a row
@@ -882,9 +914,21 @@ func (a *App) row(st sideThread, shelf string, now time.Time) ui.ThreadRow {
 	}
 	a.providers(e, t, &r)
 	r.PR = prBadge(t)
-	write := e.operate && e.config != nil
-	r.CanSettle, r.CanUnpin = write, write
+	// Settle, Un-settle and Wake need only the server's config, as T3's
+	// settlementSupported and snoozeSupported do; without write access a
+	// click says why it can't. The snooze clock and Unpin need write access
+	// too (SidebarThreadRow.tsx: canOperateThread).
+	loaded := e.config != nil
+	write := loaded && e.operate
+	r.CanSettle, r.CanUnpin = loaded, write
 	r.CanSnooze = write && canSnooze(t, st.child, now)
+	if write && !r.CanSnooze && queuedTurnStart(t, now) {
+		// The clock comes back as the queued turn's grace runs out, which
+		// T3 looks at 50ms after.
+		if at := parseTime(t.LatestUserMessageAt).Add(queuedTurnGrace + 50*time.Millisecond); at.After(now) {
+			a.redrawAt(at)
+		}
+	}
 	return r
 }
 

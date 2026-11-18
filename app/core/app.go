@@ -111,14 +111,18 @@ type App struct {
 	ordered     []string
 	openRow     string          // the open thread's row: its nearest listed ancestor's for a subagent or side chat
 	parked      map[string]bool // the Snoozed and Settled rows, which advancing skips
-	timer       *time.Timer     // a scene due when a Working shelf hold runs out
+	timer       *time.Timer     // a scene due when the sidebar next changes by itself: a hold, a wake, a grace
+	timerAt     time.Time       // when it's due
 	draftHome   string          // the new thread's draft, "<env>/<project>", kept while it isn't open
 	ctxDraft    bool            // the open menu is the draft row's
 	// The footer's undo notice: the parks and discards it can still undo,
-	// oldest first; the timer that ends it 5s after the last one; and
-	// whether mod+Z undoes it even in a text field, until another key.
+	// oldest first; the timer that ends it 5s after the last one, and how
+	// many have joined it, which tells the last one's timer from the ones
+	// before; and whether mod+Z undoes it even in a text field, until
+	// another key.
 	undos     []undoEntry
 	undoTimer *time.Timer
+	undoGen   int
 	undoClaim bool
 	// The servers' message search: the one they were last asked, the one
 	// before it that last settled, shown while the next refines it, the

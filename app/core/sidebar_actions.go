@@ -1235,12 +1235,15 @@ func (a *App) bulkPick(th *ui.Theme, id string) {
 		a.mu.Unlock()
 		return
 	}
+	// The selection as it was under the lock: past it, a thread can change
+	// or go.
 	sel := a.selection()
 	presets := a.ctxPresets
 	a.closeMenusLocked()
 	a.selected, a.anchor = map[string]bool{}, ""
 	a.mu.Unlock()
 	verb, arg, _ := strings.Cut(strings.TrimPrefix(id, "bulk-"), ":")
+	var picked []sideThread
 	var refs []string
 	for _, t := range sel {
 		switch {
@@ -1249,7 +1252,7 @@ func (a *App) bulkPick(th *ui.Theme, id string) {
 			verb == "regenerate-title" && t.TitleRegeneration != nil:
 			continue
 		}
-		refs = append(refs, t.ref)
+		picked, refs = append(picked, t), append(refs, t.ref)
 	}
 	switch verb {
 	case "settle":
@@ -1262,9 +1265,8 @@ func (a *App) bulkPick(th *ui.Theme, id string) {
 		}
 		a.snooze(refs, until)
 	case "regenerate-title":
-		for _, r := range refs {
-			e, t := a.thread(r)
-			a.dispatch(e, map[string]any{"type": "thread.metadata.update", "threadId": t.ID, "regenerateTitle": true})
+		for _, t := range picked {
+			a.dispatch(t.e, map[string]any{"type": "thread.metadata.update", "threadId": t.ID, "regenerateTitle": true})
 		}
 	default:
 		for _, r := range refs {
@@ -1281,6 +1283,20 @@ func (a *App) failf(format string, args ...any) {
 	a.errText = fmt.Sprintf(format, args...)
 	a.mu.Unlock()
 	a.changed()
+}
+
+// operable reports whether this connection may change r's thread. When it
+// can't, the banner says what failed and why, as T3's orchestration
+// commands do without the operate scope (useOrchestrationCommand).
+func (a *App) operable(r, failed string) bool {
+	a.mu.Lock()
+	e, _ := a.thread(r)
+	ok := e == nil || e.operate
+	a.mu.Unlock()
+	if !ok {
+		a.failf("%s: this connection cannot change threads or projects.", failed)
+	}
+	return ok
 }
 
 // dispatch sends a command to the thread's environment, and reports a
@@ -1493,12 +1509,21 @@ func (a *App) noteUndo(action string, undo func(th *ui.Theme)) {
 	if a.undoTimer != nil {
 		a.undoTimer.Stop()
 	}
-	a.undoTimer = time.AfterFunc(undoLife, func() {
-		a.mu.Lock()
+	a.undoGen++
+	gen := a.undoGen
+	a.undoTimer = time.AfterFunc(undoLife, func() { a.endUndo(gen) })
+	a.mu.Unlock()
+	a.changed()
+}
+
+// endUndo ends the notice 5s after its gen'th action, unless another has
+// joined it since: a timer stopped as it fires still runs, and must leave
+// the newer action's notice be.
+func (a *App) endUndo(gen int) {
+	a.mu.Lock()
+	if gen == a.undoGen {
 		a.undos, a.undoClaim = nil, false
-		a.mu.Unlock()
-		a.changed()
-	})
+	}
 	a.mu.Unlock()
 	a.changed()
 }
@@ -1528,10 +1553,11 @@ func (a *App) undoSummary() string {
 }
 
 // undoLast undoes the notice's group (undoLatestThreadAction), and the
-// notice moves on to what's left in it.
+// notice moves on to what's left in it. It runs its own copy of the group:
+// a park the servers take meanwhile joins the notice where the group was.
 func (a *App) undoLast(th *ui.Theme) {
 	a.mu.Lock()
-	g := a.undoGroup()
+	g := append([]undoEntry(nil), a.undoGroup()...)
 	a.undos = a.undos[:len(a.undos)-len(g)]
 	a.undoClaim = false
 	a.mu.Unlock()
@@ -1754,8 +1780,9 @@ func (a *App) openThreadShortcut(th *ui.Theme, what string) {
 	a.mu.Lock()
 	r := a.openID
 	e, t := a.thread(r)
+	loaded := t != nil && e.config != nil
 	a.mu.Unlock()
-	if t == nil || e.config == nil {
+	if !loaded {
 		return
 	}
 	switch {
@@ -1855,11 +1882,19 @@ func (a *App) sidebarAction(th *ui.Theme, act ui.Action) bool {
 		a.settledMore++
 		a.mu.Unlock()
 	case "settle":
-		a.settle([]string{arg})
-	case "unsettle", "unpin":
+		if a.operable(arg, "Failed to settle thread") {
+			a.settle([]string{arg})
+		}
+	case "unsettle":
+		if a.operable(arg, "Failed to un-settle thread") {
+			a.threadAction(th, arg, verb)
+		}
+	case "unpin":
 		a.threadAction(th, arg, verb)
 	case "wake":
-		a.threadAction(th, arg, "unsnooze")
+		if a.operable(arg, "Failed to wake thread") {
+			a.threadAction(th, arg, "unsnooze")
+		}
 	case "woke":
 		a.acknowledgeWoke(arg)
 	case "pr":
