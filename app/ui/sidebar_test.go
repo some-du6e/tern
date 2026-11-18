@@ -175,7 +175,7 @@ func TestEmptyState(t *testing.T) {
 // The snooze menu hangs 4dp under its clock with its right edge on the
 // clock's, as wide as its widest row needs (its detail 8 + 16dp past the
 // label) and at least 160dp, each label at the start of its row and each
-// wake time at the end.
+// wake time at the end; it keeps 5dp inside the window.
 func TestSnoozeMenu(t *testing.T) {
 	defer SetDark(false)
 	SetDark(true) // black under it, where its shadow doesn't show
@@ -185,13 +185,20 @@ func TestSnoozeMenu(t *testing.T) {
 		{ID: "b", Label: "Next week", Detail: "Mon 9:00 AM"},
 	}}}}
 	black := rgb(0)
-	img := drawn(t, image.Pt(600, 300), 1, func(gtx C) D {
-		fill(gtx, black, image.Rect(0, 0, 600, 300), 0)
-		// The clock's box: 24 by 20 at 400, 50.
-		defer op.Offset(image.Pt(400, 50)).Push(gtx.Ops).Pop()
-		th.snoozeMenu(gtx, s, image.Pt(24, 20))
-		return D{}
-	})
+	// The clock's box is 24 by 20 at x.
+	at := func(x int) *image.RGBA {
+		return drawn(t, image.Pt(600, 300), 1, func(gtx C) D {
+			fill(gtx, black, image.Rect(0, 0, 600, 300), 0)
+			defer op.Offset(image.Pt(x, 50)).Push(gtx.Ops).Pop()
+			th.snoozeMenu(gtx, s, image.Pt(24, 20), image.Rect(x, 50, x+24, 70))
+			return D{}
+		})
+	}
+	// Near the window's left edge it shifts along to stay 5dp inside.
+	if left, _, _ := inkCols(at(20), image.Rect(0, 93, 600, 94), black); left != 5 {
+		t.Errorf("by the window's edge the menu starts at x %d, want 5", left)
+	}
+	img := at(400)
 	// Its 1dp border, at the middle of the first row (79..107).
 	left, right, ok := inkCols(img, image.Rect(0, 93, 600, 94), black)
 	if !ok || right != 423 || right-left+1 < 160 {

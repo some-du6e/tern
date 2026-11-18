@@ -904,7 +904,9 @@ func (th *Theme) cardRow(gtx C, s *Scene, r *ThreadRow, top int) D {
 			flexed(func(gtx C) D {
 				return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: in.of(SP.SecondaryLabel), MaxLines: 1}, r.Project)
 			}),
-			rigid(func(gtx C) D { return th.statusSlot(gtx, s, r, in, hot || menuOpen) }),
+			rigid(func(gtx C) D {
+				return th.statusSlot(gtx, s, r, in, hot || menuOpen, image.Pt(rect.Max.X-dp(gtx, 10), rect.Min.Y+dp(gtx, 8)))
+			}),
 		)
 		return RowGap(gtx, 6, kids...)
 	})
@@ -1134,15 +1136,15 @@ func statusColor(st RowStatus) color.NRGBA {
 // statusSlot is the end of a card's first line: at least 32dp, right
 // aligned. It shows the status label, or the age; hovered (or while its
 // snooze menu is open) it shows the controls instead, beside a Woke label,
-// which stays.
-func (th *Theme) statusSlot(gtx C, s *Scene, r *ThreadRow, in rowInk, hot bool) D {
+// which stays. end is the line's top right corner in the window.
+func (th *Theme) statusSlot(gtx C, s *Scene, r *ThreadRow, in rowInk, hot bool, end image.Point) D {
 	var kids []layout.FlexChild
 	woke := r.Status == StatusWoke
 	if !hot || woke {
 		kids = append(kids, rigid(func(gtx C) D { return th.statusLabel(gtx, s, r, in) }))
 	}
 	if hot && (r.CanSettle || r.CanSnooze || r.Draft) {
-		kids = append(kids, rigid(func(gtx C) D { return th.rowControls(gtx, s, r, in) }))
+		kids = append(kids, rigid(func(gtx C) D { return th.rowControls(gtx, s, r, in, end) }))
 	}
 	m := op.Record(gtx.Ops)
 	g := gtx
@@ -1203,9 +1205,11 @@ func (th *Theme) wokeButton(gtx C, s *Scene, r *ThreadRow, label W) D {
 
 // rowControls are a card's hover controls, laid out from the right:
 // Discard draft, the snooze clock and Settle, which sits 4dp into the
-// padding. Each is the muted foreground, the foreground on hover.
-func (th *Theme) rowControls(gtx C, s *Scene, r *ThreadRow, in rowInk) D {
+// padding. Each is the muted foreground, the foreground on hover. end is
+// their line's top right corner in the window.
+func (th *Theme) rowControls(gtx C, s *Scene, r *ThreadRow, in rowInk, end image.Point) D {
 	h := gtx.Constraints.Max.Y
+	settle := Txt{Size: 12, LineH: 16.0 / 12, MaxLines: 1}
 	// Each button is padded 0 by 6; then is what hangs off it.
 	button := func(id, tip string, body func(col color.NRGBA) W, then func(gtx C, size image.Point)) layout.FlexChild {
 		return rigid(func(gtx C) D {
@@ -1247,19 +1251,27 @@ func (th *Theme) rowControls(gtx C, s *Scene, r *ThreadRow, in rowInk) D {
 		}
 		kids = append(kids, button(liveID(s, "snooze:"+r.ID), tip, func(col color.NRGBA) W { return LucideW("clock", col, 12) },
 			func(gtx C, size image.Point) {
-				if open {
-					th.snoozeMenu(gtx, s, size)
-				} else {
+				if !open {
 					th.popIn(gtx, "snooze:"+r.ID, false, nil, nil)
+					return
 				}
+				// In the window it ends where Settle, the only control
+				// after it, starts.
+				right := end.X
+				if r.CanSettle {
+					right += dp(gtx, 4) - (2*dp(gtx, 6) + dp(gtx, 14) + dp(gtx, 4) + th.textWidth(gtx, settle, "Settle"))
+				}
+				th.snoozeMenu(gtx, s, size, image.Rect(right-size.X, end.Y, right, end.Y+size.Y))
 			}))
 	}
 	if r.CanSettle {
 		kids = append(kids, button(liveID(s, "settle:"+r.ID), "Settle thread", func(col color.NRGBA) W {
 			return func(gtx C) D {
+				t := settle
+				t.Color = col
 				return RowGap(gtx, 4,
 					rigid(LucideW("check", col, 14)),
-					rigid(func(gtx C) D { return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: col, MaxLines: 1}, "Settle") }),
+					rigid(func(gtx C) D { return th.Text(gtx, t, "Settle") }),
 				)
 			}
 		}, nil))
@@ -2115,13 +2127,14 @@ func (th *Theme) listTip(gtx C, id, tip string, size image.Point) {
 // ---------- the snooze menu ----------
 
 // snoozeMenu is the menu a card's clock opens (SnoozeMenuButton): T3's
-// menu 4dp under the clock (trigger is its size), its right edge on the
-// clock's, as wide as its widest row and at least 160dp; a row per preset
-// with its wake time at the end in the secondary label.
-func (th *Theme) snoozeMenu(gtx C, s *Scene, trigger image.Point) {
+// menu 4dp under the clock (trigger is its size, at in the window), its
+// right edge on the clock's, as wide as its widest row and at least 160dp;
+// a row per preset with its wake time at the end in the secondary label.
+// Like T3's positioner it shifts along to stay 5dp inside the window, and
+// goes above the clock when there's no room below.
+func (th *Theme) snoozeMenu(gtx C, s *Scene, trigger image.Point, at image.Rectangle) {
 	sm := s.Sidebar.Snooze
-	x := trigger.X
-	th.deferBelow(gtx, image.Pt(0, trigger.Y+dp(gtx, 4)), func(gtx C) D {
+	th.deferBelow(gtx, image.Point{}, func(gtx C) D {
 		// Inside the 1dp border and 4dp of padding.
 		w := dp(gtx, 160-2*5)
 		for _, c := range sm.Choices {
@@ -2143,7 +2156,18 @@ func (th *Theme) snoozeMenu(gtx C, s *Scene, trigger image.Point) {
 			})
 		})
 		call := m.Stop()
-		defer op.Offset(image.Pt(x-d.Size.X, 0)).Push(gtx.Ops).Pop()
+		win, edge, gap := th.in.winSize, dp(gtx, 5), dp(gtx, 4)
+		x := trigger.X - d.Size.X
+		if left := at.Max.X - d.Size.X; left < edge {
+			x += edge - left
+		} else if win.X > 0 && at.Max.X > win.X-edge {
+			x -= at.Max.X - (win.X - edge)
+		}
+		y := trigger.Y + gap
+		if win.Y > 0 && at.Max.Y+gap+d.Size.Y > win.Y-edge && at.Min.Y-gap-d.Size.Y >= edge {
+			y = -gap - d.Size.Y
+		}
+		defer op.Offset(image.Pt(x, y)).Push(gtx.Ops).Pop()
 		call.Add(gtx.Ops)
 		return d
 	})
