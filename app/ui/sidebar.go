@@ -255,11 +255,12 @@ func (th *Theme) filterButton(gtx C, s *Scene) {
 	}
 	th.headerButton(gtx, liveID(s, "filter"), sb.ScopeLabel, false, sb.Filter != nil, icon)
 	if sb.Filter == nil {
+		th.popIn(gtx, "filter", false, nil, nil) // so it plays again next time
 		return
 	}
 	// It drops 4dp below the button, lined up with its left edge.
 	th.deferBelow(gtx, image.Pt(0, dp(gtx, controlSize+4)), func(gtx C) D {
-		return th.popIn(gtx, "filter", true, &f32.Point{}, func(gtx C) D { return th.filterPopup(gtx, s) })
+		return th.popUp(gtx, s, "filter", &f32.Point{}, func(gtx C) D { return th.filterPopup(gtx, s) })
 	})
 }
 
@@ -1088,6 +1089,8 @@ func (th *Theme) rowControls(gtx C, s *Scene, r *ThreadRow, in rowInk) D {
 			func(gtx C, size image.Point) {
 				if open {
 					th.snoozeMenu(gtx, s, size)
+				} else {
+					th.popIn(gtx, "snooze:"+r.ID, false, nil, nil)
 				}
 			}))
 	}
@@ -1902,7 +1905,7 @@ func (th *Theme) snoozeMenu(gtx C, s *Scene, trigger image.Point) {
 	x := trigger.X
 	th.deferBelow(gtx, image.Pt(0, trigger.Y+dp(gtx, 4)), func(gtx C) D {
 		m := op.Record(gtx.Ops)
-		d := th.popIn(gtx, "snooze", true, nil, func(gtx C) D {
+		d := th.popUp(gtx, s, "snooze:"+sm.Row, nil, func(gtx C) D {
 			return popupFrame(gtx, func(gtx C) D {
 				return pad(4, 4, 4, 4).Layout(gtx, func(gtx C) D {
 					var kids []layout.FlexChild
@@ -1953,9 +1956,11 @@ func (th *Theme) sidebarFooter(gtx C, s *Scene) {
 		defer op.Offset(image.Pt(x, dp(gtx, 4))).Push(gtx.Ops).Pop()
 		id = liveID(s, id)
 		th.footerButton(gtx, id, icon, tip, menu != nil)
-		if menu != nil {
+		if menu == nil {
+			th.popIn(gtx, id, false, nil, nil)
+		} else {
 			th.deferAbove(gtx, image.Pt(0, -dp(gtx, 1)), func(gtx C) D {
-				return th.popIn(gtx, id, true, nil, func(gtx C) D { return th.traitsMenu(gtx, s, id, menu) })
+				return th.popUp(gtx, s, id, nil, func(gtx C) D { return th.traitsMenu(gtx, s, id, menu) })
 			})
 		}
 		x += dp(gtx, 32+4)

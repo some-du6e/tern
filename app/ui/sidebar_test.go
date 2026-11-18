@@ -69,11 +69,13 @@ func TestFooterButtons(t *testing.T) {
 	th := NewTheme()
 	s := &Scene{Account: &Traits{Groups: []Trait{{Sel: -1, Choices: []TraitChoice{{Label: "Sign out"}}}}}}
 	img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, s) })
+	// The menu opens above, and its shadow falls on the button's top, so
+	// look at its lower half.
 	hover := over(SP.SidebarRowHover, SP.Sidebar)
-	wantPixel(t, img, image.Pt(46, 862), hover, "the open account button")
-	wantPixel(t, img, image.Pt(70, 886), hover, "toward its far corner")
-	wantPixel(t, img, image.Pt(42, 862), SP.Sidebar, "the gap before it")
-	wantPixel(t, img, image.Pt(10, 862), SP.Sidebar, "the machines button, closed")
+	wantPixel(t, img, image.Pt(46, 884), hover, "the open account button")
+	wantPixel(t, img, image.Pt(70, 888), hover, "toward its far corner")
+	wantPixel(t, img, image.Pt(42, 884), SP.Sidebar, "the gap before it")
+	wantPixel(t, img, image.Pt(10, 884), SP.Sidebar, "the machines button, closed")
 }
 
 // The row menu is T3's DOM menu: the popover in a 1dp border, no shadow,

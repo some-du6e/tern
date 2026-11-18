@@ -31,6 +31,15 @@ func ShortcutAlt(k string) string {
 	return "Ctrl+Alt+" + k
 }
 
+// popUp is an open popover as popIn plays it; a mockup, one frame, shows
+// it settled.
+func (th *Theme) popUp(gtx C, s *Scene, id string, origin *f32.Point, w W) D {
+	if !s.Live {
+		return w(gtx)
+	}
+	return th.popIn(gtx, id, true, origin, w)
+}
+
 // popIn plays a popover's opening the way T3's do: it fades in over 150ms,
 // growing from origin (in its own box) or, with none, rising a little.
 // Each time id opens again it plays again.
