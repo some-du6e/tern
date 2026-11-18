@@ -93,13 +93,6 @@ type Item struct {
 	Thumbs   []Thumb  // the attached pictures, as they load
 }
 
-type Approval struct {
-	Kind   string // "command", "file-change"
-	Detail string
-	Cwd    string
-	YesNo  bool // false for requests tern can only show, like MCP elicitation
-}
-
 // Question is one of an agent's questions (ComposerPendingUserInputPanel.tsx).
 type Question struct {
 	Header   string
@@ -288,7 +281,6 @@ type Scene struct {
 	RuntimeChip  bool    // the footer shows the permissions chip: the mode isn't the default
 	Sending      bool    // a send is on its way: the send button spins
 	Queue        []string
-	Approval     *Approval
 	Questions    []Question
 	Question     int  // the question on show
 	Answering    bool // the answers are on their way

@@ -133,7 +133,6 @@ func approvalScene() *ui.Scene {
 	items = items[:len(items)-2]
 	items = append(items, ui.Item{Kind: ui.ItemTool, Tool: ui.ToolCommand, Title: "git push -u origin t3/go-client", Meta: "waiting for you"})
 	s.Items = items
-	s.Approval = &ui.Approval{Kind: "command", Detail: "git push -u origin t3/go-client", Cwd: "~/.t3/worktrees/tern"}
 	s.Placeholder = "Send a message to decline and redirect the agent"
 	s.Picker = &ui.ModelPicker{
 		Tabs: []ui.PickerTab{{}, {Provider: "Claude"}, {Provider: "Codex"}},
@@ -291,7 +290,6 @@ func phoneScene() *ui.Scene {
 	s.Items[7].Open = false // test output wraps badly at phone width
 	s.State = ui.ThreadApproval
 	s.StateLabel = "Needs approval"
-	s.Approval = &ui.Approval{Kind: "command", Detail: "git push -u origin t3/go-client", Cwd: "tern"}
 	s.Placeholder = "Send a message to decline and redirect the agent"
 	return s
 }

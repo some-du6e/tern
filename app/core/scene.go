@@ -844,11 +844,9 @@ func (a *App) foldRuns(t *t3.Thread, v *threadView, list []*t3.TurnItem) (map[st
 	return folds, hide
 }
 
-// yesNo requests get Approve / For session / Decline.
-var yesNo = map[string]bool{"command": true, "file-read": true, "file-change": true, "permission": true}
-
-// pending fills the approval, the questions and the queue for the open
-// thread.
+// pending fills the questions and the queue for the open thread. A
+// pending approval shows in the timeline, as T3's does; the composer only
+// says a send declines it (composerScene).
 func (a *App) pending(s *ui.Scene, t *t3.Thread, v *threadView) {
 	if req := t.PendingRuntimeRequest; req != nil {
 		var asked *t3.TurnItem
@@ -870,17 +868,6 @@ func (a *App) pending(s *ui.Scene, t *t3.Thread, v *threadView) {
 				s.Questions = append(s.Questions, uq)
 			}
 			s.Dismissible = asked.ResponseMode == "message"
-		} else {
-			detail := strings.ReplaceAll(req.Kind, "-", " ")
-			if asked != nil {
-				for _, d := range []string{asked.Prompt, asked.Reason, asked.Title, rawString(asked.Input)} {
-					if d != "" {
-						detail = firstLine(d)
-						break
-					}
-				}
-			}
-			s.Approval = &ui.Approval{Kind: strings.ReplaceAll(req.Kind, "-", " "), Detail: detail, Cwd: shortPath(t.WorktreePath), YesNo: yesNo[req.Kind]}
 		}
 	}
 	var queued []t3.Run
