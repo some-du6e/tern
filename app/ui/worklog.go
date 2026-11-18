@@ -84,7 +84,7 @@ func mutedIcon(c color.NRGBA) color.NRGBA {
 }
 
 // failedTint is text-tool-error-icon/40, a failed tool's icon colour.
-func failedTint() color.NRGBA { return alpha(P.ToolErrorIcon, 0x66) }
+func failedTint() color.NRGBA { return faded(P.ToolErrorIcon, 0x66) }
 
 // workIcon draws a work-log icon, 16dp at stroke 2: lucide's, or T3's
 // own wordmark and browser glyph.
@@ -194,7 +194,7 @@ func headingColor(t EntryTone) (color.NRGBA, font.Weight) {
 	case ToneDanger:
 		return P.Destructive, font.Medium
 	case ToneNotice:
-		return over(alpha(P.Foreground, 0xcc), P.Background), font.Normal
+		return over(faded(P.Foreground, 0xcc), P.Background), font.Normal
 	}
 	return P.SecondaryLabel, font.Normal
 }
@@ -223,7 +223,7 @@ func (th *Theme) chevron(id string, open bool) W {
 		c := f32.Pt(float32(s)/2, float32(s)/2)
 		defer op.Affine(f32.AffineId().Rotate(c, t*math.Pi/2)).Push(gtx.Ops).Pop()
 		off := op.Offset(image.Pt((s-dp(gtx, 12))/2, (s-dp(gtx, 12))/2)).Push(gtx.Ops)
-		LucideW("chevron-right", over(alpha(P.IconMuted, 0xb3), P.Background), 12)(gtx)
+		LucideW("chevron-right", over(faded(P.IconMuted, 0xb3), P.Background), 12)(gtx)
 		off.Pop()
 		return D{Size: image.Pt(s, s)}
 	}
@@ -627,7 +627,7 @@ func (th *Theme) errorRow(gtx C, e *WorkEntry) int {
 	h := py + line
 	if e.Error.Message != "" {
 		mo := op.Offset(image.Pt(px+dp(gtx, 28), h+dp(gtx, 4))).Push(gtx.Ops)
-		h += dp(gtx, 8) + th.plainText(within(gtx, w-2*px-dp(gtx, 28)), e.Error.Message, Txt{Size: 14, Color: over(alpha(P.Foreground, 0xcc), P.Background)}, 22.75)
+		h += dp(gtx, 8) + th.plainText(within(gtx, w-2*px-dp(gtx, 28)), e.Error.Message, Txt{Size: 14, Color: over(faded(P.Foreground, 0xcc), P.Background)}, 22.75)
 		mo.Pop()
 	}
 	return h + py
@@ -769,7 +769,7 @@ func (th *Theme) toolInspector(gtx C, b *EntryBody, id string) int {
 		// StructuredValue and the command output: 320dp, then it scrolls.
 		return th.vscroll(gtx, id+":"+key, image.Pt(gtx.Constraints.Max.X, min(cl.size.Y, dp(gtx, 320))), cl.size.Y, key == "output", cl.call)
 	}
-	fg85 := over(alpha(P.Foreground, 0xd9), P.Background)
+	fg85 := over(faded(P.Foreground, 0xd9), P.Background)
 	var parts []func(gtx C) int
 	add := func(f func(gtx C) int) { parts = append(parts, f) }
 	status := func(s string, col color.NRGBA, italic bool) {
@@ -855,7 +855,7 @@ func (th *Theme) toolInspector(gtx C, b *EntryBody, id string) int {
 	for _, hit := range b.Hits {
 		hit := hit
 		add(func(gtx C) int {
-			title := Txt{Size: 12, Font: Mono(), Color: over(alpha(P.Foreground, 0xcc), P.Background)}
+			title := Txt{Size: 12, Font: Mono(), Color: over(faded(P.Foreground, 0xcc), P.Background)}
 			if hit.Web {
 				title = Txt{Size: 12, Font: UI(font.Medium), Color: P.Foreground}
 			}

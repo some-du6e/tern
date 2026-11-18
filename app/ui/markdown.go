@@ -82,7 +82,7 @@ type mdStyle struct {
 
 // mdBody is an assistant's body text: foreground at 90%, on the canvas.
 func mdBody() mdStyle {
-	return mdStyle{color: over(alpha(P.Foreground, 0xe6), P.Background), on: P.Background}
+	return mdStyle{color: over(faded(P.Foreground, 0xe6), P.Background), on: P.Background}
 }
 
 var mdParser = goldmark.New(goldmark.WithExtensions(extension.GFM))
@@ -265,7 +265,7 @@ func (b *mdBuilder) lines(n ast.Node) string {
 }
 
 // codeBg is inline code's fill: the foreground at 10% on the surface.
-func (b *mdBuilder) codeBg() color.NRGBA { return over(alpha(P.ContrastForeground, 0x1a), b.st.on) }
+func (b *mdBuilder) codeBg() color.NRGBA { return over(faded(P.ContrastForeground, 0x1a), b.st.on) }
 
 // runStyle is the style inline text is added with.
 type runStyle struct {

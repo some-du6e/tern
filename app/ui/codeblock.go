@@ -274,9 +274,9 @@ func (th *Theme) codeBlock(gtx C, n *mdNode, st mdStyle) int {
 	id := fmt.Sprintf("code:%p", n)
 	wrapped := !th.tl.unwrapped[id]
 	rad := dp(gtx, 8)
-	frame, border := P.Secondary, over(alpha(P.Border, 0xb3), st.on)
+	frame, border := P.Secondary, over(faded(P.Border, 0xb3), st.on)
 	if dark {
-		frame, border = over(alpha(P.Input, 0x52), st.on), color.NRGBA{}
+		frame, border = over(faded(P.Input, 0x52), st.on), color.NRGBA{}
 	}
 	frame = over(frame, st.on)
 	m := op.Record(gtx.Ops)
@@ -287,7 +287,7 @@ func (th *Theme) codeBlock(gtx C, n *mdNode, st mdStyle) int {
 		title = n.title
 	}
 	to := op.Offset(image.Pt(dp(gtx, 12), dp(gtx, 6))).Push(gtx.Ops)
-	th.textLine(within(gtx, w-dp(gtx, 12+6+3*24+8)), Txt{Size: 11, Font: Mono(), Color: over(alpha(P.ContrastForeground, 0xb8), frame)}, 24, title)
+	th.textLine(within(gtx, w-dp(gtx, 12+6+3*24+8)), Txt{Size: 11, Font: Mono(), Color: over(faded(P.ContrastForeground, 0xb8), frame)}, 24, title)
 	to.Pop()
 	// The toolbar: wrap (pressed while wrapped), run, copy; 24dp, 2dp apart.
 	type tool struct {
@@ -405,7 +405,7 @@ func (th *Theme) hscroll(gtx C, id string, size image.Point, wide int, content f
 		h := dp(gtx, 6)
 		tw := max(dp(gtx, 16), size.X*size.X/wide)
 		tx := (size.X - tw) * s.x / most
-		thumb := alpha(P.ContrastBorder, 0xc7)
+		thumb := faded(P.ContrastBorder, 0xc7)
 		fill(gtx, over(thumb, P.Background), image.Rect(tx, size.Y-h-dp(gtx, 1), tx+tw, size.Y-dp(gtx, 1)), h/2)
 	}
 }

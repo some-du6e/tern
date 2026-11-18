@@ -64,6 +64,14 @@ type follow struct {
 // endBand is how close to the end counts as the end (MessagesTimeline.logic.ts:324-336).
 const endBand = 40
 
+// faded is Tailwind's opacity modifier, as in border/60: c at a/255 of its
+// own alpha. alpha sets the alpha outright, so dark mode's translucent
+// tokens (--border is white at 8%) would come out bright.
+func faded(c color.NRGBA, a uint8) color.NRGBA {
+	c.A = uint8((int(c.A)*int(a) + 127) / 255)
+	return c
+}
+
 func newTimelineState() timelineState {
 	return timelineState{follows: map[string]*follow{}, hovers: map[string]*gesture.Hover{}, scrolls: map[string]*hscroll{},
 		unwrapped: map[string]bool{}, full: map[string]bool{}}
@@ -242,7 +250,7 @@ func (th *Theme) scrollToEnd(gtx C, laneX, laneW, bottom int) {
 	at := image.Pt(laneX+(laneW-w)/2, bottom-dp(gtx, 6)-h)
 	defer op.Offset(at).Push(gtx.Ops).Pop()
 	r := image.Rect(0, 0, w, h)
-	glass, border := alpha(P.Background, 0xcc), alpha(P.Border, 0x99)
+	glass, border := faded(P.Background, 0xcc), faded(P.Border, 0x99)
 	if c.Hovered() {
 		border = P.Border
 	}
@@ -280,7 +288,7 @@ func (th *Theme) timelineHeader(gtx C, tl *Timeline, laneX, laneW int) D {
 		d := th.textLine(gtx, Txt{Size: 12, Color: col}, 16, label)
 		call := m.Stop()
 		lx := (laneW - d.Size.X) / 2
-		rule := over(alpha(P.Border, 0xb3), P.Background)
+		rule := over(faded(P.Border, 0xb3), P.Background)
 		hline(gtx, rule, bh/2, 0, lx-dp(gtx, 12))
 		hline(gtx, rule, bh/2, lx+d.Size.X+dp(gtx, 12), laneW)
 		lo := op.Offset(image.Pt(lx, (bh-d.Size.Y)/2)).Push(gtx.Ops)
@@ -444,7 +452,7 @@ func (th *Theme) turnFold(gtx C, r *TimelineRow, hot bool) int {
 	so.Pop()
 	bo.Pop()
 	y := top + line + dp(gtx, 8)
-	hline(gtx, over(alpha(P.Border, 0x99), P.Background), y, 0, w)
+	hline(gtx, over(faded(P.Border, 0x99), P.Background), y, 0, w)
 	return y + max(1, dp(gtx, 1))
 }
 
@@ -500,7 +508,7 @@ func (th *Theme) workingRow(gtx C, r *TimelineRow) int {
 	}
 	off.Pop()
 	y := top + line + dp(gtx, 8)
-	hline(gtx, over(alpha(P.Border, 0x99), P.Background), y, 0, w)
+	hline(gtx, over(faded(P.Border, 0x99), P.Background), y, 0, w)
 	return y + max(1, dp(gtx, 1))
 }
 
@@ -579,9 +587,9 @@ func (th *Theme) shine(gtx C, size image.Point, w func(col color.NRGBA) W) {
 func (th *Theme) compactionRow(gtx C, r *TimelineRow) int {
 	w := gtx.Constraints.Max.X
 	h := dp(gtx, 24)
-	col, rule := P.MutedForeground, over(alpha(P.Border, 0xb3), P.Background)
+	col, rule := P.MutedForeground, over(faded(P.Border, 0xb3), P.Background)
 	if r.Failed {
-		col, rule = P.Destructive, over(alpha(P.Destructive, 0x4d), P.Background)
+		col, rule = P.Destructive, over(faded(P.Destructive, 0x4d), P.Background)
 	}
 	draw := func(col color.NRGBA) W {
 		return func(gtx C) D {
@@ -644,7 +652,7 @@ func (th *Theme) dividerRow(gtx C, r *TimelineRow) int {
 	})
 	pw := content.Size.X + dp(gtx, 16)
 	x := (w - pw) / 2
-	rule := over(alpha(P.Border, 0xb3), P.Background)
+	rule := over(faded(P.Border, 0xb3), P.Background)
 	hline(gtx, rule, h/2, 0, x-dp(gtx, 8))
 	hline(gtx, rule, h/2, x+pw+dp(gtx, 8), w)
 	defer op.Offset(image.Pt(x+dp(gtx, 8), (h-content.Size.Y)/2)).Push(gtx.Ops).Pop()
@@ -657,14 +665,14 @@ func (th *Theme) dividerRow(gtx C, r *TimelineRow) int {
 // markdown, clipped to 416dp under a fade until expanded.
 func (th *Theme) planCard(gtx C, r *TimelineRow) int {
 	w := gtx.Constraints.Max.X
-	surface := over(alpha(P.Card, 0xb3), P.Background)
+	surface := over(faded(P.Card, 0xb3), P.Background)
 	p, rad := dp(gtx, 20), dp(gtx, 16)
 	title := planTitle(r.Plan)
 	body := stripPlanTitle(r.Plan)
 	collapsible := len(r.Plan) > 900 || strings.Count(r.Plan, "\n")+1 > 20
 	id := r.ID
 	open := th.tl.full[id]
-	st := mdStyle{color: over(alpha(P.Foreground, 0xe6), surface), on: surface}
+	st := mdStyle{color: over(faded(P.Foreground, 0xe6), surface), on: surface}
 	m := op.Record(gtx.Ops)
 	inner := w - 2*p
 	// The header: the badge, the title, the actions menu.
@@ -730,7 +738,7 @@ func (th *Theme) planCard(gtx C, r *TimelineRow) int {
 	h := y + 2*p
 	rr := image.Rect(0, 0, w, h)
 	fill(gtx, surface, rr, rad)
-	strokeRect(gtx, over(alpha(P.Border, 0xcc), P.Background), rr, rad, float32(max(1, dp(gtx, 1))))
+	strokeRect(gtx, over(faded(P.Border, 0xcc), P.Background), rr, rad, float32(max(1, dp(gtx, 1))))
 	defer op.Offset(image.Pt(p, p)).Push(gtx.Ops).Pop()
 	call.Add(gtx.Ops)
 	return h

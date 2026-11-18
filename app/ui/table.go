@@ -77,7 +77,7 @@ func (th *Theme) mdTable(gtx C, doc *mdDoc, n *mdNode, st mdStyle) int {
 	for _, cw := range widths {
 		total += cw
 	}
-	rule := over(alpha(P.ContrastBorder, 0x99), st.on)
+	rule := over(faded(P.ContrastBorder, 0x99), st.on)
 	m := op.Record(gtx.Ops)
 	y := 0
 	for ri, r := range n.rows {

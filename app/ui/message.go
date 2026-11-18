@@ -136,7 +136,7 @@ func (th *Theme) userRow(gtx C, r *TimelineRow, hot bool) int {
 	}
 	if m.SentByT3 {
 		place(th.recorded(gtx, func(gtx C) D {
-			return th.textLine(gtx, Txt{Size: 11, Color: over(alpha(P.MutedForeground, 0xb3), P.Background)}, 16, "Sent by T3 Code")
+			return th.textLine(gtx, Txt{Size: 11, Color: over(faded(P.MutedForeground, 0xb3), P.Background)}, 16, "Sent by T3 Code")
 		}), dp(gtx, 4))
 	}
 	if m.Steer != SteerNone {
@@ -232,8 +232,8 @@ func (th *Theme) statusPill(gtx C, status string) D {
 	px := max(1, dp(gtx, 1))
 	size := image.Pt(d.Size.X+2*dp(gtx, 6)+2*px, d.Size.Y+2*dp(gtx, 2)+2*px)
 	r := image.Rectangle{Max: size}
-	fill(gtx, over(alpha(P.Destructive, 0x14), P.Background), r, size.Y/2)
-	strokeRect(gtx, over(alpha(P.Destructive, 0x40), P.Background), r, size.Y/2, float32(px))
+	fill(gtx, over(faded(P.Destructive, 0x14), P.Background), r, size.Y/2)
+	strokeRect(gtx, over(faded(P.Destructive, 0x40), P.Background), r, size.Y/2, float32(px))
 	off := op.Offset(image.Pt(dp(gtx, 6)+px, dp(gtx, 2)+px)).Push(gtx.Ops)
 	call.Add(gtx.Ops)
 	off.Pop()
@@ -387,14 +387,14 @@ func (th *Theme) media(gtx C, m *Message, words bool) D {
 		defer shape.Push(gtx.Ops).Pop()
 		fill(gtx, edge, image.Rectangle{Max: size}, 0)
 		for i, c := range cells {
-			fill(gtx, over(alpha(P.Background, 0xb3), P.Background), c, 0)
+			fill(gtx, over(faded(P.Background, 0xb3), P.Background), c, 0)
 			if pics[i].ok {
 				pics[i].cover(gtx, c)
 				continue
 			}
 			lg := within(gtx, c.Dx()-dp(gtx, 16))
 			name := th.recorded(lg, func(gtx C) D {
-				return th.textLine(gtx, Txt{Size: 11, Color: over(alpha(P.MutedForeground, 0xb3), P.Background)}, 16, pics[i].Name)
+				return th.textLine(gtx, Txt{Size: 11, Color: over(faded(P.MutedForeground, 0xb3), P.Background)}, 16, pics[i].Name)
 			})
 			off := op.Offset(c.Min.Add(image.Pt((c.Dx()-name.Size.X)/2, (c.Dy()-name.Size.Y)/2))).Push(gtx.Ops)
 			name.call.Add(gtx.Ops)
@@ -483,7 +483,7 @@ func (th *Theme) statusBadge(gtx C, status string) D {
 	call := m.Stop()
 	px := max(1, dp(gtx, 1))
 	size := image.Pt(d.Size.X+2*dp(gtx, 6)+2*px, d.Size.Y+2*dp(gtx, 2)+2*px)
-	strokeRect(gtx, over(alpha(P.Border, 0xb3), P.Background), image.Rectangle{Max: size}, size.Y/2, float32(px))
+	strokeRect(gtx, over(faded(P.Border, 0xb3), P.Background), image.Rectangle{Max: size}, size.Y/2, float32(px))
 	off := op.Offset(image.Pt(dp(gtx, 6)+px, dp(gtx, 2)+px)).Push(gtx.Ops)
 	call.Add(gtx.Ops)
 	off.Pop()

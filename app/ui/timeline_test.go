@@ -64,11 +64,28 @@ func TestUserBubble(t *testing.T) {
 			surface = rgb(0x1e1e1e)
 		}
 		img := rowDrawn(t, NewTheme(), TimelineRow{ID: "u", Kind: RowUser, Message: &Message{ID: "u", Text: "Hello"}}, image.Pt(736, 100), 2)
-		x := 2 * (736 - 16) // in the line's last characters' column, clear of the corners
+		x := 2 * (736 - 24) // over the line's last characters, clear of the corners
 		wantPixel(t, img, image.Pt(x, 2*4), surface, "the bubble's top padding")
 		wantPixel(t, img, image.Pt(x, 92), surface, "the bubble's last row of pixels")
 		wantPixel(t, img, image.Pt(x, 96), P.Background, "under the bubble")
 		wantPixel(t, img, image.Pt(2*400, 2*20), P.Background, "left of the bubble")
+	}
+}
+
+// The turn fold's rule is border/60: #eeeeef in light, and in dark, where
+// --border is itself white at 8%, #0c0c0c (§3.7).
+func TestTurnFoldRule(t *testing.T) {
+	defer SetDark(false)
+	for _, d := range []bool{false, true} {
+		SetDark(d)
+		want := rgb(0xeeeeef)
+		if d {
+			want = rgb(0x0c0c0c)
+		}
+		img := rowDrawn(t, NewTheme(), TimelineRow{ID: "f", Kind: RowTurnFold, Group: "run", Label: "Worked for 2m 14s"}, image.Pt(736, 50), 2)
+		// 4 + 22.75 + 8dp down: px 8 + 46 + 16.
+		wantPixel(t, img, image.Pt(2*400, 70), want, "the fold's rule")
+		wantPixel(t, img, image.Pt(2*400, 66), P.Background, "over the rule")
 	}
 }
 
@@ -220,7 +237,7 @@ func TestTimelineFollow(t *testing.T) {
 	wantPixel(t, img, last, P.Background, "where the last bubble was, scrolled up")
 	// The pill: 24dp tall, centred on the lane, 4 + 6dp over the bottom;
 	// its border is border/60.
-	wantPixel(t, img, image.Pt(32+736/2, 600-4-6-24), over(alpha(P.Border, 0x99), P.Background), "the scroll-to-end pill's top border")
+	wantPixel(t, img, image.Pt(32+736/2, 600-4-6-24), over(faded(P.Border, 0x99), P.Background), "the scroll-to-end pill's top border")
 	p := f32.Pt(32+736/2, 600-4-6-12)
 	r.Queue(pointer.Event{Kind: pointer.Move, Position: p, Source: pointer.Mouse})
 	frame()
