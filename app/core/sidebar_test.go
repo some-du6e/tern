@@ -358,9 +358,9 @@ func TestProjectFilter(t *testing.T) {
 	now := time.Now()
 	a := sideApp(t,
 		t3.Thread{ID: "1", Title: "in tern", CreatedAt: ago(now, time.Minute)},
-		t3.Thread{ID: "2", Title: "in goog", ProjectID: "g", CreatedAt: ago(now, 2*time.Minute)},
+		t3.Thread{ID: "2", Title: "in atlas", ProjectID: "g", CreatedAt: ago(now, 2*time.Minute)},
 	)
-	a.envs[0].projects["g"] = t3.Project{ID: "g", Title: "goog", WorkspaceRoot: "/srv/goog"}
+	a.envs[0].projects["g"] = t3.Project{ID: "g", Title: "atlas", WorkspaceRoot: "/srv/atlas"}
 	a.envs[0].projects["e"] = t3.Project{ID: "e", Title: "empty", WorkspaceRoot: "/srv/empty"}
 	th := ui.NewTheme()
 	a.handle(th, ui.Action{ID: "filter", Kind: "click"})
@@ -370,10 +370,10 @@ func TestProjectFilter(t *testing.T) {
 	}
 	a.handle(th, ui.Action{ID: "filter.project:m/g", Kind: "click"})
 	s = a.build(now)
-	if s.Sidebar.Filter != nil || titles(s) != "in goog@workstation" {
-		t.Fatalf("scoped to goog: %s (popup %v)", titles(s), s.Sidebar.Filter != nil)
+	if s.Sidebar.Filter != nil || titles(s) != "in atlas@workstation" {
+		t.Fatalf("scoped to atlas: %s (popup %v)", titles(s), s.Sidebar.Filter != nil)
 	}
-	if s.Sidebar.ScopeLabel != "Filter threads by project: goog" || len(s.Sidebar.Scope) != 1 {
+	if s.Sidebar.ScopeLabel != "Filter threads by project: atlas" || len(s.Sidebar.Scope) != 1 {
 		t.Fatalf("trigger = %q %v", s.Sidebar.ScopeLabel, s.Sidebar.Scope)
 	}
 	a.handle(th, ui.Action{ID: "filter", Kind: "click"})
@@ -383,7 +383,7 @@ func TestProjectFilter(t *testing.T) {
 		t.Fatalf("empty = %+v", s.Sidebar.Empty)
 	}
 	a.handle(th, ui.Action{ID: "filter.clear", Kind: "click"})
-	if got := titles(a.build(now)); got != "in tern@workstation, in goog@workstation" {
+	if got := titles(a.build(now)); got != "in tern@workstation, in atlas@workstation" {
 		t.Fatalf("after Show all projects: %s", got)
 	}
 }
@@ -420,7 +420,7 @@ func TestSearch(t *testing.T) {
 // Monograms take T3's letters and its 18 colours by the name's hash
 // (projectIdentity.ts).
 func TestMonogram(t *testing.T) {
-	for name, want := range map[string]string{"tern": "TN", "swiss fleet": "SF", "app2": "A2", "x": "XX", "!!!": "PR"} {
+	for name, want := range map[string]string{"tern": "TN", "north star": "NS", "app2": "A2", "x": "XX", "!!!": "PR"} {
 		if got := monogram(name); got != want {
 			t.Errorf("%q: %q, want %q", name, got, want)
 		}
