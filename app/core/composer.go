@@ -32,6 +32,9 @@ type composerState struct {
 	custom    map[int]string // what was typed for each question
 	sending   bool           // a send is on its way
 	scratch   string         // the scratch project a draft moved to, until the shell has it
+	stash     []stashEntry   // the prompts put aside, newest first
+	stashOpen bool           // their list is open
+	stashSel  int            // its highlighted row
 }
 
 // trigger is a word that opens a menu: its kind, what follows the sign,

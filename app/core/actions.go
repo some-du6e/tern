@@ -55,7 +55,23 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		}
 		return
 	case (act.Kind == "change" || act.Kind == "caret") && id == "composer":
+		if act.Kind == "change" {
+			// The stash's list closes when the prompt changes.
+			a.mu.Lock()
+			a.comp.stashOpen = false
+			a.mu.Unlock()
+		}
 		a.composerChanged(th, act.Text)
+		return
+	case act.Kind == "key" && id == "stash":
+		a.stashMenuKey(th, act.Text)
+		return
+	case act.Kind == "hover" && id == "stash":
+		a.mu.Lock()
+		if i := atoi(act.Text); i >= 0 && i < len(a.comp.stash) {
+			a.comp.stashSel = i
+		}
+		a.mu.Unlock()
 		return
 	case act.Kind == "history" && id == "composer":
 		a.recall(th, act.Text == "back")
@@ -292,6 +308,16 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		a.answerAll(th)
 	case "suggest":
 		a.pickItem(th, atoi(arg))
+	case "stash":
+		a.mu.Lock()
+		a.comp.stashOpen, a.comp.stashSel = !a.comp.stashOpen, 0
+		a.mu.Unlock()
+	case "stash.save":
+		a.stashKey(th)
+	case "stash.restore":
+		a.restoreStash(th, atoi(arg))
+	case "stash.delete":
+		a.deleteStash(atoi(arg))
 	case "attach":
 		a.attach()
 	case "project.scratch":

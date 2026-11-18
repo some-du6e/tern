@@ -1066,6 +1066,7 @@ func (a *App) composerScene(s *ui.Scene, key string) {
 		s.Suggest = append(s.Suggest, it.Suggestion)
 	}
 	s.SuggestSel, s.SuggestEmpty = a.comp.sel, a.menuEmpty()
+	a.stashScene(s)
 
 	req, qs := a.questions()
 	var q *t3.Question

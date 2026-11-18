@@ -142,8 +142,11 @@ func (th *Theme) composerStack(gtx C, s *Scene, strip bool) D {
 	}
 	cardCall.Add(gtx.Ops)
 	th.composerMenus(gtx, s, at)
-	if len(s.Suggest) > 0 || s.SuggestEmpty != "" {
+	switch {
+	case len(s.Suggest) > 0 || s.SuggestEmpty != "":
 		th.commandMenu(gtx, s, w)
+	case s.StashOpen:
+		th.stashDrawer(gtx, s, w)
 	}
 	off.Pop()
 	return D{Size: image.Pt(w, top+h)}
@@ -316,6 +319,7 @@ func (th *Theme) prompt(gtx C, s *Scene, w int) D {
 		ed.Submit = true
 		ui := &th.in.composer
 		ui.menu, ui.rows = len(s.Suggest) > 0 || s.SuggestEmpty != "", len(s.Suggest) > 0
+		ui.stash = s.StashOpen
 		ui.history = len(s.Thumbs) == 0 && len(s.Questions) == 0
 		ui.thumbs = s.Thumbs
 		d = th.editor(g, "composer", t, "")
@@ -371,6 +375,11 @@ func (th *Theme) composerKeys(gtx C, ed *widget.Editor) {
 				filters = append(filters, key.Filter{Focus: ed, Name: n})
 			}
 		}
+	case ui.stash:
+		for _, n := range []key.Name{key.NameUpArrow, key.NameDownArrow, key.NameReturn, key.NameEnter, key.NameEscape} {
+			filters = append(filters, key.Filter{Focus: ed, Name: n})
+		}
+		filters = append(filters, key.Filter{Focus: ed, Name: key.NameDeleteBackward, Required: key.ModShortcut})
 	case ui.history:
 		browsing := ui.recalled != "" && ed.Text() == ui.recalled
 		first, last := caretLines(ed)
@@ -391,10 +400,14 @@ func (th *Theme) composerKeys(gtx C, ed *widget.Editor) {
 			continue
 		}
 		switch {
+		case ui.stash && !ui.menu && ke.Name == key.NameDeleteBackward:
+			th.push(Action{ID: "stash", Kind: "key", Text: string(ke.Name)})
 		case ke.Modifiers.Contain(key.ModShortcut):
 			th.push(Action{ID: "composer", Kind: "submit", Text: ed.Text(), Alt: true})
 		case ui.menu:
 			th.push(Action{ID: "suggest", Kind: "key", Text: string(ke.Name)})
+		case ui.stash:
+			th.push(Action{ID: "stash", Kind: "key", Text: string(ke.Name)})
 		case ke.Name == key.NameUpArrow:
 			th.push(Action{ID: "composer", Kind: "history", Text: "back"})
 		default:
@@ -421,13 +434,14 @@ func caretLines(ed *widget.Editor) (first, last bool) {
 
 // composerChords are the composer's shortcuts from anywhere
 // (composerShortcuts.ts): Mod+Shift+M the model menu, Mod+Shift+E its
-// options, Mod+Shift+A the permissions.
+// options, Mod+Shift+A the permissions, Mod+S the stash.
 func (th *Theme) composerChords(gtx C, s *Scene) {
 	for {
 		ev, ok := gtx.Event(
 			key.Filter{Name: "M", Required: key.ModShortcut | key.ModShift},
 			key.Filter{Name: "E", Required: key.ModShortcut | key.ModShift},
 			key.Filter{Name: "A", Required: key.ModShortcut | key.ModShift},
+			key.Filter{Name: "S", Required: key.ModShortcut},
 		)
 		if !ok {
 			return
@@ -436,7 +450,7 @@ func (th *Theme) composerChords(gtx C, s *Scene) {
 		if !ok || ke.State != key.Press {
 			continue
 		}
-		id := map[key.Name]string{"M": "model", "E": "traits", "A": "access"}[ke.Name]
+		id := map[key.Name]string{"M": "model", "E": "traits", "A": "access", "S": "stash.save"}[ke.Name]
 		if id == "traits" && s.Effort == "" && !s.Fast && s.Window == "" {
 			id = "model"
 		}

@@ -175,6 +175,14 @@ type TraitChoice struct {
 	Off         bool // shown but can't be picked now
 }
 
+// Stashed is a prompt in the composer's stash (ComposerStashMenu.tsx).
+type Stashed struct {
+	Snippet string  // its text, cut at 90; "(2 images)" without any
+	Thumbs  []Thumb // its pictures
+	Dropped int     // pictures too big to keep
+	Age     string  // "4m", "2h"
+}
+
 // Suggestion is a row of the composer's @, / and $ menu (ComposerCommandMenu.tsx).
 type Suggestion struct {
 	Icon   string // the lucide icon before it: "file", "folder"; "" for none
@@ -287,7 +295,10 @@ type Scene struct {
 	Dismissible  bool // the questions can be dismissed unanswered
 	Suggest      []Suggestion
 	SuggestSel   int
-	SuggestEmpty string // the menu's line while it has no items: still searching, or nothing matched
+	SuggestEmpty string    // the menu's line while it has no items: still searching, or nothing matched
+	Stash        []Stashed // the stashed prompts, newest first
+	StashOpen    bool      // the stash's drawer is open
+	StashSel     int       // its highlighted row
 
 	Changes []FileChange
 	Run     *RunInfo

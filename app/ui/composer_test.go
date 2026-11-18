@@ -210,6 +210,29 @@ func TestQuestionDrawer(t *testing.T) {
 	}
 }
 
+// The stash's tab sits on the card's top edge at its end, 22dp in, as
+// wide as "Stash" and its count (§3.10); its list rises out of the card
+// with a 24dp header and a 24dp row per prompt, the highlighted one
+// filled with --accent.
+func TestStash(t *testing.T) {
+	th := NewTheme()
+	g := glass()
+	s := &Scene{Model: "Opus 5.5", Stash: []Stashed{{Snippet: "first idea", Age: "4m"}, {Snippet: "second", Age: "1h"}}}
+	img := drawComposer(t, th, s, 200, 0)
+	wantPixel(t, img, image.Pt(713, 15), over(composerOutline(), g), "the tab's end")
+	wantPixel(t, img, image.Pt(714, 15), P.Background, "past the tab")
+	wantPixel(t, img, image.Pt(300, 15), P.Background, "no column of notices")
+	wantPixel(t, img, image.Pt(300, 34), over(composerOutline(), g), "the composer's top edge")
+	if l, r := ink(img, 5, 29, 0, 736); l < 610 || r > 712 {
+		t.Errorf("the tab's ink spans x %d..%d, want about 96dp at the end", l, r)
+	}
+	s.StashOpen, s.StashSel = true, 1
+	img = drawComposer(t, th, s, 320, 150)
+	wantPixel(t, img, image.Pt(400, 168), over(P.Accent, g), "the highlighted row")
+	wantPixel(t, img, image.Pt(400, 143), g, "the row above it")
+	wantPixel(t, img, image.Pt(22, 120), over(composerOutline(), g), "the list's edge")
+}
+
 // The @ menu rises out of the card's top edge, 22dp in, its rows 28dp in
 // 8dp of padding, the highlighted one filled with --accent. Its glass runs
 // 1dp into the card, over the card's edge.

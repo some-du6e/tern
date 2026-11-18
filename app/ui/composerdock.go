@@ -79,9 +79,10 @@ func attachedGlass(gtx C, r image.Rectangle, joined bool, v bannerVariant) color
 	return g
 }
 
-// composerDock is what sits on the card's top edge: the notices, then the
-// agent's question. A new thread shows its notices under the composer
-// instead (heroNotices).
+// composerDock is what sits on the card's top edge (ComposerBanner.Dock):
+// a column of the notices, then the agent's question, and at its end the
+// stash's tab, their bottoms lined up. A new thread shows its notices
+// under the composer instead (heroNotices).
 func (th *Theme) composerDock(gtx C, s *Scene) D {
 	if s.Hero != "" || s.Scratch {
 		return D{}
@@ -89,6 +90,20 @@ func (th *Theme) composerDock(gtx C, s *Scene) D {
 	w := gtx.Constraints.Max.X
 	inset := dp(gtx, drawerInset)
 	cw := w - 2*inset
+	var tab func()
+	tabH := 0
+	if len(s.Stash) > 0 {
+		m := op.Record(gtx.Ops)
+		td := th.stashTab(gtx, s)
+		call := m.Stop()
+		tabH = td.Size.Y
+		cw -= td.Size.X + dp(gtx, 4)
+		tab = func() {
+			defer op.Offset(image.Pt(w-inset-td.Size.X, 0)).Push(gtx.Ops).Pop()
+			call.Add(gtx.Ops)
+		}
+	}
+	m := op.Record(gtx.Ops)
 	y := 0
 	n := 0
 	attach := func(card func(gtx C, joined bool) D) {
@@ -113,11 +128,214 @@ func (th *Theme) composerDock(gtx C, s *Scene) D {
 	if len(s.Questions) > 0 {
 		attach(func(gtx C, joined bool) D { return th.questionDrawer(gtx, s, joined) })
 	}
+	column := m.Stop()
 	th.questionKeys(gtx, s)
-	if n == 0 {
+	colH := 0
+	if n > 0 {
+		colH = y + dp(gtx, tuck)
+	}
+	h := max(colH, tabH)
+	if h == 0 {
 		return D{}
 	}
-	return D{Size: image.Pt(w, y+dp(gtx, tuck))}
+	// The column and the tab sit on the dock's bottom (items-end).
+	off := op.Offset(image.Pt(0, h-colH)).Push(gtx.Ops)
+	column.Add(gtx.Ops)
+	off.Pop()
+	if tab != nil {
+		off := op.Offset(image.Pt(0, h-tabH)).Push(gtx.Ops)
+		tab()
+		off.Pop()
+	}
+	return D{Size: image.Pt(w, h)}
+}
+
+// stashTab is the stash's shoulder tab (ComposerStashBadge.tsx): an
+// attached surface as wide as its row, "Stash" and the count, muted
+// until hovered; while the drawer's open it's foreground and inert.
+func (th *Theme) stashTab(gtx C, s *Scene) D {
+	id := liveID(s, "stash")
+	hovered := false
+	if id != "" && !s.StashOpen {
+		c, _ := th.events(gtx, id)
+		hovered = c.Hovered()
+	}
+	col := P.MutedForeground
+	if hovered || s.StashOpen {
+		col = P.Foreground
+	}
+	m := op.Record(gtx.Ops)
+	rd := th.bannerRow(gtx, "bookmark", "Stash", strconv.Itoa(len(s.Stash)), col, false)
+	row := m.Stop()
+	padX, padY := dp(gtx, 4), dp(gtx, 5)
+	r := image.Rect(0, 0, rd.Size.X+2*padX, rd.Size.Y+2*padY+dp(gtx, tuck))
+	g := attachedGlass(gtx, r, false, bannerDefault)
+	defer op.Offset(image.Pt(padX, padY)).Push(gtx.Ops).Pop()
+	if hovered {
+		fill(gtx, over(alpha(P.Foreground, 0x0d), g), image.Rectangle{Max: rd.Size}, dp(gtx, 12))
+	}
+	row.Add(gtx.Ops)
+	if id != "" && !s.StashOpen {
+		th.hit(gtx, id, rd.Size)
+	}
+	return D{Size: r.Max}
+}
+
+// bannerRow is a banner's 24dp row (ComposerBanner.Row): the 12dp icon in
+// its 24dp column, the 12/16 content, and with a count, a 24dp column for
+// it in medium, tabular; with toggle, the open drawer's chevron after it.
+func (th *Theme) bannerRow(gtx C, icon, content, count string, col color.NRGBA, toggle bool) D {
+	gtx.Constraints.Min = image.Point{}
+	rh := dp(gtx, 24)
+	t := Txt{Size: 12, LineH: 16.0 / 12, Color: col, MaxLines: 1}
+	off := op.Offset(image.Pt((rh-dp(gtx, 12))/2, (rh-dp(gtx, 12))/2)).Push(gtx.Ops)
+	LucideW(icon, col, 12)(gtx)
+	off.Pop()
+	x := rh + dp(gtx, 4)
+	m := op.Record(gtx.Ops)
+	cd := th.Text(gtx, t, content)
+	call := m.Stop()
+	off = op.Offset(image.Pt(x, (rh-cd.Size.Y)/2)).Push(gtx.Ops)
+	call.Add(gtx.Ops)
+	off.Pop()
+	x += cd.Size.X
+	if count != "" {
+		x += dp(gtx, 4)
+		ct := t
+		ct.Font, ct.Color = UI(font.Medium), P.MutedForeground
+		m := op.Record(gtx.Ops)
+		nd := th.Text(gtx, ct, count)
+		call := m.Stop()
+		cw := max(rh, nd.Size.X)
+		off := op.Offset(image.Pt(x+(cw-nd.Size.X)/2, (rh-nd.Size.Y)/2)).Push(gtx.Ops)
+		call.Add(gtx.Ops)
+		off.Pop()
+		x += cw
+	}
+	if toggle {
+		off := op.Offset(image.Pt(x+(rh-dp(gtx, 14))/2, (rh-dp(gtx, 14))/2)).Push(gtx.Ops)
+		LucideW("chevron-down", P.ContrastMutedForeground, 14)(gtx)
+		off.Pop()
+		x += rh
+	}
+	return D{Size: image.Pt(x, rh)}
+}
+
+// stashDrawer is the open stash (ComposerStashMenu.tsx), rising out of
+// the card like the @ menu: a row that closes it, then a row per stashed
+// prompt (its snippet, its pictures, how old it is and its delete), the
+// highlighted one filled with --accent.
+func (th *Theme) stashDrawer(gtx C, s *Scene, w int) {
+	inset := dp(gtx, drawerInset)
+	cw := w - 2*inset
+	g := glass()
+	m := op.Record(gtx.Ops)
+	cg := gtx
+	cg.Constraints = layout.Constraints{Min: image.Pt(cw, 0), Max: image.Pt(cw, dp(gtx, 384))}
+	body := pad(4, 4, 4, 4).Layout(cg, func(gtx C) D {
+		gtx.Constraints.Min.X = gtx.Constraints.Max.X
+		kids := []layout.FlexChild{rigid(func(gtx C) D {
+			d := th.bannerRow(gtx, "bookmark", "Stash", strconv.Itoa(len(s.Stash)), P.MutedForeground, true)
+			if id := liveID(s, "stash"); id != "" {
+				th.hit(gtx, id, image.Pt(gtx.Constraints.Max.X, d.Size.Y))
+			}
+			return D{Size: image.Pt(gtx.Constraints.Max.X, d.Size.Y)}
+		})}
+		for i, e := range s.Stash {
+			i, e := i, e
+			kids = append(kids, rigid(Spacer(0, 1)), rigid(func(gtx C) D { return th.stashRow(gtx, s, i, e, g) }))
+		}
+		return Col(gtx, kids...)
+	})
+	call := m.Stop()
+	h := body.Size.Y + dp(gtx, tuck)
+	defer op.Offset(image.Pt(inset, dp(gtx, tuck)-h)).Push(gtx.Ops).Pop()
+	attachedGlass(gtx, image.Rect(0, 0, cw, h), false, bannerDefault)
+	call.Add(gtx.Ops)
+}
+
+// stashRow is one stashed prompt: 24dp, rounded 4, a click restores it.
+func (th *Theme) stashRow(gtx C, s *Scene, i int, e Stashed, g color.NRGBA) D {
+	w := gtx.Constraints.Max.X
+	gtx.Constraints.Min = image.Point{}
+	rh := dp(gtx, 24)
+	id := liveID(s, "stash.restore:"+strconv.Itoa(i))
+	if id != "" {
+		c, _ := th.events(gtx, id)
+		if c.Hovered() && i != s.StashSel {
+			th.push(Action{ID: "stash", Kind: "hover", Text: strconv.Itoa(i)})
+		}
+	}
+	on := g
+	text := over(alpha(P.Foreground, 0xcc), g)
+	if i == s.StashSel {
+		on = over(P.Accent, g)
+		fill(gtx, on, image.Rect(0, 0, w, rh), dp(gtx, 4))
+		text = P.AccentForeground
+	}
+	// The actions, right to left: delete, age, pictures, what was dropped.
+	x := w - rh
+	del := liveID(s, "stash.delete:"+strconv.Itoa(i))
+	func() {
+		defer op.Offset(image.Pt(x, 0)).Push(gtx.Ops).Pop()
+		if del != "" {
+			th.bannerDismiss(gtx, del, on, dp(gtx, 8), dp(gtx, 8))
+			return
+		}
+		off := op.Offset(image.Pt((rh-dp(gtx, 14))/2, (rh-dp(gtx, 14))/2)).Push(gtx.Ops)
+		LucideW("x", P.ContrastMutedForeground, 14)(gtx)
+		off.Pop()
+	}()
+	t := Txt{Size: 12, LineH: 16.0 / 12, Color: P.MutedForeground, MaxLines: 1}
+	place := func(w W) {
+		m := op.Record(gtx.Ops)
+		d := w(gtx)
+		call := m.Stop()
+		x -= d.Size.X + dp(gtx, 4)
+		off := op.Offset(image.Pt(x, (rh-d.Size.Y)/2)).Push(gtx.Ops)
+		call.Add(gtx.Ops)
+		off.Pop()
+	}
+	if e.Age != "" {
+		place(func(gtx C) D { return th.Text(gtx, t, e.Age) })
+	}
+	if n := min(3, len(e.Thumbs)); n > 0 {
+		place(func(gtx C) D {
+			sz, step := dp(gtx, 16), dp(gtx, 16-6)
+			for j := n - 1; j >= 0; j-- {
+				off := op.Offset(image.Pt(j*step, 0)).Push(gtx.Ops)
+				r := image.Rect(0, 0, sz, sz)
+				if !drawThumb(gtx, e.Thumbs[j], sz, dp(gtx, 4)) {
+					fill(gtx, over(P.Muted, on), r, dp(gtx, 4))
+				}
+				strokeRect(gtx, over(alpha(P.Border, uint8(int(P.Border.A)*7/10)), on), r, dp(gtx, 4), float32(max(1, dp(gtx, 1))))
+				off.Pop()
+			}
+			return D{Size: image.Pt((n-1)*step+sz, sz)}
+		})
+	}
+	if e.Dropped > 0 {
+		dt := t
+		dt.Color = P.WarningForeground
+		place(func(gtx C) D { return th.Text(gtx, dt, plural(e.Dropped, "image")+" dropped") })
+	}
+	off := op.Offset(image.Pt((rh-dp(gtx, 12))/2, (rh-dp(gtx, 12))/2)).Push(gtx.Ops)
+	LucideW("file-text", P.MutedForeground, 12)(gtx)
+	off.Pop()
+	sg := gtx
+	sg.Constraints = layout.Constraints{Max: image.Pt(max(0, x-rh-dp(gtx, 8)), rh)}
+	st := t
+	st.Color = text
+	m := op.Record(gtx.Ops)
+	sd := th.Text(sg, st, e.Snippet)
+	call := m.Stop()
+	so := op.Offset(image.Pt(rh+dp(gtx, 4), (rh-sd.Size.Y)/2)).Push(gtx.Ops)
+	call.Add(gtx.Ops)
+	so.Pop()
+	if id != "" {
+		th.hit(gtx, id, image.Pt(x, rh))
+	}
+	return D{Size: image.Pt(w, rh)}
 }
 
 // noticeCard is a notice (ComposerBannerStack.tsx): a comfortable root
@@ -673,6 +891,7 @@ type composerUI struct {
 	clicks   map[string]*gesture.Click
 	menu     bool    // the @, / or $ menu is open: Escape is its
 	rows     bool    // and has rows: so are the arrows, Enter and Tab
+	stash    bool    // the stash's list is open: the arrows, Enter and Escape are its
 	history  bool    // the arrows may walk the prompt history: no pictures, no question
 	recalled string  // the prompt the history last put in
 	thumbs   []Thumb // the pictures, for their chips

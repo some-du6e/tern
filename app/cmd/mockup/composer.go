@@ -84,6 +84,21 @@ func busyScene() *ui.Scene {
 	return s
 }
 
+// stashScene is the stash's list open over the composer, its tab beside
+// a notice.
+func stashScene() *ui.Scene {
+	s := composerScene()
+	s.Thumbs, s.Composer, s.RuntimeChip = nil, "", false
+	s.Notice = "Loading earlier turns…"
+	s.Stash = []ui.Stashed{
+		{Snippet: "try the sidebar's rows at 1k threads with the hover card open", Age: "4m"},
+		{Snippet: "(2 images)", Thumbs: pictures(2), Age: "1h"},
+		{Snippet: "rename the store files and keep the old names working for a release", Dropped: 1, Age: "2d"},
+	}
+	s.StashOpen, s.StashSel = true, 1
+	return s
+}
+
 // answersScene is the second of two questions: Previous, then Submit.
 func answersScene() *ui.Scene {
 	s := questionScene()
