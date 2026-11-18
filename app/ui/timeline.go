@@ -36,8 +36,6 @@ type timelineState struct {
 	unwrapped map[string]bool
 	full      map[string]bool
 	menu      string
-	// lists are the open groups' scrolling lists, by row id.
-	lists     map[string]*layout.List
 	reveals   map[string]revealState
 	plain     map[plainKey]*inlineText
 	previews  map[string]string // thoughts' one-line previews
@@ -66,13 +64,13 @@ type follow struct {
 // endBand is how close to the end counts as the end (MessagesTimeline.logic.ts:324-336).
 const endBand = 40
 
+func newTimelineState() timelineState {
+	return timelineState{follows: map[string]*follow{}, hovers: map[string]*gesture.Hover{}, scrolls: map[string]*hscroll{},
+		unwrapped: map[string]bool{}, full: map[string]bool{}}
+}
+
 func (th *Theme) followFor(id string) *follow {
 	tl := &th.tl
-	if tl.follows == nil {
-		tl.follows = map[string]*follow{}
-		tl.hovers, tl.scrolls = map[string]*gesture.Hover{}, map[string]*hscroll{}
-		tl.unwrapped, tl.full, tl.lists = map[string]bool{}, map[string]bool{}, map[string]*layout.List{}
-	}
 	f := tl.follows[id]
 	for i, o := range tl.order {
 		if o == id {

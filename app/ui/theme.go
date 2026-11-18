@@ -130,5 +130,5 @@ func (th *Theme) dragArea(gtx C, size image.Point) {
 func NewTheme() *Theme {
 	// The embedded faces come first; the system's fill in the scripts they
 	// don't cover, like Chinese and Japanese.
-	return &Theme{Shaper: text.NewShaper(text.WithCollection(faces())), ControlsLeft: 12}
+	return &Theme{Shaper: text.NewShaper(text.WithCollection(faces())), ControlsLeft: 12, tl: newTimelineState()}
 }
