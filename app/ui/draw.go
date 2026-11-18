@@ -220,9 +220,11 @@ func (th *Theme) boxText(gtx C, t Txt, s string) D {
 	m = op.Record(gtx.Ops)
 	d := th.Text(g, t, s)
 	call := m.Stop()
+	// A label's baseline is its first line's; each line after it adds a
+	// line's height.
 	lineH := float32(gtx.Sp(t.Size)) * t.LineH
 	baseline := first.Size.Y - first.Baseline
-	lines := 1 + int(float32(d.Size.Y-d.Baseline-baseline)/lineH+0.5)
+	lines := 1 + int(float32(d.Size.Y-first.Size.Y)/lineH+0.5)
 	capH := capEm * float32(gtx.Sp(t.Size))
 	defer op.Offset(image.Pt(0, int(lineH/2+capH/2+0.5)-baseline)).Push(gtx.Ops).Pop()
 	call.Add(gtx.Ops)
