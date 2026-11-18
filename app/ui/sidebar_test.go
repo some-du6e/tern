@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"runtime"
 	"testing"
 	"time"
 
 	"gioui.org/f32"
 	"gioui.org/font"
+	"gioui.org/gpu/headless"
 	gioinput "gioui.org/io/input"
 	"gioui.org/io/key"
 	"gioui.org/io/pointer"
@@ -288,6 +290,83 @@ func TestUndoNotice(t *testing.T) {
 	if top, bottom, _ := inkRows(img, image.Rect(80, 856, 248, 900), SP.Sidebar); top < 866 || bottom > 886 {
 		t.Errorf("the notice's text is on rows %d..%d, want it within its line at 864..888", top, bottom)
 	}
+}
+
+// liveWindow draws frames through Gio's router at the times a test picks,
+// so the pointer's hover and rest show as they would in the app.
+type liveWindow struct {
+	win  *headless.Window
+	r    gioinput.Router
+	ops  op.Ops
+	size image.Point
+}
+
+func newLiveWindow(t *testing.T, size image.Point) *liveWindow {
+	t.Helper()
+	win, err := headless.NewWindow(size.X, size.Y)
+	if err != nil {
+		if runtime.GOOS == "linux" {
+			t.Fatalf("headless GPU: %v", err)
+		}
+		t.Skipf("no headless GPU here: %v", err)
+	}
+	t.Cleanup(win.Release)
+	return &liveWindow{win: win, size: size}
+}
+
+func (l *liveWindow) frame(t *testing.T, now time.Time, w layout.Widget) *image.RGBA {
+	t.Helper()
+	l.ops.Reset()
+	w(layout.Context{Ops: &l.ops, Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Exact(l.size), Source: l.r.Source(), Now: now})
+	l.r.Frame(&l.ops)
+	if err := l.win.Frame(&l.ops); err != nil {
+		t.Fatal(err)
+	}
+	img := image.NewRGBA(image.Rectangle{Max: l.size})
+	if err := l.win.Screenshot(img); err != nil {
+		t.Fatal(err)
+	}
+	return img
+}
+
+// The hover card opens once the pointer has rested 150ms on its row,
+// growing and fading in over 150ms, and fades out over 150ms as the
+// pointer leaves (§3.15, §6).
+func TestHoverCardMotion(t *testing.T) {
+	defer SetDark(false)
+	SetDark(true) // the card's border shows against the black sidebar
+	th := NewTheme()
+	s := rowsScene()
+	s.Live = true
+	for _, it := range s.Sidebar.Items {
+		if it.Row != nil {
+			it.Row.Hover = false
+		}
+	}
+	lw := newLiveWindow(t, image.Pt(1440, 900))
+	t0 := time.Now()
+	at := func(d time.Duration) *image.RGBA {
+		return lw.frame(t, t0.Add(d), func(gtx C) D { return th.Desktop(gtx, s) })
+	}
+	glass := over(alpha(P.Popover, 0xd5), P.Background)
+	border := over(alpha(P.Foreground, 0x1a), glass)
+	// The second card is 185..245; its card's left border is at 251.
+	edge := image.Pt(251, 200)
+	at(0)
+	lw.r.Queue(pointer.Event{Kind: pointer.Move, Position: f32.Pt(100, 215), Source: pointer.Mouse})
+	at(10 * time.Millisecond) // the pointer comes to rest
+	wantPixel(t, at(100*time.Millisecond), edge, SP.Sidebar, "before the rest is up")
+	at(160 * time.Millisecond) // the frame the card asked for, as it opens
+	if c := at(235*time.Millisecond).RGBAAt(edge.X, edge.Y); c.R < 4 || c.R+4 > border.R {
+		t.Errorf("half way in the border is #%02x%02x%02x, want between black and #%02x%02x%02x", c.R, c.G, c.B, border.R, border.G, border.B)
+	}
+	wantPixel(t, at(400*time.Millisecond), edge, border, "the card, open")
+	lw.r.Queue(pointer.Event{Kind: pointer.Move, Position: f32.Pt(700, 400), Source: pointer.Mouse})
+	at(500 * time.Millisecond) // the pointer leaves
+	if c := at(560*time.Millisecond).RGBAAt(edge.X, edge.Y); c.R < 4 || c.R+4 > border.R {
+		t.Errorf("half way out the border is #%02x%02x%02x, want between black and #%02x%02x%02x", c.R, c.G, c.B, border.R, border.G, border.B)
+	}
+	wantPixel(t, at(700*time.Millisecond), edge, SP.Sidebar, "the card, closed")
 }
 
 // A click on a card's pull request is the badge's: it opens the pull

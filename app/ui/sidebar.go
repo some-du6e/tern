@@ -1945,30 +1945,48 @@ func (th *Theme) textWidth(gtx C, t Txt, s string) int {
 // ---------- the hover card ----------
 
 // hoverCard is a row's hover card (ThreadHoverCard.tsx, §3.15), shown once
-// the pointer has rested on the row for 150ms (at once if another closed in
-// the last 400ms): T3's glass tooltip 4dp right of the row, level with its
-// top, kept inside the window. rect is the row's box in the window.
+// the pointer has rested on the row for 150ms: T3's glass tooltip 4dp
+// right of the row, level with its top, kept inside the window. It grows
+// from 98% and fades in over 150ms from the side facing the row, and back
+// out as it closes; opening on the next row within 400ms of the last
+// closing, it and the card it replaces change at once (Base UI's
+// data-instant). rect is the row's box in the window.
 func (th *Theme) hoverCard(gtx C, s *Scene, r *ThreadRow, rect image.Rectangle, hot bool) {
-	if !s.Live && !r.Hover {
-		return
-	}
+	key := "card:" + r.ID
+	open, instant := r.Hover, true
 	if s.Live {
 		switch {
 		case hot && th.in.cardRow != r.ID:
-			th.in.cardRow, th.in.cardSince = r.ID, gtx.Now
+			th.in.cardRow, th.in.cardSince, th.in.cardInstant = r.ID, gtx.Now, false
 			if gtx.Now.Sub(th.in.cardShut) < listTipInstant {
-				th.in.cardSince = gtx.Now.Add(-listTipDelay)
+				th.in.cardSince, th.in.cardInstant = gtx.Now.Add(-listTipDelay), true
 			}
 		case !hot && th.in.cardRow == r.ID:
 			th.in.cardRow, th.in.cardShut = "", gtx.Now
 		}
-		if !hot || th.in.tipBusy {
-			return
-		}
-		if left := listTipDelay - gtx.Now.Sub(th.in.cardSince); left > 0 {
+		left := listTipDelay - gtx.Now.Sub(th.in.cardSince)
+		if hot && left > 0 {
 			gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(left)})
-			return
 		}
+		open = hot && !th.in.tipBusy && left <= 0
+		instant = (open && th.in.cardInstant) || (!open && th.in.cardRow != "" && th.in.cardRow != r.ID)
+	}
+	if !open && th.in.fades[key] == nil {
+		return
+	}
+	var k float32
+	if instant {
+		if th.in.fades == nil {
+			th.in.fades = map[string]*fade{}
+		}
+		th.in.fades[key] = &fade{on: open, from: level(open)}
+		k = level(open)
+	} else {
+		k = th.transition(gtx, key, open, 150*time.Millisecond)
+	}
+	if k == 0 {
+		delete(th.in.fades, key)
+		return
 	}
 	m := op.Record(gtx.Ops)
 	g := gtx
@@ -1984,7 +2002,13 @@ func (th *Theme) hoverCard(gtx C, s *Scene, r *ThreadRow, rect image.Rectangle, 
 	}
 	m2 := op.Record(gtx.Ops)
 	op.Offset(image.Pt(rect.Dx()+dp(gtx, 4), dy)).Add(gtx.Ops)
+	// It grows from its left edge, level with the row's middle.
+	sc := 0.98 + 0.02*k
+	origin := f32.Pt(0, float32(min(cd.Size.Y, rect.Dy()/2-dy)))
+	op.Affine(f32.Affine2D{}.Scale(origin, f32.Pt(sc, sc))).Add(gtx.Ops)
+	fd := paint.PushOpacity(gtx.Ops, k)
 	call.Add(gtx.Ops)
+	fd.Pop()
 	op.Defer(gtx.Ops, m2.Stop())
 }
 

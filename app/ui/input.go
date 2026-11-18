@@ -96,15 +96,17 @@ type input struct {
 	undoText  string
 	undoFade  *fade
 	undoClaim bool
-	// The hover card: the row it's for, when the pointer came to rest there
-	// and when the last one closed; tipBusy is a control's tooltip in the
-	// row being drawn, which the card stands aside for.
-	cardRow   string
-	cardSince time.Time
-	cardShut  time.Time
-	tipBusy   bool
-	menu      menuState // the open context menu's submenus and highlight
-	actions   []Action
+	// The hover card: the row it's for, when the pointer came to rest there,
+	// whether it opened at once (within 400ms of the last one closing) and
+	// when the last one closed; tipBusy is a control's tooltip in the row
+	// being drawn, which the card stands aside for.
+	cardRow     string
+	cardSince   time.Time
+	cardInstant bool
+	cardShut    time.Time
+	tipBusy     bool
+	menu        menuState // the open context menu's submenus and highlight
+	actions     []Action
 }
 
 // Action is one thing the user did this frame: ID is the target, Kind is
