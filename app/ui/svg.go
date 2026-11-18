@@ -12,6 +12,14 @@ import (
 
 var lucideSegs sync.Map // name → []seg
 
+// drawnIcons are T3's own icons in lucide's style, 24x24 outlines drawn
+// like lucide's: the Mac mini and Mac Studio machine marks
+// (EnvironmentMachineIcon.tsx), whose filled dots become lucide dots.
+var drawnIcons = map[string]string{
+	"mac-mini":   `M5.5 6H18.5A2.5 2.5 0 0 1 21 8.5V15.5A2.5 2.5 0 0 1 18.5 18H5.5A2.5 2.5 0 0 1 3 15.5V8.5A2.5 2.5 0 0 1 5.5 6ZM7.5 12h.01`,
+	"mac-studio": `M5 5H19A2 2 0 0 1 21 7V17A2 2 0 0 1 19 19H5A2 2 0 0 1 3 17V7A2 2 0 0 1 5 5ZM7 15h.01M11 15h.01M15 15h.01`,
+}
+
 // LucideW is the lucide icon name, the set T3 uses, sizeDp square and
 // stroked in col at T3's weight.
 func LucideW(name string, col color.NRGBA, sizeDp float32) W {
@@ -19,7 +27,11 @@ func LucideW(name string, col color.NRGBA, sizeDp float32) W {
 		s := float32(dp(gtx, sizeDp))
 		v, ok := lucideSegs.Load(name)
 		if !ok {
-			v, _ = lucideSegs.LoadOrStore(name, parseSVGPath(lucide[name]))
+			d := lucide[name]
+			if d == "" {
+				d = drawnIcons[name]
+			}
+			v, _ = lucideSegs.LoadOrStore(name, parseSVGPath(d))
 		}
 		k, width := s/24, 1.75*s/24 // T3 strokes lucide at 1.75, not 2 (index.css:1728)
 		sc := func(q f32.Point) f32.Point { return q.Mul(k) }
