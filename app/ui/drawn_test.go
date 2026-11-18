@@ -84,3 +84,12 @@ func TestT3Weights(t *testing.T) {
 		last = got
 	}
 }
+
+// The shaper's fallback is the first face loaded, so that must be the UI
+// font, never the mono one.
+func TestFallbackIsTheUIFont(t *testing.T) {
+	f := faces()[0].Font
+	if f.Typeface != "Inter" && f.Typeface != "SF Pro" {
+		t.Fatalf("the first face is %q", f.Typeface)
+	}
+}

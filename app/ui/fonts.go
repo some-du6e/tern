@@ -27,11 +27,13 @@ var fontFiles embed.FS
 // platform files set them.
 var sans, mono font.Typeface
 
-// faces is every embedded face, then the platform's own (systemFaces).
-// The Inter instances all name their style "Regular", so each gets its
-// weight from its file name, Inter-<Weight>.ttf, instead.
+// faces is the platform's own faces (systemFaces), then the embedded ones,
+// UI faces before mono: the shaper falls back to the first face it loaded,
+// which must be the UI font. The Inter instances all name their style
+// "Regular", so each gets its weight from its file name, Inter-<Weight>.ttf,
+// instead.
 func faces() []font.FontFace {
-	var out []font.FontFace
+	var ui, other []font.FontFace
 	fs.WalkDir(fontFiles, "fonts", func(name string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
@@ -45,17 +47,17 @@ func faces() []font.FontFace {
 			if err != nil {
 				panic(err)
 			}
-			out = append(out, font.FontFace{Font: font.Font{Typeface: "Inter", Weight: w}, Face: face})
+			ui = append(ui, font.FontFace{Font: font.Font{Typeface: "Inter", Weight: w}, Face: face})
 			return nil
 		}
 		parsed, err := opentype.ParseCollection(data)
 		if err != nil {
 			panic(err)
 		}
-		out = append(out, parsed...)
+		other = append(other, parsed...)
 		return nil
 	})
-	return append(out, systemFaces()...)
+	return append(append(systemFaces(), ui...), other...)
 }
 
 // interWeight is the weight of an embedded Inter instance, from its name.
