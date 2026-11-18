@@ -19,12 +19,18 @@ import (
 // branch picker's Combobox (BranchPicker.tsx, §3.13), and the dialog a Git
 // action on the default branch asks first in (§3.21).
 
+// inBorder lays w out inside its popup's 1dp border, which T3 counts
+// outside the padding; popupFrame paints it over the content's edge.
+func inBorder(w W) W {
+	return func(gtx C) D { return pad(1, 1, 1, 1).Layout(gtx, w) }
+}
+
 // cardMenu is m's rows in T3's menu, w wide: 28dp rows padded 4 by 8 with
 // 16dp icons at 80%, radio rows with their check at the end, group labels,
 // separators and notes.
 func (th *Theme) cardMenu(gtx C, m *CardMenu, w int) D {
 	gtx.Constraints = layout.Constraints{Min: image.Pt(w, 0), Max: image.Pt(w, gtx.Constraints.Max.Y)}
-	return popupFrame(gtx, func(gtx C) D {
+	return popupFrame(gtx, inBorder(func(gtx C) D {
 		return pad(4, 4, 4, 4).Layout(gtx, func(gtx C) D {
 			var kids []layout.FlexChild
 			for i, r := range m.Rows {
@@ -65,7 +71,7 @@ func (th *Theme) cardMenu(gtx C, m *CardMenu, w int) D {
 			}
 			return Col(gtx, kids...)
 		})
-	})
+	}))
 }
 
 // menuAtPointer draws the menu w 4dp below where the last right-click
@@ -156,7 +162,7 @@ func (th *Theme) cardMenuRow(gtx C, r MenuRow) D {
 // after each name), the ref it would create, and a status line.
 func (th *Theme) branchPicker(gtx C, p *BranchPicker, w int) D {
 	gtx.Constraints = layout.Constraints{Min: image.Pt(w, 0), Max: image.Pt(w, gtx.Constraints.Max.Y)}
-	return popupFrame(gtx, func(gtx C) D {
+	return popupFrame(gtx, inBorder(func(gtx C) D {
 		var kids []layout.FlexChild
 		kids = append(kids, rigid(func(gtx C) D { return th.refSearch(gtx) }))
 		var rows []W
@@ -238,7 +244,7 @@ func (th *Theme) branchPicker(gtx C, p *BranchPicker, w int) D {
 			}))
 		}
 		return Col(gtx, kids...)
-	})
+	}))
 }
 
 // refSearch is the picker's search block: padded 10 by 12, a 16dp search

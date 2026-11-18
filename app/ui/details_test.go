@@ -216,15 +216,16 @@ func TestCardMenu(t *testing.T) {
 	wantPixel(t, img, image.Pt(1148+1+8-3, cardBottom+6), P.Background, "nothing left of the row's edge")
 	// Its surface runs inside the 1dp border, under the dark lip's line, for
 	// its three 28dp rows padded 4.
-	if first, last := run(img, 1148+1+8+130, top-8, top+200, P.Popover); first != top+2 || last != top+4+3*28+4-2 {
-		t.Errorf("the menu's surface spans y %d..%d, want %d..%d", first, last, top+2, top+4+3*28+4-2)
+	if first, last := run(img, 1148+1+8+130, top-8, top+200, P.Popover); first != top+2 || last != top+1+4+3*28+4-1 {
+		t.Errorf("the menu's surface spans y %d..%d, want %d..%d", first, last, top+2, top+1+4+3*28+4-1)
 	}
 }
 
-// The branch picker hangs 4dp under its row (whose bottom is at 220): its
-// search block over a rule 43dp down, then the refs 8dp further, each
-// 28dp, the first highlighted at foreground 9%; with nothing to list, a
-// 36dp "No refs found." block instead (BranchPicker.tsx, combobox.tsx).
+// The branch picker hangs 4dp under its row (whose bottom is at 220):
+// inside its 1dp border, its search block over a rule 43dp down, then the
+// refs 8dp further, each 28dp, the first highlighted at foreground 9%;
+// with nothing to list, a 36dp "No refs found." block instead
+// (BranchPicker.tsx, combobox.tsx).
 func TestBranchPickerDrawn(t *testing.T) {
 	defer SetDark(false)
 	SetDark(true)
@@ -235,7 +236,9 @@ func TestBranchPickerDrawn(t *testing.T) {
 	top, x := 220+4, 1157+173
 	list := top + 1 + 43
 	hi := over(alpha(P.Foreground, 0x17), P.Popover)
-	if first, last := run(img, x, list, list+80, hi); first != list+8 || last != list+8+28-1 {
+	// The popup's border is nearly the highlight's colour, so the scan
+	// stops at the list's last row.
+	if first, last := run(img, x, list, list+8+2*28, hi); first != list+8 || last != list+8+28-1 {
 		t.Errorf("the highlighted ref spans y %d..%d, want %d..%d", first, last, list+8, list+8+28-1)
 	}
 	wantPixel(t, img, image.Pt(x, list+8+28+3), P.Popover, "the second ref, not highlighted")
