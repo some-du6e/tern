@@ -91,7 +91,7 @@ func TestComposerMenuKeys(t *testing.T) {
 	frame()
 	th.SetEditorText("composer", "@comp")
 	frame()
-	th.in.composer.menu = true
+	th.in.composer.menu, th.in.composer.rows = true, true
 	for _, k := range []key.Name{key.NameDownArrow, key.NameUpArrow, key.NameReturn, key.NameTab, key.NameEscape} {
 		if acts := press(k); !keyed(acts, "suggest", "key", string(k)) {
 			t.Fatalf("%s with the menu open: %+v", k, acts)
@@ -99,6 +99,11 @@ func TestComposerMenuKeys(t *testing.T) {
 	}
 	if got := th.EditorText("composer"); got != "@comp" {
 		t.Fatalf("the menu's keys reached the prompt: %q", got)
+	}
+	// With nothing to pick, Enter sends.
+	th.in.composer.rows = false
+	if acts := press(key.NameReturn); !keyed(acts, "composer", "submit", "@comp") {
+		t.Fatalf("Enter over an empty menu: %+v", acts)
 	}
 
 	th.in.composer.menu, th.in.composer.history = false, true

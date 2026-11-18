@@ -737,7 +737,7 @@ func (a *App) pickAnswer(qi, oi int) {
 		a.answers[req] = m
 	}
 	k := qi*100 + oi
-	on := !m[k]
+	on := !m[k] || !qs[qi].MultiSelect // a single choice stays picked
 	if !qs[qi].MultiSelect {
 		for j := range qs[qi].Options {
 			delete(m, qi*100+j)

@@ -588,9 +588,6 @@ func (a *App) composerChanged(th *ui.Theme, text string) {
 		}
 	}
 	t := detectTrigger(runes, th.EditorCaret("composer"))
-	if t != nil && len(a.questionsLocked()) > 0 {
-		t = nil // a typed answer opens no menus
-	}
 	if t != nil && t.key(runes) == c.dismissed {
 		t = nil
 	}

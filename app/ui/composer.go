@@ -316,7 +316,7 @@ func (th *Theme) prompt(gtx C, s *Scene, w int) D {
 		empty = ed.Len() == 0
 		ed.Submit = true
 		ui := &th.in.composer
-		ui.menu = len(s.Suggest) > 0 || s.SuggestEmpty != ""
+		ui.menu, ui.rows = len(s.Suggest) > 0 || s.SuggestEmpty != "", len(s.Suggest) > 0
 		ui.history = len(s.Thumbs) == 0 && len(s.Questions) == 0
 		ui.thumbs = s.Thumbs
 		d = th.editor(g, "composer", t, "")
@@ -364,8 +364,12 @@ func (th *Theme) composerKeys(gtx C, ed *widget.Editor) {
 	}
 	switch {
 	case ui.menu:
-		for _, n := range []key.Name{key.NameUpArrow, key.NameDownArrow, key.NameReturn, key.NameEnter, key.NameTab, key.NameEscape} {
-			filters = append(filters, key.Filter{Focus: ed, Name: n})
+		// An empty menu still closes on Escape; Enter then sends.
+		filters = append(filters, key.Filter{Focus: ed, Name: key.NameEscape})
+		if ui.rows {
+			for _, n := range []key.Name{key.NameUpArrow, key.NameDownArrow, key.NameReturn, key.NameEnter, key.NameTab} {
+				filters = append(filters, key.Filter{Focus: ed, Name: n})
+			}
 		}
 	case ui.history:
 		browsing := ui.recalled != "" && ed.Text() == ui.recalled

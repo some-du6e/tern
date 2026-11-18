@@ -668,7 +668,8 @@ type composerUI struct {
 	qFolded  string // the folded question, by header and text
 	queueAll bool   // the whole queue shows
 	clicks   map[string]*gesture.Click
-	menu     bool    // the @, / or $ menu is open: the arrows, Enter and Tab are its
+	menu     bool    // the @, / or $ menu is open: Escape is its
+	rows     bool    // and has rows: so are the arrows, Enter and Tab
 	history  bool    // the arrows may walk the prompt history: no pictures, no question
 	recalled string  // the prompt the history last put in
 	thumbs   []Thumb // the pictures, for their chips

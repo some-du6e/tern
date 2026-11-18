@@ -110,8 +110,9 @@ func TestPromptGrowth(t *testing.T) {
 }
 
 // The model trigger stays filled with --accent while its menu is open,
-// ending 8dp before send; the permissions chip, shown when the mode isn't
-// the default, sits left of it and fills while its menu is open.
+// ending 8dp before send. The permissions chip, shown when the mode isn't
+// the default, comes after it (ComposerControlsBar.tsx), 2dp on, against
+// send; it fills while its menu is open, and the trigger doesn't.
 func TestComposerTriggers(t *testing.T) {
 	th := NewTheme()
 	g := glass()
@@ -127,11 +128,17 @@ func TestComposerTriggers(t *testing.T) {
 	}
 	s.Access = &Traits{}
 	img = drawComposer(t, th, s, 200, 0)
-	if n := count(img, 75, 45, 635, accent); n < 60 {
-		t.Errorf("open chip: %d pixels filled, want the chip's width", n)
+	wantPixel(t, img, image.Pt(685, 87), accent, "open chip")
+	// Along a row above its label, the chip's fill runs back to its start.
+	left := 685
+	for left > 45 && near(img.RGBAAt(left-1, 77), accent) {
+		left--
 	}
-	if n := count(img, 75, 635, 687, accent); n != 0 {
-		t.Errorf("the open chip spills into the trigger: %d pixels", n)
+	if w := 687 - left; w < 60 {
+		t.Errorf("open chip: %d wide, want its icon and label", w)
+	}
+	if n := count(img, 87, 45, left-2, accent); n != 0 {
+		t.Errorf("the trigger is filled too: %d pixels", n)
 	}
 }
 
