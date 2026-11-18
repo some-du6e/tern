@@ -90,13 +90,14 @@ func (th *Theme) cardMenuRow(gtx C, r MenuRow) D {
 	m := op.Record(gtx.Ops)
 	d := func(gtx C) D {
 		gtx.Constraints.Min.X = gtx.Constraints.Max.X
-		gtx.Constraints.Min.Y = dp(gtx, 28)
 		right := float32(8)
 		if r.Kind == MenuCheckRow {
 			right = 16
 		}
 		return pad(4, right, 4, 8).Layout(gtx, func(gtx C) D {
-			gtx.Constraints.Min.X = gtx.Constraints.Max.X
+			// At least 28 tall: Gio's Inset keeps the minimum it's given, so
+			// the padding comes off it here.
+			gtx.Constraints.Min = image.Pt(gtx.Constraints.Max.X, dp(gtx, 28-8))
 			text := P.PopoverForeground
 			var kids []layout.FlexChild
 			if r.Kind == MenuCheckRow {
@@ -260,9 +261,8 @@ func (th *Theme) pickerItem(id string, highlighted, disabled bool, w W) W {
 		m := op.Record(gtx.Ops)
 		d := func(gtx C) D {
 			gtx.Constraints.Min.X = gtx.Constraints.Max.X
-			gtx.Constraints.Min.Y = dp(gtx, 28)
 			return pad(4, 8, 4, 8).Layout(gtx, func(gtx C) D {
-				gtx.Constraints.Min.X = gtx.Constraints.Max.X
+				gtx.Constraints.Min = image.Pt(gtx.Constraints.Max.X, dp(gtx, 28-8))
 				return w(gtx)
 			})
 		}(gtx)
