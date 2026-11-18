@@ -160,6 +160,33 @@ func TestStoppedTurnFold(t *testing.T) {
 	}
 }
 
+// A run the user stops opens its fold; the next run closes it again
+// (MessagesTimeline.tsx:596-631).
+func TestStoppedRunOpensItsFold(t *testing.T) {
+	tt := newTimelineTest(t, []t3.Run{{ID: "r1", Status: "running", StartedAt: at(0), Ordinal: 1}},
+		turnItem("p", "user_message", 1, 0, "runId", "r1", "text", "Go", "inputIntent", "turn_start"),
+		turnItem("c", "command_execution", 2, 1, "runId", "r1", "input", "make"),
+	)
+	tt.working("r1")
+	wantShape(t, "running", tt.rows(), "user:p, working, work-live:c")
+	_, th := tt.a.thread("swiss/t1")
+	th.ActiveRunID, th.ActivityRunStatus = "", "interrupted"
+	tt.a.view.runs["r1"] = t3.Run{ID: "r1", Status: "interrupted", StartedAt: at(0), CompletedAt: at(5), Ordinal: 1}
+	rows := tt.rows()
+	wantShape(t, "stopped", rows, "user:p, fold, work:c")
+	if !rows[1].Open || rows[1].Label != "You stopped after 5s" {
+		t.Errorf("fold %q open=%v", rows[1].Label, rows[1].Open)
+	}
+	tt.a.view.put(turnItem("p2", "user_message", 3, 10, "runId", "r2", "text", "Again", "inputIntent", "turn_start"))
+	tt.a.view.runs["r2"] = t3.Run{ID: "r2", Status: "running", StartedAt: at(10), Ordinal: 2}
+	tt.working("r2")
+	rows = tt.rows()
+	wantShape(t, "the next run", rows, "user:p, fold, user:p2, working, thinking")
+	if rows[1].Open {
+		t.Error("the stopped run's fold stayed open")
+	}
+}
+
 // Work after a steer folds under its own "Continued for" below the steer,
 // and the turn's total stays on top (:1519).
 func TestSteerSplitsTheFold(t *testing.T) {

@@ -706,9 +706,11 @@ type threadView struct {
 	// What the user opened in the timeline: folds by run, work groups and
 	// entries by id, kept per thread (disclosureFor).
 	unfolded, groups, open map[string]bool
-	full                   map[string]*t3.TurnItem
-	fetchErr               map[string]string // why an open entry's output didn't load
-	cancel                 func()
+	// The latest run and its status as the timeline last saw them.
+	seenRun, seenStatus string
+	full                map[string]*t3.TurnItem
+	fetchErr            map[string]string // why an open entry's output didn't load
+	cancel              func()
 }
 
 func newView(e *envState, id string, d *disclosure) *threadView {

@@ -28,6 +28,17 @@ func (a *App) timeline(s *ui.Scene, t *t3.Thread, v *threadView, root string) {
 	if in.working {
 		in.activeStarted = parseTime(t.ActivityRunStartedAt)
 	}
+	// A run the user stops opens its fold; a newer run closes the one
+	// before's again (MessagesTimeline.tsx:596-631).
+	if r := in.latest; r != nil {
+		switch {
+		case r.ID == v.seenRun && v.seenStatus == "running" && r.Status == "interrupted":
+			v.unfolded[r.ID] = true
+		case r.ID != v.seenRun && v.seenRun != "":
+			delete(v.unfolded, v.seenRun)
+		}
+		v.seenRun, v.seenStatus = r.ID, r.Status
+	}
 	items := v.sorted()
 	claimed := false
 	for _, r := range deriveRows(timelineEntries(items), in) {
