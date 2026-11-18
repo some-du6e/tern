@@ -693,7 +693,7 @@ func (a *App) sidebar(s *ui.Scene, now time.Time) {
 	if a.filterOpen {
 		a.filterScene(sb, scope)
 	}
-	sb.Renaming = a.renaming
+	sb.Renaming = a.renamingRow
 	if a.snoozeRef != "" {
 		sb.Snooze = &ui.SnoozeMenu{Row: a.snoozeRef, Choices: snoozeItems(a.snoozeMenu, "", false)}
 	}

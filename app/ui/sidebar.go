@@ -581,7 +581,7 @@ func (th *Theme) rowTarget(gtx C, s *Scene, nav string, size image.Point, rect i
 	mine := len(th.in.actions)
 	tag := th.rowKey(nav)
 	th.rowKeys(gtx, nav, tag, rect)
-	focused = gtx.Focused(tag) && th.in.kbdFocus
+	focused = gtx.Focused(tag) && th.in.keyFocus
 	st := clip.Rect{Max: size}.Push(gtx.Ops)
 	c.Add(gtx.Ops)
 	event.Op(gtx.Ops, rc)
@@ -636,13 +636,13 @@ func (th *Theme) rowKeys(gtx C, nav string, tag *int, rect image.Rectangle) {
 		case key.FocusEvent:
 			// Rows only take focus from the keyboard: Tab, or the arrows.
 			if e.Focus {
-				th.in.kbdFocus = true
+				th.in.keyFocus = true
 			}
 		case key.Event:
 			if e.State != key.Press {
 				continue
 			}
-			th.in.kbdFocus = true
+			th.in.keyFocus = true
 			th.rowKey1(nav, e.Name, rect)
 		}
 	}

@@ -97,7 +97,7 @@ type App struct {
 	settledMore int
 	selected    map[string]bool
 	anchor      string
-	renaming    string
+	renamingRow string
 	snoozeRef   string
 	snoozeMenu  []snoozeChoice
 	working     map[string]workingState

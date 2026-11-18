@@ -72,16 +72,17 @@ type input struct {
 	runs        map[string][2]string          // run buttons' language and code, by click id
 	runFailed   map[string]bool               // a run that couldn't start, for its ✕
 	paste       string                        // an editor to paste text into next frame
-	trans       map[string]transState         // the transitions under way, by name
+	fades       map[string]*fade              // transitions in flight, by name
 	winSize     image.Point                   // the window, for popups kept inside it
+	// Keyboard focus: whether it shows (Tab brought it; a pointer press
+	// hides it, as :focus-visible does).
+	keyFocus bool
 	// The sidebar's list: its keyboard tree from the last layout, each
-	// row's focus tag, the row to focus once it's laid out, and whether
-	// focus came from the keyboard (T3 rings rows on :focus-visible only);
-	// the list's height and how far it's scrolled.
+	// row's focus tag and the row to focus once it's laid out; the list's
+	// height and how far it's scrolled.
 	nav         listNav
 	rowTags     map[string]*int
 	focusRow    string
-	kbdFocus    bool
 	listView    int
 	listScroll  int
 	resultHover int  // the search result under the pointer, plus one
@@ -246,7 +247,7 @@ func (th *Theme) trackPointer(gtx C, size image.Point) {
 		}
 		// A press ends keyboard navigation: focus rings show only after the
 		// keyboard moved focus, as :focus-visible does.
-		th.in.kbdFocus = false
+		th.in.keyFocus = false
 		if e.Buttons == pointer.ButtonSecondary {
 			th.in.ctxAt = e.Position.Round()
 		}
@@ -347,64 +348,6 @@ func (th *Theme) tipDelay(gtx C, id, tip string, size image.Point, up bool, alig
 	op.Affine(f32.Affine2D{}.Scale(origin, f32.Pt(k, k))).Add(gtx.Ops)
 	call.Add(gtx.Ops)
 	op.Defer(gtx.Ops, m2.Stop())
-}
-
-// transState is a value easing between 0 and 1.
-type transState struct {
-	from, to float32
-	at       time.Time
-}
-
-func (s transState) value(now time.Time, d time.Duration) float32 {
-	t := clamp01(float32(now.Sub(s.at)) / float32(d))
-	return s.from + (s.to-s.from)*cubicBezier(0.4, 0, 0.2, 1, t)
-}
-
-// transition eases the value named key toward 1 (on) or 0 over d on T3's
-// default curve, cubic-bezier(0.4, 0, 0.2, 1), and returns where it is: a
-// CSS transition. A value seen for the first time starts where it's going.
-func (th *Theme) transition(gtx C, key string, on bool, d time.Duration) float32 {
-	if th.in.trans == nil {
-		th.in.trans = map[string]transState{}
-	}
-	to := float32(0)
-	if on {
-		to = 1
-	}
-	s, ok := th.in.trans[key]
-	if !ok {
-		th.in.trans[key] = transState{from: to, to: to, at: gtx.Now}
-		return to
-	}
-	cur := s.value(gtx.Now, d)
-	if s.to != to {
-		s = transState{from: cur, to: to, at: gtx.Now}
-		th.in.trans[key] = s
-	}
-	if cur != s.to {
-		gtx.Execute(op.InvalidateCmd{})
-	}
-	return cur
-}
-
-// cubicBezier is CSS's cubic-bezier(x1, y1, x2, y2) at progress x: the
-// curve's y where its x is x.
-func cubicBezier(x1, y1, x2, y2, x float32) float32 {
-	at := func(p1, p2, t float32) float32 {
-		u := 1 - t
-		return 3*u*u*t*p1 + 3*u*t*t*p2 + t*t*t
-	}
-	lo, hi := float32(0), float32(1)
-	t := x
-	for range 24 {
-		if at(x1, x2, t) < x {
-			lo = t
-		} else {
-			hi = t
-		}
-		t = (lo + hi) / 2
-	}
-	return at(y1, y2, t)
 }
 
 // tooltip is T3's tooltip popup: popover surface, 1dp border, radius 6,

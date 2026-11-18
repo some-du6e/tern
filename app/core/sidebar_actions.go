@@ -793,7 +793,7 @@ func (a *App) startRename(r string) {
 		a.mu.Unlock()
 		return
 	}
-	a.renaming = r
+	a.renamingRow = r
 	title := t.Title
 	a.mu.Unlock()
 	a.onUI(func(th *ui.Theme) {
@@ -806,8 +806,8 @@ func (a *App) startRename(r string) {
 // the edit.
 func (a *App) commitRename(title string) {
 	a.mu.Lock()
-	r := a.renaming
-	a.renaming = ""
+	r := a.renamingRow
+	a.renamingRow = ""
 	e, t := a.thread(r)
 	a.mu.Unlock()
 	title = strings.TrimSpace(title)
@@ -825,7 +825,7 @@ func (a *App) rowClick(th *ui.Theme, act ui.Action) {
 	r := strings.TrimPrefix(act.ID, "thread:")
 	a.mu.Lock()
 	switch {
-	case r == a.renaming:
+	case r == a.renamingRow:
 		// The click is in its title's editor.
 		a.mu.Unlock()
 		return
@@ -948,7 +948,7 @@ func (a *App) sidebarAction(th *ui.Theme, act ui.Action) bool {
 			a.commitRename(th.EditorText("rename"))
 		case "key":
 			a.mu.Lock()
-			a.renaming = ""
+			a.renamingRow = ""
 			a.mu.Unlock()
 		}
 		return true
