@@ -107,6 +107,13 @@ type GuestShare struct {
 	GuestName string `json:"guestName"`
 }
 
+// ProviderSession is a provider's session attached to a thread
+// (OrchestrationV2ProviderSession); a move to another worktree detaches
+// it, so the agent starts again there.
+type ProviderSession struct {
+	ID string `json:"id"`
+}
+
 // AppThread is the part of a thread's full record (OrchestrationV2AppThread)
 // that its stream's projection and thread events carry beyond the shell.
 type AppThread struct {
@@ -262,7 +269,8 @@ type Message struct {
 type ThreadItem struct {
 	Kind       string `json:"kind"`
 	Projection *struct {
-		Thread           *AppThread `json:"thread"`
+		Thread           *AppThread        `json:"thread"`
+		ProviderSessions []ProviderSession `json:"providerSessions"`
 		VisibleTurnItems []struct {
 			Item json.RawMessage `json:"item"`
 		} `json:"visibleTurnItems"`

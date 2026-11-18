@@ -3,6 +3,7 @@ package core
 import (
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 	"time"
 
@@ -402,6 +403,58 @@ func (a *App) findRefs(more bool) {
 	}()
 }
 
+// inside reports whether path is dir or under it, as the server writes
+// paths: case aside on Windows.
+func inside(path, dir string) bool {
+	norm := func(p string) string { return strings.TrimRight(strings.ReplaceAll(p, `\`, "/"), "/") }
+	path, dir = norm(path), norm(dir)
+	if len(dir) > 1 && dir[1] == ':' {
+		path, dir = strings.ToLower(path), strings.ToLower(dir)
+	}
+	return dir != "" && (path == dir || strings.HasPrefix(path, dir+"/"))
+}
+
+// refTarget is where picking a ref takes a thread
+// (resolveBranchSelectionTarget): the checkout to switch in, the worktree
+// the thread then works in ("" for the project's own folder), and whether
+// the ref is checked out there already.
+type refTarget struct {
+	cwd, worktree string
+	reuse         bool
+}
+
+// selectionTarget is where picking r takes a thread working in worktree
+// ("" for the project's folder, root): a ref checked out somewhere is
+// used where it is, the project's folder when that checkout holds it;
+// else the default branch takes a worktree's thread back to the folder,
+// and any other ref switches the checkout the thread is in.
+func selectionTarget(root, worktree string, r t3.VcsRef) refTarget {
+	switch {
+	case r.WorktreePath != "" && inside(root, r.WorktreePath):
+		return refTarget{cwd: r.WorktreePath, reuse: true}
+	case r.WorktreePath != "":
+		return refTarget{cwd: r.WorktreePath, worktree: r.WorktreePath, reuse: true}
+	case worktree != "" && !r.IsDefault:
+		return refTarget{cwd: worktree, worktree: worktree}
+	}
+	return refTarget{cwd: root}
+}
+
+// turnRunning reports whether t's turn runs, so it can be stopped
+// (deriveCanInterruptRunningThread): T3 won't move a thread to another
+// checkout under it.
+func turnRunning(t *t3.Thread) bool { return t.ActiveRunID != "" || activeStatus[t.ActivityRunStatus] }
+
+// moveBlocked reports whether picking r would move thread t (nil for the
+// draft) to another checkout while its turn runs. Call with the lock held.
+func moveBlocked(t *t3.Thread, root string, r t3.VcsRef) bool {
+	return t != nil && turnRunning(t) && selectionTarget(root, t.WorktreePath, r).worktree != t.WorktreePath
+}
+
+// worktreeBlocked is the branch picker's notice while some ref can't be
+// picked for the turn that runs.
+const worktreeBlocked = "Stop the current turn to switch worktrees."
+
 // localBranchName is the branch checking out remote ref name makes
 // (deriveLocalBranchNameFromRemoteRef): the name past its remote.
 func localBranchName(name string) string {
@@ -411,15 +464,19 @@ func localBranchName(name string) string {
 	return name
 }
 
-// pickRef is the branch picker's choice: ref r, or with create a new ref
-// named r.Name. For a draft starting a new worktree it's only the base.
-// Else the checkout switches to it with vcs.switchRef (vcs.createRef
-// first for a new one), the row naming it meanwhile (a remote ref by the
-// local branch it makes), then a thread records the branch it landed on
-// and the refs are read again. The server sends the new status itself.
+// pickRef is the branch picker's choice (selectBranch, createRef):
+// ref r, or with create a new ref named r.Name. For a draft starting a
+// new worktree it's only the base; another draft switches its checkout. A
+// thread's pick goes where selectionTarget says, and not at all while its
+// turn runs if that would move it: a ref checked out somewhere moves the
+// thread there as it is; otherwise that checkout switches with
+// vcs.switchRef (a new ref is made in the thread's own, vcs.createRef),
+// the row naming it meanwhile (a remote ref by the local branch it
+// makes), and the thread records the branch and worktree it landed in.
+// The server sends the new status itself; the refs are read again.
 func (a *App) pickRef(th *ui.Theme, r t3.VcsRef, create bool) {
 	a.mu.Lock()
-	e, t, _, v := a.checkout()
+	e, t, p, v := a.checkout()
 	a.branchPicker = nil
 	if v == nil || e.conn == nil || r.Name == "" {
 		a.mu.Unlock()
@@ -431,15 +488,36 @@ func (a *App) pickRef(th *ui.Theme, r t3.VcsRef, create bool) {
 		th.Focus("composer")
 		return
 	}
+	target := refTarget{cwd: v.cwd}
+	var sessions []string
+	if t != nil {
+		target.worktree = t.WorktreePath
+		if !create {
+			target = selectionTarget(p.WorkspaceRoot, t.WorktreePath, r)
+		}
+		if target.worktree != t.WorktreePath {
+			if turnRunning(t) {
+				a.mu.Unlock()
+				return
+			}
+			sessions = a.sessionsLocked(t)
+		}
+	}
+	conn, key, threadID := e.conn, vcsKey(e.id(), v.cwd), ""
+	if t != nil {
+		threadID = t.ID
+	}
+	if target.reuse {
+		a.mu.Unlock()
+		th.Focus("composer")
+		go a.moveThread(conn, threadID, r.Name, target.worktree, sessions)
+		return
+	}
 	branch := r.Name
 	if r.IsRemote {
 		branch = localBranchName(r.Name)
 	}
 	v.switching = branch
-	conn, cwd, key, threadID := e.conn, v.cwd, vcsKey(e.id(), v.cwd), ""
-	if t != nil {
-		threadID = t.ID
-	}
 	a.mu.Unlock()
 	a.changed()
 	th.Focus("composer")
@@ -450,9 +528,9 @@ func (a *App) pickRef(th *ui.Theme, r t3.VcsRef, create bool) {
 		what, err := "Failed to switch ref.", error(nil)
 		if create {
 			what = "Failed to create and switch ref."
-			err = conn.Call("vcs.createRef", map[string]any{"cwd": cwd, "refName": r.Name, "switchRef": true}, &res)
+			err = conn.Call("vcs.createRef", map[string]any{"cwd": target.cwd, "refName": r.Name, "switchRef": true}, &res)
 		} else {
-			err = conn.Call("vcs.switchRef", map[string]any{"cwd": cwd, "refName": r.Name}, &res)
+			err = conn.Call("vcs.switchRef", map[string]any{"cwd": target.cwd, "refName": r.Name}, &res)
 		}
 		a.mu.Lock()
 		v.switching = ""
@@ -465,10 +543,44 @@ func (a *App) pickRef(th *ui.Theme, r t3.VcsRef, create bool) {
 			branch = res.RefName
 		}
 		if threadID != "" {
-			a.setThreadBranch(conn, threadID, branch)
+			a.moveThread(conn, threadID, branch, target.worktree, sessions)
 		}
 		a.loadRefs(conn, key, v)
 	}()
+}
+
+// sessionsLocked are the provider sessions attached to the open thread
+// t. Call with the lock held.
+func (a *App) sessionsLocked(t *t3.Thread) []string {
+	v := a.view
+	if v == nil || v.id != t.ID {
+		return nil
+	}
+	var out []string
+	for id := range v.sessions {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// moveThread records the branch thread id is on and the worktree it works
+// in, "" for the project's folder (thread.metadata.update). Leaving its
+// worktree it first detaches sessions, so its agent starts again in the
+// new one, as T3's setThreadBranch does.
+func (a *App) moveThread(conn *t3.Conn, id, branch, worktree string, sessions []string) {
+	for _, s := range sessions {
+		if err := conn.Dispatch(map[string]any{"type": "provider-session.detach", "threadId": id, "providerSessionId": s, "reason": "client-requested"}); err != nil {
+			a.failf("Couldn't stop the thread's session", err)
+		}
+	}
+	cmd := map[string]any{"type": "thread.metadata.update", "threadId": id, "branch": branch, "worktreePath": nil}
+	if worktree != "" {
+		cmd["worktreePath"] = worktree
+	}
+	if err := conn.Dispatch(cmd); err != nil {
+		a.failf("Couldn't record the thread's branch", err)
+	}
 }
 
 // openInEditor opens the checkout in editor: on its own machine with

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"gioui.org/font"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/unit"
@@ -376,6 +377,19 @@ func TestBranchPickerDrawn(t *testing.T) {
 		t.Errorf("the empty block spans y %d..%d, want %d..%d", first, last, list, list+36-1)
 	}
 
+	// A notice comes after the refs as a status line, padded 8 by 12, its
+	// 12/16 lines wrapping.
+	notice := "Stop the current turn to switch worktrees."
+	s.Card.Picker = &BranchPicker{Refs: []BranchRef{{Name: "main", Tag: "default", Disabled: true}}, Notice: notice}
+	th := NewTheme()
+	img = drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, s) })
+	var ops op.Ops
+	gtx := layout.Context{Ops: &ops, Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Constraints{Max: image.Pt(262-2-24, 400)}}
+	lines := th.boxText(gtx, Txt{Size: 12, LineH: 16.0 / 12, Font: UI(font.Medium)}, notice).Size.Y
+	end := list + 8 + 28 + 8 + 8 + lines + 8
+	if _, last := run(img, 1157+3, list, list+200, P.Popover); last != end-1 {
+		t.Errorf("the picker's surface ends at %d, want %d: the notice's %ddp of lines padded 8 under the refs", last, end-1, lines)
+	}
 }
 
 // A Git action on the default branch asks in T3's dialog: the backdrop

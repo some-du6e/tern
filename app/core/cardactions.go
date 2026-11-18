@@ -366,7 +366,7 @@ func (a *App) refPickerNow() (*ui.BranchPicker, *vcsState) {
 	if v == nil || a.branchPicker == nil {
 		return nil, v
 	}
-	return a.refPickerScene(v, p.WorkspaceRoot, t == nil && a.draftWorktree), v
+	return a.refPickerScene(v, t, p.WorkspaceRoot, t == nil && a.draftWorktree), v
 }
 
 // pickerRef is the branch picker's ref i, as the scene lists them. Call

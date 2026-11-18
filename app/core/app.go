@@ -748,6 +748,9 @@ type threadView struct {
 	// shared with. unsharing is the close on its way.
 	guestShare *t3.GuestShare
 	unsharing  bool
+	// The provider sessions attached to it, by id: moving it to another
+	// worktree detaches them.
+	sessions map[string]bool
 }
 
 func newView(e *envState, id string) *threadView {
@@ -888,6 +891,10 @@ func (a *App) subscribeThread(e *envState, conn *t3.Conn, gen int, r string) {
 			if th := it.Projection.Thread; th != nil {
 				a.setGuestShare(v, th.GuestShare)
 			}
+			v.sessions = map[string]bool{}
+			for _, ps := range it.Projection.ProviderSessions {
+				v.sessions[ps.ID] = true
+			}
 			v.cursor, v.more, v.loaded = it.HistoryCursor, it.HasMoreHistory, true
 		case it.Kind == "event" && it.Event != nil:
 			switch t := it.Event.Type; {
@@ -910,6 +917,18 @@ func (a *App) subscribeThread(e *envState, conn *t3.Conn, gen int, r string) {
 				var th t3.AppThread
 				if json.Unmarshal(it.Event.Payload, &th) == nil {
 					a.setGuestShare(v, th.GuestShare)
+				}
+			case t == "provider-session.attached" || t == "provider-session.updated":
+				var ps t3.ProviderSession
+				if json.Unmarshal(it.Event.Payload, &ps) == nil && ps.ID != "" && v.sessions != nil {
+					v.sessions[ps.ID] = true
+				}
+			case t == "provider-session.detached":
+				var d struct {
+					ID string `json:"providerSessionId"`
+				}
+				if json.Unmarshal(it.Event.Payload, &d) == nil {
+					delete(v.sessions, d.ID)
 				}
 			}
 		}

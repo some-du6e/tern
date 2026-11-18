@@ -255,6 +255,92 @@ func TestBranchPicker(t *testing.T) {
 	}
 }
 
+// A thread in a worktree picks refs as T3's does (resolveBranchSelectionTarget):
+// one checked out somewhere moves it there without a switch, the project's
+// folder holding the default branch; any other switches its own worktree.
+// A move detaches its provider sessions first, so its agent starts again
+// in the new checkout, and none can happen while its turn runs: those refs
+// are off, and the picker says why.
+func TestBranchPickerWorktrees(t *testing.T) {
+	a, f := liveApp(t, status(nil),
+		t3.VcsRef{Name: "fix/lexer", Current: true, WorktreePath: "/work/widgets-wt/fix"},
+		t3.VcsRef{Name: "main", IsDefault: true, WorktreePath: "/work/widgets"},
+		t3.VcsRef{Name: "feature/tabs", WorktreePath: "/work/widgets-wt/tabs"},
+		t3.VcsRef{Name: "spike"})
+	f.on("vcs.switchRef", func(f *fakeEnv, r fakeReq) { f.exit(r, map[string]any{"refName": "spike"}) })
+	a.mu.Lock()
+	e := a.envs[0]
+	e.projects["p1"] = t3.Project{ID: "p1", Title: "widgets", WorkspaceRoot: "/work/widgets"}
+	th3 := e.threads["t1"]
+	th3.WorktreePath, th3.Branch, th3.ActiveRunID = "/work/widgets-wt/fix", "fix/lexer", "run-2"
+	a.mu.Unlock()
+	sub := f.wait("orchestration.subscribeThread", 1)
+	f.chunk(sub, map[string]any{"kind": "snapshot", "projection": map[string]any{"thread": map[string]any{"id": "t1"}, "providerSessions": []any{map[string]any{"id": "ps-1"}}}})
+	eventually(t, "the worktree's refs and the thread's session", func() bool {
+		s := built(a, time.Now())
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		return s.Card.Branch != nil && !s.Card.Branch.Disabled && a.view.sessions["ps-1"]
+	})
+	th := ui.NewTheme()
+	a.handle(th, ui.Action{ID: "card.branch", Kind: "click"})
+	p := built(a, time.Now()).Card.Picker
+	if p.Notice != "Stop the current turn to switch worktrees." {
+		t.Errorf("notice %q", p.Notice)
+	}
+	var off []string
+	for _, r := range p.Refs {
+		if r.Disabled {
+			off = append(off, r.Name)
+		}
+	}
+	if strings.Join(off, " ") != "main feature/tabs" {
+		t.Fatalf("refs off while the turn runs: %v", off)
+	}
+	a.handle(th, ui.Action{ID: "branch.ref:2", Kind: "click"})
+	time.Sleep(50 * time.Millisecond)
+	if n := len(f.requests("orchestration.dispatchCommand:thread.metadata.update")); n != 0 {
+		t.Fatalf("a running turn's thread moved: %d updates", n)
+	}
+
+	a.mu.Lock()
+	th3.ActiveRunID = ""
+	a.mu.Unlock()
+	if p := built(a, time.Now()).Card.Picker; p == nil {
+		t.Fatal("the blocked pick closed the picker")
+	} else if p.Notice != "" {
+		t.Errorf("notice with no turn running %q", p.Notice)
+	}
+	a.handle(th, ui.Action{ID: "branch.ref:2", Kind: "click"})
+	if d := f.wait("orchestration.dispatchCommand:provider-session.detach", 1).Payload; d["providerSessionId"] != "ps-1" || d["threadId"] != "t1" || d["reason"] != "client-requested" {
+		t.Fatalf("detach %v", d)
+	}
+	if d := f.wait("orchestration.dispatchCommand:thread.metadata.update", 1).Payload; d["branch"] != "feature/tabs" || d["worktreePath"] != "/work/widgets-wt/tabs" {
+		t.Fatalf("move to the ref's worktree %v", d)
+	}
+
+	a.handle(th, ui.Action{ID: "card.branch", Kind: "click"})
+	a.handle(th, ui.Action{ID: "branch.ref:3", Kind: "click"})
+	if r := f.wait("vcs.switchRef", 1).Payload; r["cwd"] != "/work/widgets-wt/fix" || r["refName"] != "spike" {
+		t.Fatalf("switch in the thread's worktree %v", r)
+	}
+	if d := f.wait("orchestration.dispatchCommand:thread.metadata.update", 2).Payload; d["branch"] != "spike" || d["worktreePath"] != "/work/widgets-wt/fix" {
+		t.Fatalf("staying put %v", d)
+	}
+
+	a.handle(th, ui.Action{ID: "card.branch", Kind: "click"})
+	a.handle(th, ui.Action{ID: "branch.ref:1", Kind: "click"})
+	if d := f.wait("orchestration.dispatchCommand:thread.metadata.update", 3).Payload; d["branch"] != "main" || d["worktreePath"] != nil {
+		t.Fatalf("back to the project's folder %v", d)
+	}
+	if n := len(f.requests("orchestration.dispatchCommand:provider-session.detach")); n != 2 {
+		t.Errorf("%d detaches, want one for each move", n)
+	}
+	if n := len(f.requests("vcs.switchRef")); n != 1 {
+		t.Errorf("%d switches: refs checked out already move the thread instead", n)
+	}
+}
+
 // A long list of refs comes a page at a time: the picker says how many it
 // has and, asked near its end, loads the next page from the cursor the
 // last one gave; a remote ref it switches to is recorded by the local

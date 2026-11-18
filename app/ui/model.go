@@ -430,6 +430,7 @@ type MenuRow struct {
 type BranchPicker struct {
 	Refs      []BranchRef
 	Create    string // "Create new ref "<name>"" when no ref matches exactly
+	Notice    string // why some refs are off: "Stop the current turn to switch worktrees."
 	Status    string // "Loading refs...", "Showing 50 of 120 refs"
 	Highlight int
 	More      bool // the server has more refs for the search

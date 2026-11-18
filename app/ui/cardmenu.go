@@ -237,10 +237,14 @@ func (th *Theme) branchPicker(gtx C, p *BranchPicker, w int) D {
 				})
 			}))
 		}
-		if p.Status != "" {
+		// The notice, then the status, each a ComboboxStatus, which wraps.
+		for _, line := range []string{p.Notice, p.Status} {
+			if line == "" {
+				continue
+			}
 			kids = append(kids, rigid(func(gtx C) D {
 				return pad(8, 12, 8, 12).Layout(gtx, func(gtx C) D {
-					return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: P.MutedForeground, Font: UI(font.Medium), MaxLines: 1}, p.Status)
+					return th.boxText(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: P.MutedForeground, Font: UI(font.Medium)}, line)
 				})
 			}))
 		}

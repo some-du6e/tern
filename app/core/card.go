@@ -198,7 +198,7 @@ func (a *App) cardScene(s *ui.Scene, e *envState, t *t3.Thread, p t3.Project, ha
 		}
 		d.Branch = b
 		if a.branchPicker != nil {
-			d.Picker = a.refPickerScene(v, p.WorkspaceRoot, t == nil && a.draftWorktree)
+			d.Picker = a.refPickerScene(v, t, p.WorkspaceRoot, t == nil && a.draftWorktree)
 		}
 		if a.cardMenu == "copybranch" && value != "" {
 			d.Menu = &ui.CardMenu{For: "copybranch", Rows: []ui.MenuRow{{Label: "Copy branch name", Icon: "copy"}}, AtPointer: true}
@@ -394,12 +394,14 @@ func (a *App) pickerRefs(v *vcsState) *t3.VcsRefs {
 	return v.refs
 }
 
-// refPickerScene is the open branch picker (BranchToolbarBranchSelector.tsx):
-// the refs found for its search, each with its first tag against the
-// project's folder root, then a ref to create when none is named that
-// (offered while the refs load too), except while picking a new
-// worktree's base; and how much is loaded.
-func (a *App) refPickerScene(v *vcsState, root string, choosingBase bool) *ui.BranchPicker {
+// refPickerScene is thread t's (nil for the draft's) open branch picker
+// (BranchToolbarBranchSelector.tsx): the refs found for its search, each
+// with its first tag against the project's folder root and off when
+// picking it would move the thread while its turn runs, which a notice
+// says; then a ref to create when none is named that (offered while the
+// refs load too), except while picking a new worktree's base; and how
+// much is loaded.
+func (a *App) refPickerScene(v *vcsState, t *t3.Thread, root string, choosingBase bool) *ui.BranchPicker {
 	pk := a.branchPicker
 	p := &ui.BranchPicker{Highlight: pk.hi}
 	found := a.pickerRefs(v)
@@ -409,8 +411,12 @@ func (a *App) refPickerScene(v *vcsState, root string, choosingBase bool) *ui.Br
 	if found != nil {
 		for _, r := range found.Refs {
 			exact = exact || r.Name == name
+			blocked := !choosingBase && moveBlocked(t, root, r)
+			if blocked {
+				p.Notice = worktreeBlocked
+			}
 			if matchesRef(r.Name, q) {
-				p.Refs = append(p.Refs, ui.BranchRef{Name: r.Name, Tag: refTag(r, root)})
+				p.Refs = append(p.Refs, ui.BranchRef{Name: r.Name, Tag: refTag(r, root), Disabled: blocked})
 			}
 		}
 	}
