@@ -183,6 +183,27 @@ func (th *Theme) Text(gtx C, t Txt, s string) D {
 	return l.Layout(gtx, th.Shaper, t.Font, t.Size, s, mat)
 }
 
+// capText draws s on one line with its capitals centred on y mid (px from
+// the current origin), as T3 trims a label's box to its cap height
+// (text-box: trim-both cap alphabetic) and centres that. It returns the
+// line's width.
+func (th *Theme) capText(gtx C, t Txt, s string, mid int) int {
+	if t.Size == 0 {
+		t.Size = SizeUI
+	}
+	t.MaxLines = 1
+	g := gtx
+	g.Constraints.Min = image.Point{}
+	m := op.Record(gtx.Ops)
+	d := th.Text(g, t, s)
+	call := m.Stop()
+	baseline := d.Size.Y - d.Baseline
+	capH := capEm * float32(gtx.Sp(t.Size))
+	defer op.Offset(image.Pt(0, mid+int(capH/2+0.5)-baseline)).Push(gtx.Ops).Pop()
+	call.Add(gtx.Ops)
+	return d.Size.X
+}
+
 // Label is the common case: one line of UI text.
 func (th *Theme) Label(gtx C, col color.NRGBA, w font.Weight, s string) D {
 	return th.Text(gtx, Txt{Color: col, Font: UI(w), MaxLines: 1}, s)

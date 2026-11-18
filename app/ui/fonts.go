@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"bytes"
 	"embed"
 	"io/fs"
 	"path"
@@ -27,6 +28,20 @@ var fontFiles embed.FS
 // platform files set them.
 var sans, mono font.Typeface
 
+// capEm is the UI font's cap height in ems, from its OS/2 table: 0.727 for
+// Inter, about 0.705 for SF Pro. T3 trims labels to their caps
+// (text-box: trim-both cap alphabetic) and centres that band.
+var capEm float32 = 0.727
+
+// capHeightEm reads a font's cap height in ems, or 0.
+func capHeightEm(data []byte) float32 {
+	face, err := fontapi.ParseTTF(bytes.NewReader(data))
+	if err != nil || face.Upem() == 0 {
+		return 0
+	}
+	return face.LineMetric(fontapi.CapHeight) / float32(face.Upem())
+}
+
 // faces is every embedded face, then the platform's own (systemFaces).
 // The Inter instances all name their style "Regular", so each gets its
 // weight from its file name, Inter-<Weight>.ttf, instead.
@@ -44,6 +59,9 @@ func faces() []font.FontFace {
 			face, err := opentype.Parse(data)
 			if err != nil {
 				panic(err)
+			}
+			if c := capHeightEm(data); w == font.Medium && c > 0 {
+				capEm = c
 			}
 			out = append(out, font.FontFace{Font: font.Font{Typeface: "Inter", Weight: w}, Face: face})
 			return nil
