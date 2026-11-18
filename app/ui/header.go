@@ -6,6 +6,7 @@ import (
 
 	"gioui.org/f32"
 	"gioui.org/font"
+	"gioui.org/io/event"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
@@ -307,11 +308,13 @@ func (th *Theme) renameField(gtx C, at image.Point, w int, win image.Point) {
 }
 
 // hover is hit without the pointer cursor, for text that only has a
-// tooltip.
+// tooltip, or a surface that keeps its presses. Right-clicks on it still
+// report, as they bubble up to its container's menu in T3.
 func (th *Theme) hover(gtx C, id string, size image.Point) {
-	c, _ := th.events(gtx, id)
+	c, rc := th.events(gtx, id)
 	defer clip.Rect{Max: size}.Push(gtx.Ops).Pop()
 	c.Add(gtx.Ops)
+	event.Op(gtx.Ops, rc)
 }
 
 // setAnchor remembers where the menu target id opens, in the window.

@@ -269,6 +269,19 @@ func (th *Theme) cardContent(gtx C, s *Scene, dn density) D {
 	}
 	section(workspace, false)
 	section(vcs, dn == densityFull)
+	if y == 0 {
+		// With every row hidden, a way to bring them back, padded 8; the
+		// items menu hangs from its bottom left.
+		defer op.Offset(image.Pt(dp(gtx, 8), dp(gtx, 8))).Push(gtx.Ops).Pop()
+		g := gtx
+		g.Constraints = layout.Constraints{Max: image.Pt(rowW, 1<<20)}
+		open := d.Menu != nil && d.Menu.For == "items"
+		h := th.row(g, ctl{id: "card.choose", popup: true, open: open}, "sliders-horizontal", 16, "Choose what to show").Size.Y
+		if open && !d.Menu.AtPointer {
+			th.deferBelow(gtx, image.Pt(0, h+dp(gtx, 4)), func(gtx C) D { return th.cardMenu(gtx, d.Menu, dp(gtx, 232)) })
+		}
+		return D{Size: image.Pt(w, h+dp(gtx, 16))}
+	}
 	return D{Size: image.Pt(w, y)}
 }
 
@@ -522,6 +535,8 @@ func (th *Theme) runRow(d *ThreadDetails) W {
 			if dark {
 				col = P.MutedForeground
 			}
+			// Not a button, but its right-click copies the path.
+			th.hover(gtx, "card.runlocked", image.Pt(w, dp(gtx, rowH)))
 			content(gtx, w-dp(gtx, 1), col)
 			return D{Size: image.Pt(w, dp(gtx, rowH))}
 		}

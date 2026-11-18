@@ -64,11 +64,34 @@ func gitCwd(t *t3.Thread, p t3.Project) string {
 	return p.WorkspaceRoot
 }
 
+// cardItems are the card's rows the "Show in thread details" menu turns
+// on and off (threadDetailsItems.ts), in its order; all on by default.
+// T3's Servers, Automations, Lineage, Side chats, Usage limits and Context
+// window join them with their sections.
+var cardItems = []struct{ id, label string }{
+	{"environment", "Environment and worktree"}, {"openIn", "Open in editor"}, {"scripts", "Project scripts"},
+	{"branch", "Branch and pull request"}, {"gitActions", "Git actions"}, {"changes", "Changes"},
+}
+
+// itemsMenu is the card's own menu: its items with their checks, then
+// Reset to default, off while everything is at its default.
+func (a *App) itemsMenu() []ui.MenuRow {
+	rows := []ui.MenuRow{{Kind: ui.MenuGroupLabel, Label: "Show in thread details"}}
+	for _, it := range cardItems {
+		rows = append(rows, ui.MenuRow{Kind: ui.MenuCheckRow, Label: it.label, Checked: !a.itemsHidden[it.id]})
+	}
+	return append(rows, ui.MenuRow{Kind: ui.MenuSeparator}, ui.MenuRow{Label: "Reset to default", Disabled: len(a.itemsHidden) == 0})
+}
+
 // cardScene fills the details card for thread t (nil for the draft) in
 // project p, and makes sure its checkout's status is streaming.
 func (a *App) cardScene(s *ui.Scene, e *envState, t *t3.Thread, p t3.Project, hasProject bool, now time.Time) {
 	d := &ui.ThreadDetails{}
 	s.Card = d
+	show := func(item string) bool { return !a.itemsHidden[item] }
+	if a.cardMenu == "items" {
+		d.Menu = &ui.CardMenu{For: "items", Rows: a.itemsMenu(), AtPointer: a.cardAtPointer}
+	}
 	if !hasProject {
 		return
 	}
@@ -94,16 +117,19 @@ func (a *App) cardScene(s *ui.Scene, e *envState, t *t3.Thread, p t3.Project, ha
 	case worktree != "":
 		icon = "folder-git"
 	}
+	path := a.workspacePath(t, p)
 	tip := label
-	if path := worktree; path != "" || !worktreeMode {
-		if path == "" {
-			path = p.WorkspaceRoot
-		}
+	if path != "" {
 		tip = path
 	}
-	d.Run = &ui.RunContext{Machine: machineKind(e.config), Label: e.env.Label, Tip: e.env.Label, Workspace: icon, WorkspaceTip: tip, Locked: locked}
-	if !locked && a.cardMenu == "run" {
+	if show("environment") {
+		d.Run = &ui.RunContext{Machine: machineKind(e.config), Label: e.env.Label, Tip: e.env.Label, Workspace: icon, WorkspaceTip: tip, Locked: locked}
+	}
+	switch {
+	case !locked && a.cardMenu == "run":
 		d.Menu = &ui.CardMenu{For: "run", Rows: runMenu(worktree, a.draftWorktree)}
+	case a.cardMenu == "copypath" && path != "":
+		d.Menu = &ui.CardMenu{For: "copypath", Rows: []ui.MenuRow{{Label: "Copy full path", Icon: "copy"}}, AtPointer: true}
 	}
 
 	// Open in editor.
@@ -114,7 +140,9 @@ func (a *App) cardScene(s *ui.Scene, e *envState, t *t3.Thread, p t3.Project, ha
 	if pref != "" {
 		o.Label = "Open in " + editorLabel(pref)
 	}
-	d.OpenIn = o
+	if show("openIn") {
+		d.OpenIn = o
+	}
 	if a.cardMenu == "openin" {
 		d.Menu = &ui.CardMenu{For: "openin", Rows: editorMenu(choices, pref, mode, target, e.env.Label, a.hintSeen, cwd == "")}
 	}
@@ -124,7 +152,9 @@ func (a *App) cardScene(s *ui.Scene, e *envState, t *t3.Thread, p t3.Project, ha
 	if ps := primaryScript(p.Scripts, a.lastScripts[p.ID]); ps != nil {
 		sc.Primary, sc.Icon = ps.Name, ps.Icon
 	}
-	d.Scripts = sc
+	if show("scripts") {
+		d.Scripts = sc
+	}
 	if a.cardMenu == "scripts" && sc.Any {
 		var rows []ui.MenuRow
 		for _, s := range p.Scripts {
@@ -140,11 +170,8 @@ func (a *App) cardScene(s *ui.Scene, e *envState, t *t3.Thread, p t3.Project, ha
 	if !offersGit {
 		return
 	}
-	if isRepo {
-		value := branchValue(st, t)
-		if worktreeMode && worktree == "" && a.draftBase != "" {
-			value = a.draftBase
-		}
+	if isRepo && show("branch") {
+		value := a.branchOf(t, v)
 		b := &ui.BranchRow{Label: "Select ref", Disabled: v.refs == nil || v.busy}
 		switch {
 		case value != "" && worktreeMode && worktree == "":
@@ -156,10 +183,13 @@ func (a *App) cardScene(s *ui.Scene, e *envState, t *t3.Thread, p t3.Project, ha
 		if a.branchPicker != nil {
 			d.Picker = a.refPickerScene(v)
 		}
+		if a.cardMenu == "copybranch" && value != "" {
+			d.Menu = &ui.CardMenu{For: "copybranch", Rows: []ui.MenuRow{{Label: "Copy branch name", Icon: "copy"}}, AtPointer: true}
+		}
 	}
 
 	if !isRepo {
-		d.InitGit = true
+		d.InitGit = show("gitActions")
 		return
 	}
 	busy := v.running != nil
@@ -193,7 +223,9 @@ func (a *App) cardScene(s *ui.Scene, e *envState, t *t3.Thread, p t3.Project, ha
 	} else if done != nil {
 		g.Success = &ui.GitSuccess{Title: done.title, Description: done.desc}
 	}
-	d.Git = g
+	if show("gitActions") {
+		d.Git = g
+	}
 	if a.cardMenu == "git" {
 		var rows []ui.MenuRow
 		for _, it := range items {
@@ -201,6 +233,7 @@ func (a *App) cardScene(s *ui.Scene, e *envState, t *t3.Thread, p t3.Project, ha
 		}
 		d.Menu = &ui.CardMenu{For: "git", Rows: append(rows, notes...)}
 	}
+	// tern has no Diff surface to open yet, so the row can't open one.
 	c := &ui.Changes{Insertions: ins, Deletions: del, Disabled: true}
 	if known {
 		c.Base = "Uncommitted"
@@ -208,19 +241,47 @@ func (a *App) cardScene(s *ui.Scene, e *envState, t *t3.Thread, p t3.Project, ha
 			c.Base = "vs " + base
 		}
 	}
-	d.Changes = c
+	if show("changes") {
+		d.Changes = c
+	}
 }
 
-// branchValue is the branch the row shows (resolveBranchToolbarValue): the
-// checkout's own, else the thread's.
-func branchValue(st *t3.VcsStatus, t *t3.Thread) string {
-	if st != nil && st.RefName != "" {
-		return st.RefName
+// branchOf is the branch the row shows (resolveBranchToolbarValue): a new
+// worktree's base (the default branch until one's picked), else the
+// checkout's own branch, else the thread's. Call with the lock held.
+func (a *App) branchOf(t *t3.Thread, v *vcsState) string {
+	if t == nil && a.draftWorktree {
+		if a.draftBase != "" {
+			return a.draftBase
+		}
+		if v != nil && v.refs != nil {
+			for _, r := range v.refs.Refs {
+				if r.IsDefault && !r.IsRemote {
+					return r.Name
+				}
+			}
+		}
+	}
+	if v != nil && v.status != nil && v.status.RefName != "" {
+		return v.status.RefName
 	}
 	if t != nil {
 		return t.Branch
 	}
 	return ""
+}
+
+// workspacePath is where thread t works, its worktree or its project's
+// root; "" for a draft's worktree that doesn't exist yet. Call with the
+// lock held.
+func (a *App) workspacePath(t *t3.Thread, p t3.Project) string {
+	switch {
+	case t != nil && t.WorktreePath != "":
+		return t.WorktreePath
+	case t == nil && a.draftWorktree:
+		return ""
+	}
+	return p.WorkspaceRoot
 }
 
 // scriptIcon names each script icon's lucide icon in the menu.

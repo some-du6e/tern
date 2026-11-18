@@ -45,6 +45,17 @@ func (a *App) handleHeader(th *ui.Theme, act ui.Action) bool {
 		}
 		a.mu.Unlock()
 		return true
+	case strings.HasPrefix(id, "card") && act.Kind == "context":
+		// One on the card opens its own menu at the pointer; the machine and
+		// branch rows offer to copy their path and branch instead.
+		a.mu.Lock()
+		a.closeCardMenusLocked()
+		a.cardMenu, a.cardAtPointer = map[string]string{"card.run": "copypath", "card.runlocked": "copypath", "card.branch": "copybranch"}[id], true
+		if a.cardMenu == "" {
+			a.cardMenu = "items"
+		}
+		a.mu.Unlock()
+		return true
 	case id == "branch.search" && act.Kind == "change":
 		a.mu.Lock()
 		if a.branchPicker != nil {
@@ -74,6 +85,13 @@ func (a *App) handleHeader(th *ui.Theme, act ui.Action) bool {
 		// A row of one of the card's menus: "card.<menu>:<row>".
 		a.cardMenuPick(th, menu, atoi(arg))
 		return true
+	}
+	switch verb {
+	case "card.openin", "card.script", "card.git", "card.initgit":
+		// A row's own action closes any menu the card has open.
+		a.mu.Lock()
+		a.closeCardMenusLocked()
+		a.mu.Unlock()
 	}
 	switch verb {
 	case "header.project":
@@ -108,15 +126,19 @@ func (a *App) handleHeader(th *ui.Theme, act ui.Action) bool {
 			th.MenuFrom("header.title")
 		}
 		a.mu.Unlock()
-	case "card.run", "card.editors", "card.scripts", "card.scripts.more", "card.gitmenu":
-		menu := map[string]string{"card.run": "run", "card.editors": "openin", "card.scripts": "scripts", "card.scripts.more": "scripts", "card.gitmenu": "git"}[verb]
+	case "card.run", "card.editors", "card.scripts", "card.scripts.more", "card.gitmenu", "card.choose":
+		menu := map[string]string{"card.run": "run", "card.editors": "openin", "card.scripts": "scripts", "card.scripts.more": "scripts",
+			"card.gitmenu": "git", "card.choose": "items"}[verb]
 		a.mu.Lock()
 		open := a.cardMenu != menu
 		a.closeCardMenusLocked()
 		if open {
-			a.cardMenu = menu
+			a.cardMenu, a.cardAtPointer = menu, false
 		}
 		a.mu.Unlock()
+		if open && menu == "git" {
+			a.refreshStatus()
+		}
 	case "card.openin":
 		a.mu.Lock()
 		e, _, _, _ := a.checkout()
@@ -140,6 +162,7 @@ func (a *App) handleHeader(th *ui.Theme, act ui.Action) bool {
 		if open {
 			th.SetEditorText("branch.search", "")
 			th.Focus("branch.search")
+			a.refreshStatus()
 		}
 	case "branch.ref":
 		a.mu.Lock()
@@ -161,6 +184,13 @@ func (a *App) handleHeader(th *ui.Theme, act ui.Action) bool {
 	case "confirm":
 		a.mu.Lock()
 		c := a.confirm
+		_, _, _, v := a.checkout()
+		dirty := v == nil || v.status == nil || v.status.HasWorkingTreeChanges
+		if arg == "branch" && featureBranchOff("", dirty) != "" {
+			// A clean tree gives the feature branch nothing to be named after.
+			a.mu.Unlock()
+			return true
+		}
 		a.confirm = nil
 		a.mu.Unlock()
 		if c != nil && arg != "abort" {
@@ -184,7 +214,7 @@ func (a *App) closeCardMenusLocked() {
 // preferred editor, a script, or a Git action.
 func (a *App) cardMenuPick(th *ui.Theme, menu string, i int) {
 	a.mu.Lock()
-	e, _, p, v := a.checkout()
+	e, t, p, v := a.checkout()
 	a.cardMenu = ""
 	if e == nil {
 		a.mu.Unlock()
@@ -228,6 +258,33 @@ func (a *App) cardMenuPick(th *ui.Theme, menu string, i int) {
 		// T3's Commit opens its commit dialog first; tern commits every
 		// change with a generated message, as its quick action does.
 		a.runGit(map[string]string{"commit": "commit", "push": "push", "pr": "create_pr"}[items[i].id], false, false)
+	case "items":
+		// Row 0 is the label; then the items, a separator and Reset.
+		switch {
+		case i >= 1 && i <= len(cardItems):
+			if id := cardItems[i-1].id; a.itemsHidden[id] {
+				delete(a.itemsHidden, id)
+			} else {
+				a.itemsHidden[id] = true
+			}
+		case i == len(cardItems)+2:
+			a.itemsHidden = map[string]bool{}
+		}
+		hidden := map[string]bool{}
+		for k := range a.itemsHidden {
+			hidden[k] = true
+		}
+		a.mu.Unlock()
+		_ = a.store.Put("details-items", hidden)
+	case "copypath", "copybranch":
+		text := a.workspacePath(t, p)
+		if menu == "copybranch" {
+			text = a.branchOf(t, v)
+		}
+		a.mu.Unlock()
+		if text != "" {
+			th.WriteClipboard(text)
+		}
 	default:
 		a.mu.Unlock()
 	}

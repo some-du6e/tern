@@ -101,6 +101,8 @@ type App struct {
 	// script, which persist; and the draft's new worktree and its base.
 	renaming      string
 	cardMenu      string
+	cardAtPointer bool            // the card's menu opened at a right-click
+	itemsHidden   map[string]bool // the card's items turned off (persisted)
 	branchPicker  *refPicker
 	confirm       *pendingGit
 	vcs           map[string]*vcsState
@@ -196,8 +198,10 @@ func NewWithStore(store *t3.Store, redraw func()) (*App, error) {
 	_ = store.Delete("env-filter")   // from when a machine's chip filtered the inbox
 	_ = store.Delete("details-card") // from when one switch hid every thread's card
 	a.cardHidden, a.lastScripts, a.vcs = map[string]bool{}, map[string]string{}, map[string]*vcsState{}
+	a.itemsHidden = map[string]bool{}
 	a.remoteEditors = probeRemoteEditors
 	_, _ = store.Get("details-hidden", &a.cardHidden)
+	_, _ = store.Get("details-items", &a.itemsHidden)
 	_, _ = store.Get("last-editor", &a.lastEditor)
 	_, _ = store.Get("remote-open-hint", &a.hintSeen)
 	_, _ = store.Get("last-scripts", &a.lastScripts)

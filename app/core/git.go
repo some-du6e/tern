@@ -107,26 +107,42 @@ func (a *App) checkout() (*envState, *t3.Thread, t3.Project, *vcsState) {
 	return e, t, p, a.vcs[vcsKey(e.id(), gitCwd(t, p))]
 }
 
+// refreshStatus has the server read the checkout's status again
+// (vcs.refreshStatus), as the Git menu and branch picker do when they
+// open; the stream carries the result too.
+func (a *App) refreshStatus() {
+	a.mu.Lock()
+	e, _, _, v := a.checkout()
+	if v == nil || e.conn == nil {
+		a.mu.Unlock()
+		return
+	}
+	conn := e.conn
+	a.mu.Unlock()
+	go func() {
+		var st t3.VcsStatus
+		if conn.Call("vcs.refreshStatus", map[string]any{"cwd": v.cwd}, &st) != nil {
+			return
+		}
+		a.mu.Lock()
+		if v.conn == conn {
+			v.status = &st
+		}
+		a.mu.Unlock()
+		a.changed()
+	}()
+}
+
 // draftStrategyLocked is where the draft's thread will work
 // (orchestration.launchThread's workspaceStrategy): the project's checkout,
-// or a new worktree from the ref the branch row names, else the checkout's
-// branch, else the default one. Call with the lock held.
+// or a new worktree from the ref the branch row names. Call with the lock
+// held.
 func (a *App) draftStrategyLocked() map[string]any {
 	_, _, _, v := a.checkout()
 	if a.draft == "" || !a.draftWorktree || v == nil {
 		return map[string]any{"type": "root"}
 	}
-	base := a.draftBase
-	if base == "" && v.status != nil {
-		base = v.status.RefName
-	}
-	if base == "" && v.refs != nil {
-		for _, r := range v.refs.Refs {
-			if r.IsDefault && !r.IsRemote {
-				base = r.Name
-			}
-		}
-	}
+	base := a.branchOf(nil, v)
 	if base == "" {
 		return map[string]any{"type": "root"}
 	}

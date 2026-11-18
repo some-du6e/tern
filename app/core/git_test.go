@@ -24,13 +24,17 @@ func liveApp(t *testing.T, st *t3.VcsStatus, refs ...t3.VcsRef) (*App, *fakeEnv)
 	f.on("vcs.listRefs", func(f *fakeEnv, r fakeReq) {
 		f.exit(r, t3.VcsRefs{IsRepo: true, HasPrimaryRemote: true, Refs: refs, TotalCount: len(refs)})
 	})
+	f.on("vcs.refreshStatus", func(f *fakeEnv, r fakeReq) { f.exit(r, st) })
 	f.on("orchestration.subscribeThread", func(f *fakeEnv, r fakeReq) {})
 	f.on("orchestration.dispatchCommand", func(f *fakeEnv, r fakeReq) { f.exit(r, map[string]any{"sequence": 1}) })
 	e.conn = f.dial(a)
 	a.openThread("swiss/t1")
 	eventually(t, "the status and refs load", func() bool {
-		s := a.build(time.Now())
-		return s.Card != nil && s.Card.Branch != nil && !s.Card.Branch.Disabled
+		a.build(time.Now())
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		_, _, _, v := a.checkout()
+		return v != nil && v.status != nil && v.refs != nil
 	})
 	return a, f
 }
@@ -80,20 +84,25 @@ func TestQuickActionAsksOnTheDefaultBranch(t *testing.T) {
 	}
 }
 
-// The dialog's feature branch runs the action on a new branch; Abort runs
-// nothing.
+// Abort runs nothing; the feature branch needs changes to name it after,
+// and then runs the action on a new branch.
 func TestConfirmFeatureBranchAndAbort(t *testing.T) {
 	a, f := liveApp(t, status(func(s *t3.VcsStatus) { s.RefName, s.IsDefaultRef, s.AheadCount = "main", true, 2 }))
 	th := ui.NewTheme()
 	a.handle(th, ui.Action{ID: "card.git", Kind: "click"})
 	s := a.build(time.Now())
-	if c := s.Confirm; c == nil || c.Title != "Push to default ref?" || !strings.Contains(c.BranchOff, "no changes to commit") {
+	if c := s.Confirm; c == nil || c.Title != "Push to default ref?" || c.Continue != "Push to main" || !strings.Contains(c.BranchOff, "no changes to commit") {
 		t.Fatalf("confirm %+v", s.Confirm)
 	}
+	a.handle(th, ui.Action{ID: "confirm:branch", Kind: "click"})
+	a.handle(th, ui.Action{ID: "card.git", Kind: "click"})
 	a.handle(th, ui.Action{ID: "confirm:abort", Kind: "click"})
+	time.Sleep(50 * time.Millisecond)
 	if s := a.build(time.Now()); s.Confirm != nil || len(f.requests("git.runStackedAction")) != 0 {
-		t.Fatal("Abort should run nothing")
+		t.Fatal("a clean tree's feature branch and Abort should run nothing")
 	}
+
+	a, f = liveApp(t, status(func(s *t3.VcsStatus) { s.RefName, s.IsDefaultRef, s.HasWorkingTreeChanges = "main", true, true }))
 	a.handle(th, ui.Action{ID: "card.git", Kind: "click"})
 	a.handle(th, ui.Action{ID: "confirm:branch", Kind: "click"})
 	if r := f.wait("git.runStackedAction", 1); r.Payload["action"] != "commit_push" || r.Payload["featureBranch"] != true {
@@ -110,6 +119,9 @@ func TestGitMenuActions(t *testing.T) {
 	m := a.build(time.Now()).Card.Menu
 	if m == nil || m.For != "git" || len(m.Rows) != 3 || !m.Rows[0].Disabled || m.Rows[1].Label != "Push" || m.Rows[2].Label != "Create PR" {
 		t.Fatalf("menu %+v", m)
+	}
+	if r := f.wait("vcs.refreshStatus", 1); r.Payload["cwd"] != "/root/code/goog" {
+		t.Fatalf("opening the menu should refresh the status: %v", r.Payload)
 	}
 	a.handle(th, ui.Action{ID: "card.git:1", Kind: "click"})
 	r := f.wait("git.runStackedAction", 1)

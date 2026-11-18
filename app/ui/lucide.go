@@ -60,4 +60,6 @@ var lucide = map[string]string{
 	"cloud":                     `M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z`,
 	"git-pull-request-arrow":    `M2 6a3 3 0 1 0 6 0a3 3 0 1 0 -6 0ZM5 9v12M16 18a3 3 0 1 0 6 0a3 3 0 1 0 -6 0ZM15 9l-3-3 3-3M12 6h5a2 2 0 0 1 2 2v7`,
 	"message-square-dashed":     `M14 3h2M16 19h-2M2 12v-2M2 16v5.286a.71.71 0 0 0 1.212.502l1.149-1.149M20 19a2 2 0 0 0 2-2v-1M22 10v2M22 6V5a2 2 0 0 0-2-2M4 3a2 2 0 0 0-2 2v1M8 19h2M8 3h2`,
+	"copy":                      `M10 8H20A2 2 0 0 1 22 10V20A2 2 0 0 1 20 22H10A2 2 0 0 1 8 20V10A2 2 0 0 1 10 8ZM4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2`,
+	"sliders-horizontal":        `M10 5H3M12 19H3M14 3v4M16 17v4M21 12h-9M21 19h-5M21 5h-7M8 10v4M8 12H3`,
 }

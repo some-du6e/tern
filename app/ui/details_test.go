@@ -55,6 +55,24 @@ func TestCardDensity(t *testing.T) {
 	}
 }
 
+// With every row turned off, the card offers "Choose what to show",
+// padded 8, which opens the items menu under itself.
+func TestCardFallback(t *testing.T) {
+	defer SetDark(false)
+	SetDark(true)
+	s := &Scene{Live: true, Title: "t", Header: &ChatHeader{}, DetailsCard: true, Card: &ThreadDetails{}}
+	th := NewTheme()
+	var ops op.Ops
+	gtx := layout.Context{Ops: &ops, Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Constraints{Max: image.Pt(280, 900)}}
+	if h := th.details(gtx, s, 900).Size.Y; h != 1+8+32+8+1 {
+		t.Fatalf("fallback card %d tall, want 50", h)
+	}
+	s.Card.Menu = &CardMenu{For: "items", Rows: []MenuRow{{Kind: MenuGroupLabel, Label: "Show in thread details"}, {Kind: MenuCheckRow, Label: "Changes"}}}
+	img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return NewTheme().Desktop(gtx, s) })
+	// The card is 50 tall from 64; the menu hangs from its row, 4 below.
+	wantPixel(t, img, image.Pt(1148+1+8+200, 64+1+8+32+4+20), P.Popover, "the items menu under the row")
+}
+
 // Inline, the card is at the canvas's top right (1148, 64 at 1440 wide
 // with the sidebar open): T3's glass as it paints over the canvas, inside
 // a 1dp border at foreground 10%; and the rows' hover fills black 3.5%.

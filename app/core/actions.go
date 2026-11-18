@@ -160,7 +160,14 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		a.errText = ""
 		a.mu.Unlock()
 	case "menus.close":
-		a.closeMenus()
+		a.mu.Lock()
+		details := a.detailsOpen
+		a.closeMenusLocked()
+		a.mu.Unlock()
+		if details {
+			// The details popover hands the focus back to the composer.
+			th.Focus("composer")
+		}
 	case "browser.toggle":
 		a.toggleBrowser()
 		a.mu.Lock()
@@ -215,6 +222,13 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		// stays open until toggled (per thread), else a popover from the
 		// header. Opening either sends the focus into it.
 		a.mu.Lock()
+		if arg == "inline" {
+			// The card found room inline: the popover's flag goes, so it
+			// doesn't come back by itself when the room does.
+			a.detailsOpen = false
+			a.mu.Unlock()
+			return
+		}
 		if arg == "card" {
 			r := a.openID
 			if a.draft != "" {

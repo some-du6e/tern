@@ -312,10 +312,12 @@ type Changes struct {
 }
 
 // CardMenu is a T3 menu open off one of the card's rows: "run", "openin",
-// "scripts" or "git".
+// "scripts" or "git"; or the card's own "items" menu, from "Choose what to
+// show" or at the pointer after a right-click.
 type CardMenu struct {
-	For  string
-	Rows []MenuRow
+	For       string
+	Rows      []MenuRow
+	AtPointer bool
 }
 
 // MenuRowKind is what a MenuRow draws (menu.tsx).
@@ -324,6 +326,7 @@ type MenuRowKind int
 const (
 	MenuItemRow MenuRowKind = iota
 	MenuRadioRow
+	MenuCheckRow // a checkbox row: the check, when Checked, before the label
 	MenuGroupLabel
 	MenuSeparator
 	MenuNote // a 12dp line of explanation, in Tone

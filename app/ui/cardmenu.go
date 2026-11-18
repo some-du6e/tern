@@ -67,16 +67,47 @@ func (th *Theme) cardMenu(gtx C, m *CardMenu, w int) D {
 	})
 }
 
-// cardMenuRow is one item or radio row.
+// menuAtPointer draws the menu w 4dp below where the last right-click
+// landed (a Base UI menu anchored there, side bottom, align start), moved
+// back inside a win-sized window when it would run off it.
+func (th *Theme) menuAtPointer(gtx C, win image.Point, w W) {
+	m := op.Record(gtx.Ops)
+	g := gtx
+	g.Constraints = layout.Constraints{Max: win}
+	d := w(g)
+	call := m.Stop()
+	at := th.in.ctxAt.Add(image.Pt(0, dp(gtx, 4)))
+	at.X = max(0, min(at.X, win.X-d.Size.X))
+	at.Y = max(0, min(at.Y, win.Y-d.Size.Y))
+	m2 := op.Record(gtx.Ops)
+	op.Offset(at).Add(gtx.Ops)
+	call.Add(gtx.Ops)
+	op.Defer(gtx.Ops, m2.Stop())
+}
+
+// cardMenuRow is one item, radio or checkbox row.
 func (th *Theme) cardMenuRow(gtx C, r MenuRow) D {
 	m := op.Record(gtx.Ops)
 	d := func(gtx C) D {
 		gtx.Constraints.Min.X = gtx.Constraints.Max.X
 		gtx.Constraints.Min.Y = dp(gtx, 28)
-		return pad(4, 8, 4, 8).Layout(gtx, func(gtx C) D {
+		right := float32(8)
+		if r.Kind == MenuCheckRow {
+			right = 16
+		}
+		return pad(4, right, 4, 8).Layout(gtx, func(gtx C) D {
 			gtx.Constraints.Min.X = gtx.Constraints.Max.X
 			text := P.PopoverForeground
 			var kids []layout.FlexChild
+			if r.Kind == MenuCheckRow {
+				// A 16dp column for the check, then 8 to the label.
+				kids = append(kids, rigid(func(gtx C) D {
+					if !r.Checked {
+						return D{Size: image.Pt(dp(gtx, 16), dp(gtx, 16))}
+					}
+					return LucideW("check", text, 16)(gtx)
+				}), rigid(Spacer(8, 0)))
+			}
 			if r.Icon != "" {
 				if r.Kind == MenuRadioRow {
 					// Radio rows lay out their own content: a 12dp icon, gap 6.

@@ -361,6 +361,44 @@ func TestHeaderMenu(t *testing.T) {
 	}
 }
 
+// The card's own menu, at a right-click, turns its rows off and on and
+// resets them, and the choice persists; the branch row's right-click
+// offers to copy the branch instead.
+func TestCardItemsMenu(t *testing.T) {
+	a, _ := cardApp(t, status(nil), nil)
+	th := ui.NewTheme()
+	a.handle(th, ui.Action{ID: "card", Kind: "context"})
+	m := a.build(time.Now()).Card.Menu
+	if m == nil || m.For != "items" || !m.AtPointer || len(m.Rows) != 9 || m.Rows[0].Label != "Show in thread details" ||
+		m.Rows[5].Label != "Git actions" || !m.Rows[5].Checked || m.Rows[8].Label != "Reset to default" || !m.Rows[8].Disabled {
+		t.Fatalf("menu %+v", m)
+	}
+	a.handle(th, ui.Action{ID: "card.items:5", Kind: "click"})
+	if d := a.build(time.Now()).Card; d.Git != nil || d.Changes == nil || d.Menu != nil {
+		t.Fatalf("Git actions off: %+v", d)
+	}
+	var stored map[string]bool
+	if ok, _ := a.store.Get("details-items", &stored); !ok || !stored["gitActions"] {
+		t.Fatalf("stored %v", stored)
+	}
+	a.handle(th, ui.Action{ID: "card.openin", Kind: "context"})
+	if m := a.build(time.Now()).Card.Menu; m.Rows[5].Checked || m.Rows[8].Disabled {
+		t.Fatalf("after: %+v", m)
+	}
+	a.handle(th, ui.Action{ID: "card.items:8", Kind: "click"})
+	if d := a.build(time.Now()).Card; d.Git == nil {
+		t.Fatal("Reset should bring the row back")
+	}
+	a.handle(th, ui.Action{ID: "card.branch", Kind: "context"})
+	if m := a.build(time.Now()).Card.Menu; m == nil || m.For != "copybranch" || m.Rows[0].Label != "Copy branch name" {
+		t.Fatalf("branch's menu %+v", m)
+	}
+	a.handle(th, ui.Action{ID: "card.copybranch:0", Kind: "click"})
+	if m := a.build(time.Now()).Card.Menu; m != nil {
+		t.Fatal("copying closes it")
+	}
+}
+
 // The inline card hides per thread, and the choice persists.
 func TestCardToggle(t *testing.T) {
 	a := testApp(t)

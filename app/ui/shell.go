@@ -91,6 +91,14 @@ func (th *Theme) Desktop(gtx C, s *Scene) D {
 	if s.Context != nil {
 		th.contextMenu(gtx, size, s)
 	}
+	if m := s.Card; m != nil && m.Menu != nil && m.Menu.AtPointer {
+		// The card's own menu and its rows' copy menus open at the click.
+		w := dp(gtx, 232)
+		if m.Menu.For != "items" {
+			w = dp(gtx, 180)
+		}
+		th.menuAtPointer(gtx, size, func(gtx C) D { return th.cardMenu(gtx, m.Menu, w) })
+	}
 	if s.Live && menuOpen(s) {
 		// A click anywhere outside an open menu closes it. The menus are
 		// deferred, so they sit above this.
@@ -507,6 +515,9 @@ func (th *Theme) canvas(gtx C, s *Scene) {
 	fill(gtx, P.Background, image.Rectangle{Max: size}, 0)
 	cardX := size.X - dp(gtx, cardW+cardInset)
 	th.in.cardFits = s.Card != nil && cardX-dp(gtx, 32+lanePad) >= dp(gtx, laneMin) && size.Y-dp(gtx, 2*cardInset) >= dp(gtx, 160)
+	if th.in.cardFits && s.Details {
+		th.push(Action{ID: "details:inline", Kind: "click"})
+	}
 	cardLeft := -1
 	if th.in.cardFits && s.DetailsCard {
 		cardLeft = cardX
