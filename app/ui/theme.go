@@ -22,6 +22,17 @@ func alpha(c color.NRGBA, a uint8) color.NRGBA {
 	return c
 }
 
+// over is c composited onto the opaque bg the way browsers do, in sRGB.
+// Gio blends in linear light, so a translucent T3 token painted as is comes
+// out lighter than in T3: white at 8% on black is #141414 in Chrome but
+// about #4f4f4f in Gio. Where the surface under a token is known, paint
+// over(token, surface).
+func over(c, bg color.NRGBA) color.NRGBA {
+	a := float32(c.A) / 255
+	mix := func(x, y uint8) uint8 { return uint8(float32(x)*a + float32(y)*(1-a) + 0.5) }
+	return color.NRGBA{R: mix(c.R, bg.R), G: mix(c.G, bg.G), B: mix(c.B, bg.B), A: 0xff}
+}
+
 // The theme. P is T3's palette for the light or dark theme the system is in;
 // SP and CP are the same theme inside the sidebar and the composer, which
 // restyle some tokens (dark mode's sidebar is black, for one). SetDark
@@ -60,18 +71,22 @@ var (
 	ColAddBg, ColAddFg, ColDelBg, ColDelFg, ColHunkFg                        color.NRGBA
 )
 
+// legacyColors maps them, composited onto --background where the token is
+// translucent (see over), since that's what the old screens mostly draw on.
 func legacyColors() {
-	ColWindow, ColPanel, ColPanelHi = P.Background, SP.Sidebar, P.Background
-	ColFrame, ColFrameHover, ColFrameActive = P.Card, P.Accent, P.Accent
-	ColBorder, ColBorderHi = P.Border, P.Input
-	ColText, ColDim, ColFaint = P.Foreground, P.MutedForeground, alpha(P.MutedForeground, 0xb3)
-	ColAccent, ColAccentHi = P.Primary, P.Primary
-	ColAccentSoft, ColSelected = alpha(P.Primary, 0x2c), alpha(P.Primary, 0x24)
-	ColGreen, ColAmber, ColRed = P.Success, P.Warning, P.Error
-	ColViolet, ColCyan, ColCode = Tailwind["violet-500"], P.Info, P.CodeForeground
-	ColAddBg, ColAddFg = alpha(P.DiffAddition, 0x26), P.DiffAdditionForeground
-	ColDelBg, ColDelFg = alpha(P.DiffDeletion, 0x26), P.DiffDeletionForeground
-	ColHunkFg = P.Info
+	bg := P.Background
+	on := func(c color.NRGBA) color.NRGBA { return over(c, bg) }
+	ColWindow, ColPanel, ColPanelHi = bg, SP.Sidebar, bg
+	ColFrame, ColFrameHover, ColFrameActive = on(P.Card), on(P.Accent), on(P.Accent)
+	ColBorder, ColBorderHi = on(P.Border), on(P.Input)
+	ColText, ColDim, ColFaint = on(P.Foreground), on(P.MutedForeground), on(alpha(P.MutedForeground, 0xb3))
+	ColAccent, ColAccentHi = on(P.Primary), on(P.Primary)
+	ColAccentSoft, ColSelected = on(alpha(P.Primary, 0x2c)), on(alpha(P.Primary, 0x24))
+	ColGreen, ColAmber, ColRed = on(P.Success), on(P.Warning), on(P.Error)
+	ColViolet, ColCyan, ColCode = Tailwind["violet-500"], on(P.Info), on(P.CodeForeground)
+	ColAddBg, ColAddFg = on(alpha(P.DiffAddition, 0x26)), on(P.DiffAdditionForeground)
+	ColDelBg, ColDelFg = on(alpha(P.DiffDeletion, 0x26)), on(P.DiffDeletionForeground)
+	ColHunkFg = on(P.Info)
 	chipColors()
 }
 
@@ -97,20 +112,22 @@ type Theme struct {
 	CanRun func(lang string) bool
 	Run    func(lang, code string) error
 
-	// TitleInset is the room, in dp, the window's own buttons take at the top
-	// left: the Mac's traffic lights, drawn over the app. With it the top of
-	// the sidebar and the thread drags the window.
-	TitleInset float32
+	// ControlsLeft is where the title bar's fixed controls start, in dp:
+	// 12, or 90 on a Mac, where the traffic lights sit in the top bar
+	// (T3's --workspace-controls-left). Frameless means tern draws the title
+	// bar itself, so its headers drag the window.
+	ControlsLeft float32
+	Frameless    bool
 }
 
-// topBarH is the height of the sidebar's top row and the thread header,
-// which the Mac's traffic lights sit centred in.
-const topBarH = 48
+// topBarH is the height of the sidebar's header row, the chat header and
+// the right panel's tab bar (--workspace-topbar-height).
+const topBarH = 52
 
 // dragArea makes a size-sized area at the current offset move the window.
 // Draw it first: what's drawn over it keeps its clicks.
 func (th *Theme) dragArea(gtx C, size image.Point) {
-	if th.TitleInset == 0 {
+	if !th.Frameless {
 		return
 	}
 	defer clip.Rect{Max: size}.Push(gtx.Ops).Pop()
@@ -120,5 +137,5 @@ func (th *Theme) dragArea(gtx C, size image.Point) {
 func NewTheme() *Theme {
 	// The embedded faces come first; the system's fill in the scripts they
 	// don't cover, like Chinese and Japanese.
-	return &Theme{Shaper: text.NewShaper(text.WithCollection(faces()))}
+	return &Theme{Shaper: text.NewShaper(text.WithCollection(faces())), ControlsLeft: 12}
 }

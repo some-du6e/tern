@@ -45,11 +45,18 @@ type input struct {
 	blur          bool    // drop the keyboard focus at the next frame
 	// The terminal drawer: its focus tag, how many lines it has scrolled
 	// back, and wheel movement short of a line.
-	term        int
-	termScroll  int
-	termWheel   float32
-	termSel     termSel
-	popAt       map[string]time.Time // when each open popover opened, for popIn
+	term       int
+	termScroll int
+	termWheel  float32
+	termSel    termSel
+	popAt      map[string]time.Time // when each open popover opened, for popIn
+	tipSince   map[string]time.Time // when the pointer came to rest on each tooltip's target
+	// The shell: whether the details card fits inline (from the last
+	// layout), and the sidebar rail's drag.
+	cardFits    bool
+	railDrag    bool
+	railW       float32
+	railEdge    handle
 	clicks      map[string]*gesture.Click
 	context     map[string]*int // right-click targets, by the same ids
 	ptr         int             // tag for the window-wide pointer watch
@@ -226,7 +233,7 @@ func (th *Theme) Click(id string, w W) W {
 		dims := w(gtx)
 		call := m.Stop()
 		if c.Hovered() {
-			fill(gtx, P.Accent, image.Rectangle{Max: dims.Size}, dp(gtx, 4))
+			fill(gtx, over(P.Accent, P.Background), image.Rectangle{Max: dims.Size}, dp(gtx, 4))
 		}
 		call.Add(gtx.Ops)
 		th.hit(gtx, id, dims.Size)
@@ -234,39 +241,94 @@ func (th *Theme) Click(id string, w W) W {
 	}
 }
 
-// Tip is Click with T3's tooltip while the pointer is over w: above it
-// when up is set, else below. align lines it up with w's left edge (-1),
-// middle (0) or right edge (1), so one by the window's edge stays in.
+// Tip is Click with T3's tooltip: above w when up is set, else below.
+// align lines it up with w's left edge (-1), middle (0) or right edge (1),
+// so one by the window's edge stays in.
 func (th *Theme) Tip(id, tip string, up bool, align int, w W) W {
 	click := th.Click(id, w)
 	return func(gtx C) D {
 		dims := click(gtx)
-		if c := th.in.clicks[id]; c == nil || !c.Hovered() || tip == "" {
-			return dims
-		}
-		m := op.Record(gtx.Ops)
-		g := gtx
-		g.Constraints = layout.Constraints{Max: image.Pt(dp(gtx, 320), dp(gtx, 60))}
-		td := Box{Bg: ColPanelHi, Border: ColBorderHi, Radius: 6, Pad: padXY(8, 4)}.Layout(g, func(gtx C) D {
-			return th.Text(gtx, Txt{Size: SizeSmall, Color: ColText, MaxLines: 1}, tip)
-		})
-		call := m.Stop()
-		at := image.Pt((dims.Size.X-td.Size.X)/2, dims.Size.Y+dp(gtx, 6))
-		switch align {
-		case -1:
-			at.X = 0
-		case 1:
-			at.X = dims.Size.X - td.Size.X
-		}
-		if up {
-			at.Y = -td.Size.Y - dp(gtx, 6)
-		}
-		m2 := op.Record(gtx.Ops)
-		op.Offset(at).Add(gtx.Ops)
-		call.Add(gtx.Ops)
-		op.Defer(gtx.Ops, m2.Stop())
+		th.tipAt(gtx, id, tip, dims.Size, up, align)
 		return dims
 	}
+}
+
+// tipAt shows T3's tooltip for click target id (size big at the current
+// offset) once the pointer has rested on it for 600ms, fading and scaling
+// in over 150ms (docs/ui/02-primitives.md §3.7, port note 10).
+func (th *Theme) tipAt(gtx C, id, tip string, size image.Point, up bool, align int) {
+	c := th.in.clicks[id]
+	if c == nil || !c.Hovered() || tip == "" {
+		delete(th.in.tipSince, id)
+		return
+	}
+	if th.in.tipSince == nil {
+		th.in.tipSince = map[string]time.Time{}
+	}
+	since, ok := th.in.tipSince[id]
+	if !ok {
+		since = gtx.Now
+		th.in.tipSince[id] = since
+	}
+	shown := gtx.Now.Sub(since) - 600*time.Millisecond
+	if shown < 0 {
+		gtx.Execute(op.InvalidateCmd{At: since.Add(600 * time.Millisecond)})
+		return
+	}
+	t := easeOut(clamp01(float32(shown) / float32(150*time.Millisecond)))
+	if t < 1 {
+		gtx.Execute(op.InvalidateCmd{})
+	}
+	m := op.Record(gtx.Ops)
+	g := gtx
+	g.Constraints = layout.Constraints{Max: image.Pt(dp(gtx, 320), dp(gtx, 200))}
+	td := th.tooltip(g, tip)
+	call := m.Stop()
+	gap := dp(gtx, 4)
+	at := image.Pt((size.X-td.Size.X)/2, size.Y+gap)
+	switch align {
+	case -1:
+		at.X = 0
+	case 1:
+		at.X = size.X - td.Size.X
+	}
+	if up {
+		at.Y = -td.Size.Y - gap
+	}
+	m2 := op.Record(gtx.Ops)
+	op.Offset(at).Add(gtx.Ops)
+	paint.PushOpacity(gtx.Ops, t)
+	// It grows from 98% out of the side facing the trigger.
+	origin := f32.Pt(float32(td.Size.X)/2, 0)
+	if up {
+		origin.Y = float32(td.Size.Y)
+	}
+	k := 0.98 + 0.02*t
+	op.Affine(f32.Affine2D{}.Scale(origin, f32.Pt(k, k))).Add(gtx.Ops)
+	call.Add(gtx.Ops)
+	op.Defer(gtx.Ops, m2.Stop())
+}
+
+// tooltip is T3's tooltip popup: popover surface, 1dp border, radius 6,
+// 12/16.5 text, padded 4 by 8, and its lip and small shadow.
+func (th *Theme) tooltip(gtx C, tip string) D {
+	m := op.Record(gtx.Ops)
+	d := pad(4, 8, 4, 8).Layout(gtx, func(gtx C) D {
+		return th.Text(gtx, Txt{Size: 12, LineH: 16.5 / 12, Color: P.PopoverForeground}, tip)
+	})
+	call := m.Stop()
+	r := image.Rectangle{Max: d.Size}
+	rad := dp(gtx, 6)
+	shadow(gtx, r, rad, []boxShadow{{0, 4, 6, -1, alpha(rgb(0), 0x0d)}, {0, 2, 4, -2, alpha(rgb(0), 0x0d)}})
+	fill(gtx, P.Popover, r, rad)
+	strokeRect(gtx, over(P.Border, P.Popover), r, rad, float32(max(1, dp(gtx, 1))))
+	if dark {
+		hline(gtx, over(alpha(rgb(0xffffff), 0x0f), P.Popover), max(1, dp(gtx, 1)), rad, r.Max.X-rad)
+	} else {
+		hline(gtx, over(alpha(rgb(0), 0x0a), P.Popover), r.Max.Y-max(1, dp(gtx, 1))-1, rad, r.Max.X-rad)
+	}
+	call.Add(gtx.Ops)
+	return d
 }
 
 // Field is a live single-line text field: frame, optional icon, the editor,

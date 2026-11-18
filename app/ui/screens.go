@@ -5,13 +5,10 @@ import (
 	"hash/fnv"
 	"image"
 	"image/color"
-	"io"
 	"strings"
 
 	"gioui.org/f32"
 	"gioui.org/font"
-	"gioui.org/io/clipboard"
-	"gioui.org/io/key"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
@@ -25,100 +22,6 @@ const (
 	menubarH = 30
 	statusH  = 24
 )
-
-// Desktop draws the full three-panel window.
-func (th *Theme) Desktop(gtx C, s *Scene) D {
-	if s.Live {
-		defer th.trackPointer(gtx, gtx.Constraints.Max)
-	}
-	if th.in.blur {
-		gtx.Execute(key.FocusCmd{})
-		th.in.blur = false
-	}
-	if s.Live && th.in.clipOut != nil {
-		gtx.Execute(clipboard.WriteCmd{Type: "application/text", Data: io.NopCloser(strings.NewReader(*th.in.clipOut))})
-		th.in.clipOut = nil
-	}
-	if s.Live {
-		// ⇧⌘B (Ctrl+Shift+B) toggles the thread details, as in T3.
-		for {
-			ev, ok := gtx.Event(key.Filter{Name: "B", Required: key.ModShortcut | key.ModShift})
-			if !ok {
-				break
-			}
-			if ke, ok := ev.(key.Event); ok && ke.State == key.Press && s.Run != nil {
-				th.push(Action{ID: "details", Kind: "click"})
-			}
-		}
-		// ⌘J (Ctrl+J) toggles the terminal drawer.
-		for {
-			ev, ok := gtx.Event(key.Filter{Name: "J", Required: key.ModShortcut})
-			if !ok {
-				break
-			}
-			if ke, ok := ev.(key.Event); ok && ke.State == key.Press && s.Run != nil {
-				th.push(Action{ID: "terminal.toggle", Kind: "click"})
-			}
-		}
-	}
-	return Fill(gtx, ColWindow, func(gtx C) D {
-		dims := Col(gtx,
-			rigid(func(gtx C) D {
-				// Live, the window's own title bar is the only one.
-				if s.Live {
-					return D{}
-				}
-				return th.menubar(gtx, s)
-			}),
-			flexed(func(gtx C) D {
-				return layout.Flex{}.Layout(gtx,
-					rigid(func(gtx C) D { return FixedW(gtx, sidebarW, func(gtx C) D { return th.sidebar(gtx, s) }) }),
-					rigid(divider),
-					flexed(func(gtx C) D { return th.threadView(gtx, s, false) }),
-					rigid(func(gtx C) D {
-						// Live, details are a popover from the thread header, and
-						// the right panel is the browser.
-						if s.Live {
-							if s.Web == nil {
-								return D{}
-							}
-							w := th.browserW(gtx.Constraints.Max.X+dp(gtx, sidebarW), gtx)
-							return layout.Flex{}.Layout(gtx,
-								rigid(divider),
-								rigid(func(gtx C) D {
-									gtx.Constraints = layout.Exact(image.Pt(w, gtx.Constraints.Max.Y))
-									return th.browserPanel(gtx, s)
-								}),
-							)
-						}
-						return layout.Flex{}.Layout(gtx,
-							rigid(divider),
-							rigid(func(gtx C) D { return FixedW(gtx, panelW, func(gtx C) D { return th.rightPanel(gtx, s) }) }),
-						)
-					}),
-				)
-			}),
-			rigid(func(gtx C) D {
-				if s.Live {
-					return D{}
-				}
-				return th.statusbar(gtx, s)
-			}),
-		)
-		if s.Diff != nil {
-			th.diffWindow(gtx, s.Diff)
-		}
-		if s.Context != nil {
-			th.contextMenu(gtx, dims.Size, s)
-		}
-		if s.Live && (s.Picker != nil || s.Traits != nil || s.Access != nil || s.Account != nil || s.Machines != nil || s.Projects != nil || s.Context != nil || s.Details) {
-			// A click anywhere outside an open menu closes it. The menus are
-			// deferred, so they sit above this.
-			th.hit(gtx, "menus.close", dims.Size)
-		}
-		return dims
-	})
-}
 
 // divider is a vertical rule as tall as the row's minimum height.
 func divider(gtx C) D {
@@ -199,115 +102,108 @@ func Logo(sizeDp float32) W {
 
 // ---------- sidebar ----------
 
+// sidebar is the sidebar below its header row: search, the list and the
+// footer. sidebarFrame paints the surface under it.
 func (th *Theme) sidebar(gtx C, s *Scene) D {
-	return Fill(gtx, ColPanel, func(gtx C) D {
-		return Col(gtx,
-			rigid(func(gtx C) D {
-				p := pad(10, 10, 6, 10)
-				if s.Live && th.TitleInset > 0 {
-					// The traffic lights sit at the left of this row, as tall as
-					// the thread header.
-					th.dragArea(gtx, image.Pt(gtx.Constraints.Max.X, dp(gtx, topBarH)))
-					p = pad(11, 10, 11, th.TitleInset)
-				}
-				return p.Layout(gtx, func(gtx C) D {
-					search := th.Input(IconSearch, true, s.Search, "Search threads", false)
-					if s.Live {
-						search = th.Field("search", IconSearch, true, "Search threads", false)
-					}
-					return Row(gtx,
-						flexed(search),
-						rigid(Spacer(6, 0)),
-						rigid(th.Click(liveID(s, "new"), th.Button(Plain, IconPlus, true, ""))),
-					)
-				})
-			}),
-			rigid(func(gtx C) D {
-				if s.Filter == "" {
-					return D{}
-				}
-				return pad(0, 10, 2, 10).Layout(gtx, th.Combo(nil, s.Filter, Stretch))
-			}),
-			flexed(func(gtx C) D {
-				var rows []W
-				section := func(label string, n int, chevron int, trailing, id string) {
-					rows = append(rows, th.Click(liveID(s, id), th.shelf(label, n, chevron, trailing)))
-				}
-				add := func(ts []ThreadRow) {
-					for _, t := range ts {
-						rows = append(rows, th.Click(prefixID("thread:", t.ID), th.threadRow(t, s.Phase)))
-					}
-				}
-				if len(s.Pinned) > 0 {
-					section("PINNED", 0, shelfFixed, "", "")
-					add(s.Pinned)
-				}
-				section("ACTIVE", len(s.Active), shelfFixed, "", "")
-				add(s.Active)
-				if len(s.Snoozed) > 0 {
-					open := shelfOpen
-					if s.Live && !s.ShowSnoozed {
-						open = shelfClosed
-					}
-					section("SNOOZED", len(s.Snoozed), open, "", "shelf:snoozed")
-					if !s.Live || s.ShowSnoozed {
-						add(s.Snoozed)
-					}
-				}
-				if s.Settled > 0 {
-					if s.Live && s.ShowSettled {
-						section("SETTLED", s.Settled, shelfOpen, "", "shelf:settled")
-						add(s.SettledRows)
-					} else {
-						section("SETTLED", s.Settled, shelfClosed, "Show", "shelf:settled")
-					}
-				}
-				if s.Live && len(rows) == 1 && len(s.Active) == 0 {
-					rows = append(rows, func(gtx C) D {
-						return pad(8, 14, 0, 16).Layout(gtx, func(gtx C) D { return th.Small(gtx, ColFaint, s.SidebarNote) })
-					})
-				}
-				return th.scrollList(gtx, th.List("sidebar", false), rows)
-			}),
-			rigid(func(gtx C) D {
+	return Col(gtx,
+		rigid(func(gtx C) D {
+			return pad(8, 8, 8, 8).Layout(gtx, func(gtx C) D {
+				search := th.Input(IconSearch, true, s.Search, "Search threads", false)
 				if s.Live {
-					return th.sidebarFooter(gtx, s)
+					search = th.Field("search", IconSearch, true, "Search threads", false)
 				}
-				w := gtx.Constraints.Max.X
-				hline(gtx, ColBorder, 0, 0, w)
-				return pad(7, 10, 7, 12).Layout(gtx, func(gtx C) D {
-					gtx.Constraints.Min.X = gtx.Constraints.Max.X
-					kids := []layout.FlexChild{}
-					for _, e := range s.Envs {
-						e := e
-						kids = append(kids,
-							rigid(func(gtx C) D {
-								return padXY(2, 3).Layout(gtx, func(gtx C) D {
-									return Row(gtx,
-										rigid(Dot(envColor(e.Status), e.Status == EnvOnline)),
-										rigid(Spacer(4, 0)),
-										rigid(func(gtx C) D {
-											col := ColDim
-											if e.Status == EnvOffline {
-												col = ColFaint
-											}
-											return th.Text(gtx, Txt{Size: SizeSmall, Color: col, Font: UI(font.Medium), MaxLines: 1}, e.Label)
-										}),
-									)
-								})
-							}),
-							rigid(Spacer(7, 0)),
-						)
-					}
-					kids = append(kids,
-						flexed(func(gtx C) D { return D{Size: image.Pt(gtx.Constraints.Min.X, 0)} }),
-						rigid(th.Button(Ghost, IconQueue, true, "")),
-					)
-					return Row(gtx, kids...)
+				return Row(gtx,
+					flexed(search),
+					rigid(Spacer(6, 0)),
+					rigid(th.Click(liveID(s, "new"), th.Button(Plain, IconPlus, true, ""))),
+				)
+			})
+		}),
+		rigid(func(gtx C) D {
+			if s.Filter == "" {
+				return D{}
+			}
+			return pad(0, 10, 2, 10).Layout(gtx, th.Combo(nil, s.Filter, Stretch))
+		}),
+		flexed(func(gtx C) D {
+			var rows []W
+			section := func(label string, n int, chevron int, trailing, id string) {
+				rows = append(rows, th.Click(liveID(s, id), th.shelf(label, n, chevron, trailing)))
+			}
+			add := func(ts []ThreadRow) {
+				for _, t := range ts {
+					rows = append(rows, th.Click(prefixID("thread:", t.ID), th.threadRow(t, s.Phase)))
+				}
+			}
+			if len(s.Pinned) > 0 {
+				section("PINNED", 0, shelfFixed, "", "")
+				add(s.Pinned)
+			}
+			section("ACTIVE", len(s.Active), shelfFixed, "", "")
+			add(s.Active)
+			if len(s.Snoozed) > 0 {
+				open := shelfOpen
+				if s.Live && !s.ShowSnoozed {
+					open = shelfClosed
+				}
+				section("SNOOZED", len(s.Snoozed), open, "", "shelf:snoozed")
+				if !s.Live || s.ShowSnoozed {
+					add(s.Snoozed)
+				}
+			}
+			if s.Settled > 0 {
+				if s.Live && s.ShowSettled {
+					section("SETTLED", s.Settled, shelfOpen, "", "shelf:settled")
+					add(s.SettledRows)
+				} else {
+					section("SETTLED", s.Settled, shelfClosed, "Show", "shelf:settled")
+				}
+			}
+			if s.Live && len(rows) == 1 && len(s.Active) == 0 {
+				rows = append(rows, func(gtx C) D {
+					return pad(8, 14, 0, 16).Layout(gtx, func(gtx C) D { return th.Small(gtx, ColFaint, s.SidebarNote) })
 				})
-			}),
-		)
-	})
+			}
+			return th.scrollList(gtx, th.List("sidebar", false), rows)
+		}),
+		rigid(func(gtx C) D {
+			if s.Live {
+				return th.sidebarFooter(gtx, s)
+			}
+			w := gtx.Constraints.Max.X
+			hline(gtx, ColBorder, 0, 0, w)
+			return pad(7, 10, 7, 12).Layout(gtx, func(gtx C) D {
+				gtx.Constraints.Min.X = gtx.Constraints.Max.X
+				kids := []layout.FlexChild{}
+				for _, e := range s.Envs {
+					e := e
+					kids = append(kids,
+						rigid(func(gtx C) D {
+							return padXY(2, 3).Layout(gtx, func(gtx C) D {
+								return Row(gtx,
+									rigid(Dot(envColor(e.Status), e.Status == EnvOnline)),
+									rigid(Spacer(4, 0)),
+									rigid(func(gtx C) D {
+										col := ColDim
+										if e.Status == EnvOffline {
+											col = ColFaint
+										}
+										return th.Text(gtx, Txt{Size: SizeSmall, Color: col, Font: UI(font.Medium), MaxLines: 1}, e.Label)
+									}),
+								)
+							})
+						}),
+						rigid(Spacer(7, 0)),
+					)
+				}
+				kids = append(kids,
+					flexed(func(gtx C) D { return D{Size: image.Pt(gtx.Constraints.Min.X, 0)} }),
+					rigid(th.Button(Ghost, IconQueue, true, "")),
+				)
+				return Row(gtx, kids...)
+			})
+		}),
+	)
 }
 
 // liveID is id in a live scene and "" in a mockup, so mock buttons stay inert.
@@ -732,95 +628,42 @@ func stateChip(th *Theme, s *Scene) W {
 
 func (th *Theme) threadHeader(gtx C, s *Scene) D {
 	return FixedH(gtx, topBarH, func(gtx C) D {
-		size := image.Pt(gtx.Constraints.Max.X, gtx.Constraints.Min.Y)
-		hline(gtx, ColBorder, size.Y-max(1, dp(gtx, 1)), 0, size.X)
-		gtx.Constraints.Min.X = size.X
-		return pad(0, 14, 0, 20).Layout(gtx, func(gtx C) D {
-			gtx.Constraints.Min.X = gtx.Constraints.Max.X
-			return Row(gtx,
-				rigid(func(gtx C) D {
-					// Long titles truncate so the buttons keep their size.
-					gtx.Constraints.Max.X = gtx.Constraints.Max.X / 2
-					return th.Text(gtx, Txt{Size: SizeTitle, Font: UI(font.SemiBold), MaxLines: 1}, s.Title)
-				}),
-				rigid(Spacer(10, 0)),
-				rigid(stateChip(th, s)),
-				rigid(Spacer(10, 0)),
-				flexed(func(gtx C) D {
-					gtx.Constraints.Min.X = gtx.Constraints.Max.X
-					if !s.PickProject {
-						return th.Small(gtx, ColFaint, s.Project)
-					}
-					// A draft's project is a dropdown: the menu drops below it.
-					return Row(gtx,
-						rigid(func(gtx C) D { return th.Small(gtx, ColFaint, "in") }),
-						rigid(Spacer(4, 0)),
-						rigid(func(gtx C) D {
-							dims := th.Click("project", th.footPick(IconW(IconFolder, ColDim, 14), s.Project, s.Projects != nil && !s.ProjectsHero))(gtx)
-							if s.Projects != nil && !s.ProjectsHero {
-								th.deferBelow(gtx, image.Pt(0, dims.Size.Y+dp(gtx, 4)), func(gtx C) D { return th.traitsMenu(gtx, s, "project", s.Projects) })
-							}
-							return dims
-						}),
-					)
-				}),
-				rigid(Spacer(8, 0)),
-				rigid(func(gtx C) D {
-					if s.State != ThreadRunning && s.State != ThreadApproval && s.State != ThreadQuestion {
-						return D{}
-					}
-					return pad(0, 6, 0, 0).Layout(gtx, th.Click(liveID(s, "stop"), th.Button(Danger, IconStop, true, "Stop")))
-				}),
-				rigid(func(gtx C) D {
-					if len(s.Changes) == 0 || s.Live {
-						return D{}
-					}
-					return pad(0, 6, 0, 0).Layout(gtx, th.Button(Plain, IconFile, true, "Diff"))
-				}),
-				rigid(func(gtx C) D {
-					if !s.Live || s.Run == nil {
-						return D{}
-					}
-					tip := "Toggle thread details (" + ShortcutShift("B") + ")"
-					if s.Details {
-						tip = ""
-					}
-					dims := th.Tip("details", tip, false, 1, th.iconToggle("square-menu", s.Details))(gtx)
-					th.deferBelow(gtx, image.Pt(dims.Size.X-dp(gtx, detailsW), dims.Size.Y+dp(gtx, 6)), func(gtx C) D {
-						// It grows out of the button's corner.
-						origin := f32.Pt(float32(dp(gtx, detailsW)), 0)
-						return th.popIn(gtx, "details", s.Details, &origin, func(gtx C) D { return th.details(gtx, s) })
-					})
-					return dims
-				}),
-				rigid(func(gtx C) D {
-					if !s.Live || s.Run == nil {
-						return D{}
-					}
-					return Spacer(4, 0)(gtx)
-				}),
-				rigid(func(gtx C) D {
-					if !s.Live || s.Run == nil {
-						return D{}
-					}
-					tip := "Toggle terminal (" + Shortcut("J") + ")"
-					return pad(0, 4, 0, 0).Layout(gtx, th.Tip("terminal.toggle", tip, false, 1, th.iconToggle("panel-bottom", s.Term != nil)))
-				}),
-				rigid(func(gtx C) D {
-					if !s.Live || s.Run == nil {
-						return D{}
-					}
-					tip := "Toggle browser"
-					return pad(0, 4, 0, 0).Layout(gtx, th.Tip("browser.toggle", tip, false, 1, th.iconToggle("panel-right", s.Web != nil)))
-				}),
-				rigid(func(gtx C) D {
-					if s.Live {
-						return D{}
-					}
-					return th.Button(Ghost, IconDots, true, "")(gtx)
-				}),
-			)
-		})
+		gtx.Constraints.Min.X = gtx.Constraints.Max.X
+		return Row(gtx,
+			rigid(func(gtx C) D {
+				// Long titles truncate so the buttons keep their size.
+				gtx.Constraints.Max.X = gtx.Constraints.Max.X / 2
+				return th.Text(gtx, Txt{Size: SizeTitle, Font: UI(font.SemiBold), MaxLines: 1}, s.Title)
+			}),
+			rigid(Spacer(10, 0)),
+			rigid(stateChip(th, s)),
+			rigid(Spacer(10, 0)),
+			flexed(func(gtx C) D {
+				gtx.Constraints.Min.X = gtx.Constraints.Max.X
+				if !s.PickProject {
+					return th.Small(gtx, ColFaint, s.Project)
+				}
+				// A draft's project is a dropdown: the menu drops below it.
+				return Row(gtx,
+					rigid(func(gtx C) D { return th.Small(gtx, ColFaint, "in") }),
+					rigid(Spacer(4, 0)),
+					rigid(func(gtx C) D {
+						dims := th.Click("project", th.footPick(IconW(IconFolder, ColDim, 14), s.Project, s.Projects != nil && !s.ProjectsHero))(gtx)
+						if s.Projects != nil && !s.ProjectsHero {
+							th.deferBelow(gtx, image.Pt(0, dims.Size.Y+dp(gtx, 4)), func(gtx C) D { return th.traitsMenu(gtx, s, "project", s.Projects) })
+						}
+						return dims
+					}),
+				)
+			}),
+			rigid(Spacer(8, 0)),
+			rigid(func(gtx C) D {
+				if s.State != ThreadRunning && s.State != ThreadApproval && s.State != ThreadQuestion {
+					return D{}
+				}
+				return th.Click(liveID(s, "stop"), th.Button(Danger, IconStop, true, "Stop"))(gtx)
+			}),
+		)
 	})
 }
 
@@ -876,12 +719,11 @@ func (th *Theme) messages(gtx C, s *Scene, compact bool) D {
 		layout.Center.Layout(gtx, func(gtx C) D { return th.Label(gtx, ColFaint, font.Normal, s.Empty) })
 		return D{Size: size}
 	}
-	maxW := dp(gtx, 760)
-	side := dp(gtx, 28)
+	// The shell gives the timeline its lane; the phone gives it margins.
+	w := size.X
 	if compact {
-		side = dp(gtx, 14)
+		w = size.X - 2*dp(gtx, 14)
 	}
-	w := min(maxW, size.X-2*side)
 	x := (size.X - w) / 2
 
 	var rows []W
@@ -1228,16 +1070,17 @@ func (th *Theme) inline(gtx C, sp []spanT, maxLines int) D {
 
 func (th *Theme) composerArea(gtx C, s *Scene, compact bool) D {
 	size := gtx.Constraints.Max
-	side := dp(gtx, 28)
+	// The shell gives the composer its lane and the spacer under it; the
+	// phone gives it margins.
+	w, bottom := size.X, float32(0)
 	if compact {
-		side = dp(gtx, 10)
+		w, bottom = size.X-2*dp(gtx, 10), 14
 	}
-	w := min(dp(gtx, 760+24), size.X-2*side)
 	x := (size.X - w) / 2
 	gtx.Constraints = layout.Exact(image.Pt(w, 0))
 	gtx.Constraints.Max.Y = size.Y
 	m := op.Record(gtx.Ops)
-	dims := pad(0, 0, 14, 0).Layout(gtx, func(gtx C) D {
+	dims := pad(0, 0, bottom, 0).Layout(gtx, func(gtx C) D {
 		return Col(gtx,
 			rigid(func(gtx C) D {
 				if s.Error == "" {

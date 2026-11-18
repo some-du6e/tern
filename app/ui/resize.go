@@ -2,6 +2,7 @@ package ui
 
 import (
 	"image"
+	"time"
 
 	"gioui.org/io/event"
 	"gioui.org/io/pointer"
@@ -12,11 +13,15 @@ import (
 // strip a few dp wide over the edge; dragging it reports how far the edge
 // moved.
 
-// handle is one edge's drag state.
+// handle is one edge's drag state: whether the pointer is over it or
+// dragging it, and a double click (which the owner clears).
 type handle struct {
-	tag   int
-	press float32 // where in the strip the drag started
-	held  bool
+	tag       int
+	press     float32 // where in the strip the drag started
+	held      bool
+	hovered   bool
+	double    bool
+	lastPress time.Time
 }
 
 // dragEdge makes the size-sized strip at the current offset a resize
@@ -25,7 +30,7 @@ type handle struct {
 func (th *Theme) dragEdge(gtx C, h *handle, size image.Point, across bool) float32 {
 	delta := float32(0)
 	for {
-		ev, ok := gtx.Event(pointer.Filter{Target: &h.tag, Kinds: pointer.Press | pointer.Drag | pointer.Release | pointer.Cancel})
+		ev, ok := gtx.Event(pointer.Filter{Target: &h.tag, Kinds: pointer.Press | pointer.Drag | pointer.Release | pointer.Cancel | pointer.Enter | pointer.Leave})
 		if !ok {
 			break
 		}
@@ -38,14 +43,20 @@ func (th *Theme) dragEdge(gtx C, h *handle, size image.Point, across bool) float
 			at = e.Position.X
 		}
 		switch e.Kind {
+		case pointer.Enter:
+			h.hovered = true
+		case pointer.Leave:
+			h.hovered = false
 		case pointer.Press:
 			h.press, h.held = at, true
+			h.double = gtx.Now.Sub(h.lastPress) < 400*time.Millisecond
+			h.lastPress = gtx.Now
 		case pointer.Drag:
 			if h.held {
 				delta += at - h.press
 				h.press = at
 			}
-		default:
+		case pointer.Release, pointer.Cancel:
 			h.held = false
 		}
 	}

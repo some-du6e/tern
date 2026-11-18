@@ -59,7 +59,7 @@ type TermScreen interface {
 }
 
 const (
-	termH    = 300 // the drawer's height, dp
+	termH    = 280 // the drawer's default height, dp
 	termSize = unit.Sp(12.5)
 )
 
@@ -86,33 +86,27 @@ func termColor(c color.Color, def color.NRGBA) color.NRGBA {
 }
 
 // terminalDrawer is the drawer: tabs, then the open shell.
+// terminalDrawer fills the height the shell gives it (drawerPx): T3's
+// frame, a 1dp top border at 80% and a 6dp strip along the top that drags
+// it taller or shorter.
 func (th *Theme) terminalDrawer(gtx C, s *Scene) D {
-	if th.in.termH == 0 {
-		th.in.termH = termH
-	}
-	// It stays between 120dp and most of the column.
-	maxH := float32(gtx.Constraints.Max.Y)/gtx.Metric.PxPerDp - 160
-	th.in.termH = max(120, min(th.in.termH, maxH))
-	return FixedH(gtx, th.in.termH, func(gtx C) D {
-		size := image.Pt(gtx.Constraints.Max.X, gtx.Constraints.Min.Y)
-		fill(gtx, ColWindow, image.Rectangle{Max: size}, 0)
-		hline(gtx, ColBorder, 0, 0, size.X)
-		gtx.Constraints.Min.X = size.X
-		// Its top edge drags, up for taller. The strip goes over what's
-		// drawn, so it's last, and the drag shows at the next frame.
-		defer func() {
-			if d := th.dragEdge(gtx, &th.in.termEdge, image.Pt(size.X, dp(gtx, 5)), false); d != 0 {
-				th.in.termH -= d / gtx.Metric.PxPerDp
-				gtx.Execute(op.InvalidateCmd{})
-			}
-		}()
-		return Col(gtx,
-			rigid(func(gtx C) D { return th.termTabs(gtx, s.Term) }),
-			flexed(func(gtx C) D {
-				return pad(4, 10, 8, 12).Layout(gtx, func(gtx C) D { return th.termScreen(gtx, s.Term) })
-			}),
-		)
-	})
+	size := gtx.Constraints.Max
+	fill(gtx, P.Background, image.Rectangle{Max: size}, 0)
+	hline(gtx, over(alpha(P.Border, uint8(int(P.Border.A)*8/10)), P.Background), 0, 0, size.X)
+	// The strip goes over what's drawn, so it's last, and the drag
+	// shows at the next frame.
+	defer func() {
+		if d := th.dragEdge(gtx, &th.in.termEdge, image.Pt(size.X, dp(gtx, 6)), false); d != 0 {
+			th.in.termH -= d / gtx.Metric.PxPerDp
+			gtx.Execute(op.InvalidateCmd{})
+		}
+	}()
+	return Col(gtx,
+		rigid(func(gtx C) D { return th.termTabs(gtx, s.Term) }),
+		flexed(func(gtx C) D {
+			return pad(4, 10, 8, 12).Layout(gtx, func(gtx C) D { return th.termScreen(gtx, s.Term) })
+		}),
+	)
 }
 
 func (th *Theme) termTabs(gtx C, v *TermView) D {

@@ -79,26 +79,10 @@ func (th *Theme) Unfocus() { th.in.blur = true }
 // WriteClipboard puts text on the clipboard at the next frame.
 func (th *Theme) WriteClipboard(text string) { th.in.clipOut = &text }
 
-// browserW is the panel's width: about two fifths of the window until its
-// edge is dragged, and never so wide the thread can't be read.
-func (th *Theme) browserW(win int, gtx C) int {
-	w := max(dp(gtx, 420), win*2/5)
-	if th.in.webW > 0 {
-		w = dp(gtx, th.in.webW)
-	}
-	return max(dp(gtx, 320), min(w, win-dp(gtx, sidebarW+420)))
-}
-
+// browserPanel is the right panel's browser surface; the shell's
+// panelHost frames it and drags its edge.
 func (th *Theme) browserPanel(gtx C, s *Scene) D {
 	v := s.Web
-	// The left edge drags, left for wider. The strip goes over the page,
-	// so it's last, and the drag shows at the next frame.
-	defer func() {
-		if d := th.dragEdge(gtx, &th.in.webEdge, image.Pt(dp(gtx, 5), gtx.Constraints.Max.Y), true); d != 0 {
-			th.in.webW = float32(gtx.Constraints.Max.X)/gtx.Metric.PxPerDp - d/gtx.Metric.PxPerDp
-			gtx.Execute(op.InvalidateCmd{})
-		}
-	}()
 	return Fill(gtx, ColPanelHi, func(gtx C) D {
 		return Col(gtx,
 			rigid(func(gtx C) D { return th.browserTabs(gtx, v) }),
@@ -116,7 +100,8 @@ func (th *Theme) browserTabs(gtx C, v *BrowserView) D {
 		th.dragArea(gtx, size)
 		hline(gtx, ColBorder, size.Y-max(1, dp(gtx, 1)), 0, size.X)
 		gtx.Constraints.Min.X = size.X
-		return pad(0, 10, 0, 10).Layout(gtx, func(gtx C) D {
+		// The right 112dp stay clear for the title bar's fixed controls.
+		return pad(0, 112, 0, 10).Layout(gtx, func(gtx C) D {
 			gtx.Constraints.Min.X = gtx.Constraints.Max.X
 			var kids []layout.FlexChild
 			for i, t := range v.Tabs {
@@ -155,10 +140,6 @@ func (th *Theme) browserTabs(gtx C, v *BrowserView) D {
 			kids = append(kids,
 				rigid(Middle(th.Tip("browser.newtab", "New tab", false, 0, func(gtx C) D {
 					return pad(5, 5, 5, 5).Layout(gtx, LucideW("plus", ColDim, 15))
-				}))),
-				flexed(func(gtx C) D { return D{Size: image.Pt(gtx.Constraints.Min.X, 0)} }),
-				rigid(Middle(th.Tip("browser.toggle", "Close browser", false, 1, func(gtx C) D {
-					return pad(5, 5, 5, 5).Layout(gtx, LucideW("x", ColDim, 15))
 				}))),
 			)
 			return Row(gtx, kids...)

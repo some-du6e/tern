@@ -6,12 +6,12 @@ package main
 #include <stdint.h>
 #import <AppKit/AppKit.h>
 
-// The traffic lights, centred in tern's 48pt top row instead of the 28pt
-// title bar the window doesn't have: the title bar's container is made the
-// row's height and the buttons moved into it, what Electron's
-// trafficLightPosition does. AppKit lays them out again on resizes and
-// full screen, so they're moved back each time.
-static const CGFloat barH = 48, lightsX = 18, lightsGap = 20;
+// The traffic lights where T3's desktop app puts them: Electron's
+// trafficLightPosition {x: 16, y: 19}, in a 52pt top bar (19 = 52/2 - 7).
+// The title bar's container is made the bar's height and the buttons moved
+// into it, keeping their native spacing. AppKit lays them out again on
+// resizes and full screen, so they're moved back each time.
+static const CGFloat barH = 52, lightsX = 16, lightsTop = 19;
 
 static void placeLights(NSWindow *w) {
 	if (w.styleMask & NSWindowStyleMaskFullScreen) {
@@ -30,12 +30,15 @@ static void placeLights(NSWindow *w) {
 	f.size.height = barH;
 	f.origin.y = w.frame.size.height - barH;
 	bar.frame = f;
+	// Shift them as a group, so they keep the system's spacing. The
+	// container isn't flipped: y counts up from the bar's bottom.
+	CGFloat base = b[0].frame.origin.x;
 	for (int i = 0; i < 3; i++) {
 		if (b[i] == nil) {
 			continue;
 		}
 		b[i].hidden = NO;
-		[b[i] setFrameOrigin:NSMakePoint(lightsX + i*lightsGap, (barH - b[i].frame.size.height) / 2)];
+		[b[i] setFrameOrigin:NSMakePoint(lightsX + (b[i].frame.origin.x - base), barH - lightsTop - b[i].frame.size.height)];
 	}
 }
 
@@ -70,8 +73,12 @@ import (
 	"gioui.org/io/event"
 )
 
-// titleInset is the room the traffic lights take at the sidebar's top left.
-const titleInset = 84
+// The traffic lights take T3's 90pt at the top bar's left, so the sidebar
+// trigger starts after them, and tern draws the title bar itself.
+const (
+	controlsLeft = 90
+	frameless    = true
+)
 
 var windowOptions = []app.Option{app.Decorated(false)}
 

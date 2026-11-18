@@ -13,7 +13,7 @@ import (
 var lucideSegs sync.Map // name → []seg
 
 // LucideW is the lucide icon name, the set T3 uses, sizeDp square and
-// stroked in col.
+// stroked in col at T3's weight.
 func LucideW(name string, col color.NRGBA, sizeDp float32) W {
 	return func(gtx C) D {
 		s := float32(dp(gtx, sizeDp))
@@ -21,7 +21,7 @@ func LucideW(name string, col color.NRGBA, sizeDp float32) W {
 		if !ok {
 			v, _ = lucideSegs.LoadOrStore(name, parseSVGPath(lucide[name]))
 		}
-		k, width := s/24, 2*s/24
+		k, width := s/24, 1.75*s/24 // T3 strokes lucide at 1.75, not 2 (index.css:1728)
 		sc := func(q f32.Point) f32.Point { return q.Mul(k) }
 		var p clip.Path
 		p.Begin(gtx.Ops)

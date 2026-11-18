@@ -273,6 +273,8 @@ func (a *App) build(now time.Time) *ui.Scene {
 	s.Notice = a.notice
 	s.Panel = ui.PanelChanges
 	s.Details = a.detailsOpen
+	s.DetailsCard = a.detailsCard
+	s.SidebarHidden, s.SidebarW = a.sidebarHidden, a.sidebarWidth
 	s.Term = a.termView()
 	s.Web = a.browserView()
 	for _, id := range a.tabs {

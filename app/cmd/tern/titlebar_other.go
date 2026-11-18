@@ -8,7 +8,10 @@ import (
 )
 
 // Elsewhere the window keeps its own title bar.
-const titleInset = 0
+const (
+	controlsLeft = 12
+	frameless    = false
+)
 
 var windowOptions []app.Option
 

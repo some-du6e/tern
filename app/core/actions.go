@@ -26,6 +26,14 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 	case strings.HasPrefix(id, "signin."):
 		a.handleSignIn(th, act)
 		return
+	case act.Kind == "resize" && id == "sidebar.width":
+		// The rail's drag, on release; an empty width resets it.
+		w, _ := strconv.ParseFloat(act.Text, 32)
+		a.mu.Lock()
+		a.sidebarWidth = float32(w)
+		a.mu.Unlock()
+		_ = a.store.Put("sidebar-width", float32(w))
+		return
 	case act.Kind == "change" && id == "search":
 		a.mu.Lock()
 		a.search = act.Text
@@ -199,12 +207,26 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		i, _ := strconv.Atoi(arg)
 		a.closeTerminal(i)
 	case "details":
-		// T3's thread details: a popover under the header's button.
+		// T3's thread details: a card in the canvas when it fits, which
+		// stays open until toggled, else a popover from the header.
 		a.mu.Lock()
+		if arg == "card" {
+			a.detailsCard = !a.detailsCard
+			card := a.detailsCard
+			a.mu.Unlock()
+			_ = a.store.Put("details-card", card)
+			return
+		}
 		open := !a.detailsOpen
 		a.closeMenusLocked()
 		a.detailsOpen = open
 		a.mu.Unlock()
+	case "sidebar.toggle":
+		a.mu.Lock()
+		a.sidebarHidden = !a.sidebarHidden
+		hidden := a.sidebarHidden
+		a.mu.Unlock()
+		_ = a.store.Put("sidebar-hidden", hidden)
 	case "ctx":
 		_, j := split2(arg)
 		a.threadMenu(th, j)

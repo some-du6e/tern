@@ -12,16 +12,24 @@ import (
 	"gioui.org/op/paint"
 )
 
-// detailsW is the thread details popover's width.
-const detailsW = 300
+// detailsW is the thread details card's width (--thread-details-panel-width).
+const detailsW = cardW
 
 // ShortcutShift is Shortcut with Shift: ⇧⌘B on a Mac, Ctrl+Shift+B
-// elsewhere.
+// elsewhere (keybindings.ts: ⌃⌥⇧⌘ order on a Mac, words elsewhere).
 func ShortcutShift(k string) string {
 	if s := Shortcut(k); s[0] != 'C' {
 		return "⇧" + s
 	}
 	return "Ctrl+Shift+" + k
+}
+
+// ShortcutAlt is Shortcut with Alt: ⌥⌘B on a Mac, Ctrl+Alt+B elsewhere.
+func ShortcutAlt(k string) string {
+	if s := Shortcut(k); s[0] != 'C' {
+		return "⌥" + s
+	}
+	return "Ctrl+Alt+" + k
 }
 
 // iconToggle is an icon button with a lucide icon, lit while what it opens

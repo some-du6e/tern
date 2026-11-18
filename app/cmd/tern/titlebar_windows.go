@@ -9,7 +9,10 @@ import (
 )
 
 // Windows keeps its own title bar, dark or light with the theme.
-const titleInset = 0
+const (
+	controlsLeft = 12
+	frameless    = false
+)
 
 var windowOptions []app.Option
 

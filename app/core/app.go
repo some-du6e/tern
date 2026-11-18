@@ -87,15 +87,21 @@ type App struct {
 	projectsOpen bool
 	projectsHero bool // the project menu hangs off the heading, not the header
 	accountOpen  bool
-	detailsOpen  bool                // the thread details popover is up
-	machinesOpen bool                // the footer's machines menu is up
-	drawers      map[string]*drawer  // each thread's terminals, by ref
-	browsers     map[string]*browser // each thread's browser panel, by ref
-	ctxRef       string              // the thread whose right-click menu is open
-	ctxConfirm   bool                // Delete was clicked once and wants a second click
-	errText      string
-	notice       string
-	answers      map[string]map[int]bool // question id -> picked option indexes
+	detailsOpen  bool // the thread details popover is up
+	// T3's shell: the details card shown inline (on by default), the
+	// sidebar collapsed, and its dragged width in dp (0 for the default).
+	// All three persist.
+	detailsCard   bool
+	sidebarHidden bool
+	sidebarWidth  float32
+	machinesOpen  bool                // the footer's machines menu is up
+	drawers       map[string]*drawer  // each thread's terminals, by ref
+	browsers      map[string]*browser // each thread's browser panel, by ref
+	ctxRef        string              // the thread whose right-click menu is open
+	ctxConfirm    bool                // Delete was clicked once and wants a second click
+	errText       string
+	notice        string
+	answers       map[string]map[int]bool // question id -> picked option indexes
 
 	uiOps []func(*ui.Theme) // editor and focus changes from goroutines, run on the UI goroutine
 
@@ -168,7 +174,11 @@ func NewWithStore(store *t3.Store, redraw func()) (*App, error) {
 		browsers: map[string]*browser{},
 		answers:  map[string]map[int]bool{},
 	}
-	_ = store.Delete("env-filter")   // from when a machine's chip filtered the inbox
+	_ = store.Delete("env-filter") // from when a machine's chip filtered the inbox
+	a.detailsCard = true
+	_, _ = store.Get("details-card", &a.detailsCard)
+	_, _ = store.Get("sidebar-hidden", &a.sidebarHidden)
+	_, _ = store.Get("sidebar-width", &a.sidebarWidth)
 	_ = store.Delete("panel-hidden") // from when details were a side panel
 	return a, nil
 }

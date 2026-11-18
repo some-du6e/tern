@@ -240,6 +240,9 @@ type Scene struct {
 	Projects                 *Traits      // the new-thread project menu, one group per machine
 	Context                  *Traits      // a thread's right-click menu, at the click
 	Details                  bool         // the thread details popover is open
+	DetailsCard              bool         // the details card is shown inline, where it fits
+	SidebarHidden            bool         // the sidebar is collapsed
+	SidebarW                 float32      // the sidebar's width in dp, 0 for T3's default
 	Machines                 *Traits      // the footer's machines menu, when open
 	Term                     *TermView    // the open thread's terminal drawer, when open
 	Web                      *BrowserView // the open thread's browser panel, when open

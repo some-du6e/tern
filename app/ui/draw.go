@@ -567,13 +567,13 @@ func (th *Theme) Checkbox(on bool, label string) W {
 }
 
 // Kbd is a key hint like "⌘K".
-// Shortcut is how this computer writes the shortcut key with k: ⌘K on a
-// Mac, Ctrl K elsewhere.
+// Shortcut is how this computer writes the shortcut key with k, as T3
+// does: ⌘K on a Mac, Ctrl+K elsewhere.
 func Shortcut(k string) string {
 	if runtime.GOOS == "darwin" {
 		return "⌘" + k
 	}
-	return "Ctrl " + k
+	return "Ctrl+" + k
 }
 
 func (th *Theme) Kbd(s string) W {
@@ -637,4 +637,32 @@ func Scrollbar(gtx C, size image.Point, start, length float32) {
 	h := track.Dy()
 	thumb := image.Rect(x, track.Min.Y+int(start*float32(h)), x+w, track.Min.Y+int((start+length)*float32(h)))
 	fill(gtx, alpha(ColBorderHi, 0xc0), thumb, w/2)
+}
+
+// boxShadow is one CSS box-shadow: offsets, blur and spread in dp, colour.
+type boxShadow struct {
+	x, y, blur, spread float32
+	col                color.NRGBA
+}
+
+// shadow paints CSS box shadows for the rounded rect r. Gio has no blur, so
+// each shadow's blurred edge is a stack of rounded rects, from the edge of
+// the blur in to its middle, whose alphas add up to the shadow's colour.
+func shadow(gtx C, r image.Rectangle, radius int, shadows []boxShadow) {
+	for _, sh := range shadows {
+		off := image.Pt(dp(gtx, sh.x), dp(gtx, sh.y))
+		blur := float32(dp(gtx, sh.blur))
+		spread := dp(gtx, sh.spread)
+		n := max(1, min(8, int(blur)))
+		c := sh.col
+		c.A = uint8(max(1, int(float32(sh.col.A)/float32(n)+0.5)))
+		for i := 0; i < n; i++ {
+			grow := spread + int(blur*(0.5-float32(i)/float32(n)))
+			rr := r.Add(off).Inset(-grow)
+			if rr.Dx() <= 0 || rr.Dy() <= 0 {
+				continue
+			}
+			fill(gtx, c, rr, max(0, radius+grow))
+		}
+	}
 }

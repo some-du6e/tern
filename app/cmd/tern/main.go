@@ -22,7 +22,7 @@ import (
 func main() {
 	go func() {
 		w := new(app.Window)
-		w.Option(append([]app.Option{app.Title("tern"), app.Size(unit.Dp(1440), unit.Dp(900)), app.MinSize(unit.Dp(960), unit.Dp(600))}, windowOptions...)...)
+		w.Option(append([]app.Option{app.Title("tern"), app.Size(unit.Dp(1100), unit.Dp(780)), app.MinSize(unit.Dp(960), unit.Dp(600))}, windowOptions...)...)
 		if err := run(w); err != nil {
 			log.Fatal(err)
 		}
@@ -37,7 +37,7 @@ const fadeIn = 280 * time.Millisecond
 func run(w *app.Window) error {
 	th := ui.NewTheme()
 	th.CanRun, th.Run = shell.Runnable, shell.Run
-	th.TitleInset = titleInset
+	th.ControlsLeft, th.Frameless = controlsLeft, frameless
 	// T3 follows the system's light or dark setting; so does tern.
 	var dark atomic.Bool
 	dark.Store(watchDark(func(d bool) {
