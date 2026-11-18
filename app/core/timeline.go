@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -45,6 +46,7 @@ type chatMessage struct {
 	at, updated           time.Time
 	intent                string // inputIntent
 	createdBy, source     string // createdBy, creationSource
+	idleCompaction        string
 	attachments           []json.RawMessage
 	item                  *t3.TurnItem
 }
@@ -64,6 +66,14 @@ var standalone = map[string]bool{"fork": true, "handoff": true, "run_interrupt_r
 // attachments; people see no words.
 const attachmentOnlyPrompt = "[User attached one or more files without additional text. Respond using the conversation context and the attached files.]"
 
+// attachmentOnly is T3's isAttachmentOnlyBootstrapPrompt: that prompt,
+// which Claude's ultrathink effort sends as "Ultrathink:\n<prompt>".
+func attachmentOnly(text string) bool {
+	return ultrathinkPrefix.ReplaceAllString(text, "") == attachmentOnlyPrompt
+}
+
+var ultrathinkPrefix = regexp.MustCompile(`(?i)^Ultrathink:\s*`)
+
 // timelineEntries is T3's deriveTimelineEntriesFromVisibleTurnItems.
 func timelineEntries(items []*t3.TurnItem) []*tlEntry {
 	var out []*tlEntry
@@ -77,7 +87,8 @@ func timelineEntries(items []*t3.TurnItem) []*tlEntry {
 		switch {
 		case it.Type == "user_message" || it.Type == "assistant_message":
 			m := &chatMessage{id: it.MessageID, role: "user", text: it.Text, runID: it.RunID, at: at, updated: parseTime(it.UpdatedAt),
-				intent: it.InputIntent, createdBy: it.CreatedBy, source: it.CreationSource, attachments: it.Attachments, item: it}
+				intent: it.InputIntent, createdBy: it.CreatedBy, source: it.CreationSource, idleCompaction: it.IdleCompaction,
+				attachments: it.Attachments, item: it}
 			if it.Type == "assistant_message" {
 				m.role, m.streaming = "assistant", it.Streaming
 			}
@@ -164,6 +175,7 @@ func lastBoundary(entries []*tlEntry) int {
 type timelineInput struct {
 	working       bool    // the thread is working
 	latest        *t3.Run // its latest run
+	turnEnded     bool    // the latest run's provider turn has ended
 	running       string  // the running run
 	pending       string  // the pending approval's request
 	openRuns      map[string]bool
@@ -714,11 +726,7 @@ func deriveRows(all []*tlEntry, in timelineInput) []*row {
 	for _, en := range entries {
 		switch {
 		case en.isUser() && en.msg.runID != "" && compactionCommand(en.msg):
-			reason := ""
-			if en.msg.createdBy == "agent" && en.msg.source == "server" {
-				reason = "beforeCacheExpires"
-			}
-			compactionRuns[en.msg.runID] = reason
+			compactionRuns[en.msg.runID] = idleCompactionOf(en.msg)
 		case en.isCompaction() && en.work.runID != "":
 			compacted[en.work.runID] = true
 		}
@@ -744,14 +752,18 @@ func deriveRows(all []*tlEntry, in timelineInput) []*row {
 	if activeIsCompaction && !compactionFinished {
 		runningCompaction = unsettled
 	}
+	// Compacting on return holds back the message just sent, so the
+	// working row says why it waits; any other compaction shows only its
+	// divider.
+	compactsOnReturn := runningCompaction != "" && compactionRuns[runningCompaction] == "onReturn"
 	hasActiveCompaction := activeCompaction != nil || activeIsCompaction && !compactionFinished
 
 	var rows []*row
 	working := func() {
-		if compactionOnlyFinished || runningCompaction != "" {
+		if compactionOnlyFinished || runningCompaction != "" && !compactsOnReturn {
 			return
 		}
-		rows = append(rows, &row{kind: "working", id: "working-indicator-row", at: in.activeStarted})
+		rows = append(rows, &row{kind: "working", id: "working-indicator-row", at: in.activeStarted, compact: compactsOnReturn})
 	}
 	hasActivity := false
 	liveRows := func() {
@@ -888,7 +900,7 @@ func deriveRows(all []*tlEntry, in timelineInput) []*row {
 		case entMessage:
 			m := en.msg
 			if m.role == "user" && m.runID != "" && compactionCommand(m) {
-				if !compacted[m.runID] {
+				if !compacted[m.runID] && !(compactsOnReturn && m.runID == runningCompaction) {
 					reason := compactionRuns[m.runID]
 					label := "Context compaction"
 					if m.runID == runningCompaction {
@@ -913,7 +925,7 @@ func deriveRows(all []*tlEntry, in timelineInput) []*row {
 	if in.working && !hasWorking && header == len(entries) {
 		working()
 	}
-	if in.working && !hasActiveCompaction && !compactionOnlyFinished && (latestFailed || !hasActivity && in.pending == "") {
+	if in.working && !in.turnEnded && !hasActiveCompaction && !compactionOnlyFinished && (latestFailed || !hasActivity && in.pending == "") {
 		r := &row{kind: "thinking", id: liveActivityRow, at: in.activeStarted}
 		if latestFailed {
 			r.groupID = workGroupID(tail[0].id)
@@ -945,6 +957,19 @@ var (
 	idleCompactingLabels = map[string]string{"beforeCacheExpires": "Compacting before the cache expires…", "onReturn": "Compacting…"}
 	idleCompactionTitles = map[string]string{"beforeCacheExpires": "Context automatically compacted before cache expiry", "onReturn": "Context compacted before sending"}
 )
+
+// idleCompactionOf is T3's idleCompactionOf: why T3 sent a /compact on
+// its own, or "" for one someone asked for. Servers from before
+// idleCompaction marked their own as the agent's.
+func idleCompactionOf(m *chatMessage) string {
+	if m.idleCompaction != "" {
+		return m.idleCompaction
+	}
+	if m.createdBy == "agent" && m.source == "server" {
+		return "beforeCacheExpires"
+	}
+	return ""
+}
 
 func compactionRunOf(runs map[string]string, run string) bool {
 	_, ok := runs[run]

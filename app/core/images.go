@@ -220,6 +220,21 @@ func mergeMap(dst, src map[string]any) map[string]any {
 	return dst
 }
 
+// attachmentFiles is a message's files: its attachments that aren't
+// pictures (ChatFileAttachment, ChatUnknownAttachment).
+func attachmentFiles(raws []json.RawMessage) []ui.File {
+	var out []ui.File
+	for _, raw := range raws {
+		var at t3.Attachment
+		if json.Unmarshal(raw, &at) != nil || at.Type == "image" || at.ID == "" {
+			continue
+		}
+		out = append(out, ui.File{ID: at.ID, Name: at.Name, Size: at.SizeBytes, Unknown: at.Type != "file",
+			Pasted: at.Source != nil && at.Source.Tag == "pasted-text"})
+	}
+	return out
+}
+
 // sentThumb is a sent picture, loaded once per attachment.
 type sentThumb struct {
 	picture ui.Picture

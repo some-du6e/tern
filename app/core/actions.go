@@ -246,25 +246,22 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		}
 		a.mu.Unlock()
 	case "entry":
+		// An open entry fetches what the socket left out as it builds.
 		a.mu.Lock()
-		var item *t3.TurnItem
 		if a.view != nil {
 			a.view.open[arg] = !a.view.open[arg]
-			if a.view.open[arg] {
-				for _, it := range a.view.items {
-					if it.ID == arg {
-						item = it
-					}
-				}
-			}
 		}
 		a.mu.Unlock()
-		if item != nil {
-			a.loadTool(item)
-		}
 	case "terminal.run":
 		a.runInTerminal(act.Text)
-	case "approval":
+	case "link":
+		a.openLink(arg)
+	case "plan.download":
+		a.download(arg, []byte(act.Text))
+	case "file.download":
+		a.downloadAttachment(arg)
+	case "approval", "timeline.approval":
+		// The composer's panel, or the approval's row in the timeline.
 		a.respond(map[string]any{"decision": arg})
 	case "q":
 		qi, oi := split2(arg)

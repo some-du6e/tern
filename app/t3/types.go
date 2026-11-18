@@ -137,6 +137,8 @@ type TurnItem struct {
 	InputIntent    string `json:"inputIntent"`
 	CreatedBy      string `json:"createdBy"`
 	CreationSource string `json:"creationSource"`
+	// A /compact T3 sent on its own: beforeCacheExpires or onReturn.
+	IdleCompaction string `json:"idleCompaction"`
 	// An assistant message: commentary, partial_answer, final_answer.
 	Phase           string             `json:"phase"`
 	OutputOmitted   bool               `json:"outputOmitted"`
@@ -156,10 +158,18 @@ type TurnItem struct {
 	Summary          string `json:"summary"`
 	BeforeTokenCount *int   `json:"beforeTokenCount"`
 	AfterTokenCount  *int   `json:"afterTokenCount"`
-	Source           *struct {
-		Type     string `json:"type"` // run, node, provider_thread
+	// A fork's source, or a notification's: what it came from.
+	Source *struct {
+		Type     string `json:"type"` // a fork's: run, node, provider_thread
 		ThreadID string `json:"threadId"`
+		// A notification's: subagent, delegated_task, command, monitor,
+		// background_task, system.
+		Kind string `json:"kind"`
 	} `json:"source"`
+	// A notification's outcome (completed, failed, cancelled, updated) and
+	// its body.
+	Outcome        string `json:"outcome"`
+	Detail         string `json:"detail"`
 	TargetThreadID string `json:"targetThreadId"`
 }
 
@@ -212,15 +222,35 @@ type Question struct {
 }
 
 type Run struct {
-	ID            string `json:"id"`
-	Status        string `json:"status"`
-	StartedAt     string `json:"startedAt"`
-	CompletedAt   string `json:"completedAt"`
-	QueuePosition int    `json:"queuePosition"`
-	QueueHeld     bool   `json:"queueHeld"`
-	UserMessageID string `json:"userMessageId"`
-	Ordinal       int    `json:"ordinal"`
-	RequestedAt   string `json:"requestedAt"`
+	ID              string `json:"id"`
+	Status          string `json:"status"`
+	StartedAt       string `json:"startedAt"`
+	CompletedAt     string `json:"completedAt"`
+	QueuePosition   int    `json:"queuePosition"`
+	QueueHeld       bool   `json:"queueHeld"`
+	UserMessageID   string `json:"userMessageId"`
+	Ordinal         int    `json:"ordinal"`
+	RequestedAt     string `json:"requestedAt"`
+	ActiveAttemptID string `json:"activeAttemptId"`
+}
+
+// ProviderTurn is one of the provider's own turns, in a run's attempt.
+type ProviderTurn struct {
+	ID           string `json:"id"`
+	RunAttemptID string `json:"runAttemptId"`
+	Ordinal      int    `json:"ordinal"`
+	Status       string `json:"status"` // pending, running, completed, interrupted, failed, cancelled
+}
+
+// RuntimeRequestRecord is a runtime request in the thread's projection:
+// how it stands, and whether the provider can still take its answer.
+type RuntimeRequestRecord struct {
+	ID                 string `json:"id"`
+	Kind               string `json:"kind"`
+	Status             string `json:"status"` // pending, resolved, expired, cancelled
+	ResponseCapability struct {
+		Type string `json:"type"` // live, message, not_resumable
+	} `json:"responseCapability"`
 }
 
 type Message struct {
@@ -236,8 +266,10 @@ type ThreadItem struct {
 		VisibleTurnItems []struct {
 			Item json.RawMessage `json:"item"`
 		} `json:"visibleTurnItems"`
-		Runs     []Run     `json:"runs"`
-		Messages []Message `json:"messages"`
+		Runs            []Run                  `json:"runs"`
+		Messages        []Message              `json:"messages"`
+		ProviderTurns   []ProviderTurn         `json:"providerTurns"`
+		RuntimeRequests []RuntimeRequestRecord `json:"runtimeRequests"`
 	} `json:"projection"`
 	HistoryCursor  string `json:"historyCursor"`
 	HasMoreHistory bool   `json:"hasMoreHistory"`
@@ -262,6 +294,10 @@ type Attachment struct {
 	Name      string `json:"name"`
 	MimeType  string `json:"mimeType"`
 	SizeBytes int    `json:"sizeBytes"`
+	// A file's source: _tag "pasted-text" for text pasted as a file.
+	Source *struct {
+		Tag string `json:"_tag"`
+	} `json:"source,omitempty"`
 }
 
 // ServerConfig is the part of server.getConfig the composer needs.

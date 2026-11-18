@@ -4,7 +4,6 @@ go 1.24.2
 
 require (
 	gioui.org v0.10.3
-	gioui.org/x v0.10.3
 	github.com/alecthomas/chroma/v2 v2.20.0
 	github.com/charmbracelet/ultraviolet v0.0.0-20260303162955-0b88c25f3fff
 	github.com/charmbracelet/x/ansi v0.11.7

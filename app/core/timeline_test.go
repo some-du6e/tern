@@ -337,3 +337,249 @@ func TestToolFailure(t *testing.T) {
 		}
 	}
 }
+
+// Once the provider's turn has ended, a run still settling has no
+// "Thinking" row (MessagesTimeline.logic.ts:2274-2281).
+func TestTurnEndedDropsThinking(t *testing.T) {
+	run := []t3.Run{{ID: "turn-1", Status: "running", StartedAt: at(0), Ordinal: 1, ActiveAttemptID: "attempt-1"}}
+	prompt := turnItem("p", "user_message", 1, 0, "runId", "turn-1", "text", "Go", "inputIntent", "turn_start")
+	for _, c := range []struct {
+		status, want string
+	}{{"running", "user:p, working, thinking"}, {"completed", "user:p, working"}} {
+		tt := newTimelineTest(t, run, prompt)
+		tt.working("turn-1")
+		tt.a.view.turns["pt-1"] = t3.ProviderTurn{ID: "pt-1", RunAttemptID: "attempt-1", Ordinal: 1, Status: c.status}
+		wantShape(t, "provider turn "+c.status, tt.rows(), c.want)
+	}
+}
+
+// T3's own /compact on returning holds the message back, so the working
+// row says "Compacting" and no divider shows (MessagesTimeline.logic.ts:
+// 1783-1812, 2171-2190).
+func TestCompactingOnReturn(t *testing.T) {
+	tt := newTimelineTest(t, []t3.Run{{ID: "run-c", Status: "running", StartedAt: at(0), Ordinal: 1}},
+		turnItem("p", "user_message", 1, 0, "runId", "run-c", "text", "/compact", "inputIntent", "turn_start",
+			"createdBy", "agent", "creationSource", "server", "idleCompaction", "onReturn"))
+	tt.working("run-c")
+	rows := tt.rows()
+	wantShape(t, "compacting", rows, "working")
+	if !rows[0].Compacting {
+		t.Error("the working row doesn't say it's compacting")
+	}
+}
+
+// An approval whose provider is gone can't be answered: its row says so
+// (TimelinePendingApprovalRow.tsx:40, 95-99).
+func TestApprovalProviderGone(t *testing.T) {
+	run := []t3.Run{{ID: "turn-1", Status: "running", StartedAt: at(0), Ordinal: 1}}
+	for _, c := range []struct {
+		capability string
+		live       bool
+	}{{"live", true}, {"not_resumable", false}} {
+		tt := newTimelineTest(t, run, turnItem("p", "user_message", 1, 0, "runId", "turn-1", "text", "Go", "inputIntent", "turn_start"),
+			turnItem("ap", "approval_request", 2, 3, "runId", "turn-1", "requestId", "req-1", "requestKind", "command", "prompt", "git push", "status", "pending"))
+		tt.working("turn-1")
+		_, th := tt.a.thread("swiss/t1")
+		th.ActivityRunStatus, th.PendingRuntimeRequest = "waiting", &t3.RuntimeRequest{ID: "req-1", Kind: "command"}
+		rr := t3.RuntimeRequestRecord{ID: "req-1", Kind: "command", Status: "pending"}
+		rr.ResponseCapability.Type = c.capability
+		tt.a.view.requests["req-1"] = rr
+		rows := tt.rows()
+		wantShape(t, c.capability, rows, "user:p, working, work:ap")
+		if a := rows[2].Entries[0].Approval; a == nil || a.Live != c.live {
+			t.Errorf("%s: approval %+v", c.capability, a)
+		}
+	}
+}
+
+// openRows is a settled turn of one work item, its fold opened, and the
+// rows: the item's entry is rows[2].
+func openRows(t *testing.T, item json.RawMessage) (*timelineTest, []ui.TimelineRow) {
+	t.Helper()
+	tt := newTimelineTest(t, []t3.Run{{ID: "r", Status: "completed", StartedAt: at(0), CompletedAt: at(9), Ordinal: 1}},
+		turnItem("p", "user_message", 1, 0, "runId", "r", "text", "Go", "inputIntent", "turn_start"), item,
+		turnItem("a", "assistant_message", 3, 2, "runId", "r", "text", "Done"))
+	tt.click("fold:r")
+	rows := tt.rows()
+	wantShape(t, "rows", rows, "user:p, fold, work:w, assistant:a")
+	return tt, rows
+}
+
+// A tool call's arguments keep the call's own order, a string as it is
+// and anything else as compact JSON; html, a JavaScript REPL's code and
+// JSON are code (itemDetail.ts:101-130, V2ItemInspector.tsx:197-217).
+func TestToolArgsKeepTheirOrder(t *testing.T) {
+	tt, _ := openRows(t, turnItem("w", "dynamic_tool", 2, 1, "runId", "r", "toolName", "node_repl.js",
+		"input", json.RawMessage(`{"zeta":"last","code":"let a = 1","html":"<p>hi</p>","alpha":{"b": 1, "a": [1, 2]},"empty":""}`)))
+	tt.click("entry:w")
+	rows := tt.rows()
+	b := rows[2].Entries[0].Body
+	if b == nil {
+		t.Fatal("the open entry has no body")
+	}
+	want := []ui.ToolArg{{Key: "zeta", Value: "last"}, {Key: "code", Value: "let a = 1", Lang: "typescript"},
+		{Key: "html", Value: "<p>hi</p>", Lang: "html"}, {Key: "alpha", Value: `{"b":1,"a":[1,2]}`, Lang: "json"}, {Key: "empty", Value: `""`, Lang: "json"}}
+	if len(b.Args) != len(want) {
+		t.Fatalf("args %+v", b.Args)
+	}
+	for i := range want {
+		if b.Args[i] != want[i] {
+			t.Errorf("arg %d is %+v, want %+v", i, b.Args[i], want[i])
+		}
+	}
+}
+
+// A notification's icon says where it came from, and a failed one is an
+// alert (TimelineWorkEntryRow.logic.ts:149-193); its body is its detail.
+func TestNotificationIcon(t *testing.T) {
+	for _, c := range []struct {
+		kind, outcome, icon string
+	}{{"command", "completed", "terminal"}, {"subagent", "completed", "bot"}, {"monitor", "updated", "eye"},
+		{"system", "completed", "t3-code"}, {"background_task", "completed", "zap"}, {"command", "failed", "circle-alert"}} {
+		tt := newTimelineTest(t, []t3.Run{{ID: "r", Status: "completed", StartedAt: at(0), CompletedAt: at(9), Ordinal: 1}},
+			turnItem("w", "notification", 1, 0, "runId", "r", "summary", "Build finished", "detail", "All green.",
+				"outcome", c.outcome, "source", map[string]any{"kind": c.kind}))
+		rows := tt.rows()
+		wantShape(t, c.kind, rows, "work:w")
+		if e := rows[0].Entries[0]; e.Icon != c.icon || !e.Expands {
+			t.Errorf("%s %s: icon %q, expands %v", c.kind, c.outcome, e.Icon, e.Expands)
+		}
+	}
+}
+
+// The usage limit's reset names the zone as Intl does, by its IANA name
+// (TimelineWorkEntryRow.tsx:249-255).
+func TestUsageLimitZone(t *testing.T) {
+	t.Setenv("TZ", "Europe/Paris")
+	if got := upcomingTime(t0, t0); !strings.HasSuffix(got, " (Europe/Paris)") {
+		t.Errorf("reset at %q", got)
+	}
+	t.Setenv("TZ", ":/usr/share/zoneinfo/Asia/Tokyo")
+	if got := localZone(t0); got != "Asia/Tokyo" {
+		t.Errorf("TZ as a path names %q", got)
+	}
+}
+
+// Claude's ultrathink sends an attachment-only prompt as
+// "Ultrathink:\n<prompt>"; nobody sees it (composerContextReferences.ts:
+// 181-184).
+func TestUltrathinkBootstrapPromptHidden(t *testing.T) {
+	tt := newTimelineTest(t, nil, turnItem("p", "user_message", 1, 0, "text", "Ultrathink:\n"+attachmentOnlyPrompt, "inputIntent", "turn_start"))
+	for _, r := range tt.rows() {
+		if r.Message != nil && strings.Contains(r.Message.Text, "User attached") {
+			t.Fatalf("the bubble says %q", r.Message.Text)
+		}
+	}
+}
+
+// An open thought is the whole trace: only its one-line preview is cut
+// short (TimelineWorkEntryRow.tsx:121-145).
+func TestOpenThoughtIsWhole(t *testing.T) {
+	long := strings.Repeat("é", 6000) // 12000 bytes
+	_, rows := openRows(t, turnItem("w", "reasoning", 2, 1, "runId", "r", "text", long))
+	if got := rows[2].Entries[0].Thought; got != long {
+		t.Fatalf("the trace is %d bytes of %d", len(got), len(long))
+	}
+}
+
+// A web result's title opens its page, when it's a web page's
+// (V2ItemInspector.tsx:355-372).
+func TestWebSearchHitAddress(t *testing.T) {
+	tt, _ := openRows(t, turnItem("w", "web_search", 2, 1, "runId", "r", "patterns", []string{"gio list"},
+		"results", []map[string]any{{"title": "Gio", "url": "https://gioui.org/doc"}, {"title": "Local", "url": "file:///etc/hosts"}}))
+	tt.click("entry:w")
+	b := tt.rows()[2].Entries[0].Body
+	if b == nil || len(b.Hits) != 2 || b.Hits[0].URL != "https://gioui.org/doc" || b.Hits[1].URL != "" {
+		t.Fatalf("hits %+v", b)
+	}
+}
+
+// An open entry whose output the socket left out fetches it: when it's
+// opened, again when its thread comes back with it still open, and again
+// for each new revision of it, as when it finishes (itemDetail.ts:145-158).
+func TestOpenEntryFetchesItsOutput(t *testing.T) {
+	fetched := make(chan string, 4)
+	output := "first"
+	defer func(f func(*t3.Conn, string, string) (json.RawMessage, error)) { getTurnItem = f }(getTurnItem)
+	getTurnItem = func(_ *t3.Conn, _, itemID string) (json.RawMessage, error) {
+		fetched <- itemID
+		return json.Marshal(map[string]any{"id": itemID, "type": "command_execution", "status": "completed", "output": output})
+	}
+	item := func(s int) json.RawMessage {
+		return turnItem("w", "command_execution", 2, 1, "runId", "r", "input", "make", "outputOmitted", true, "updatedAt", at(s))
+	}
+	tt, _ := openRows(t, item(1))
+	e, _ := tt.a.thread("swiss/t1")
+	e.conn = new(t3.Conn)
+	// Fetches land from their own goroutines, so build as Scene does,
+	// under the lock.
+	locked := func(f func()) {
+		tt.a.mu.Lock()
+		defer tt.a.mu.Unlock()
+		f()
+	}
+	body := func() (b *ui.EntryBody) {
+		locked(func() { b = tt.a.build(t0.Add(time.Hour)).Timeline.Rows[2].Entries[0].Body })
+		return b
+	}
+	wait := func(what, want string) {
+		t.Helper()
+		select {
+		case <-fetched:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s: nothing fetched", what)
+		}
+		// The fetch lands under the lock; a build after it shows it.
+		b := body()
+		for i := 0; i < 200 && b.Output != want; i++ {
+			time.Sleep(10 * time.Millisecond)
+			b = body()
+		}
+		if b.Output != want {
+			t.Fatalf("%s: output %q, want %q", what, b.Output, want)
+		}
+	}
+	tt.click("entry:w")
+	if b := body(); b == nil || !b.Pending {
+		t.Fatalf("opened: %+v", b)
+	}
+	wait("opened", "first")
+	// Back to the thread, the entry still open.
+	var v *threadView
+	locked(func() {
+		v = newView(e, "t1", tt.a.disclosureFor("swiss/t1"))
+		for _, raw := range []json.RawMessage{
+			turnItem("p", "user_message", 1, 0, "runId", "r", "text", "Go", "inputIntent", "turn_start"), item(1),
+			turnItem("a", "assistant_message", 3, 2, "runId", "r", "text", "Done")} {
+			v.put(raw)
+		}
+		v.runs["r"], v.loaded = tt.a.view.runs["r"], true
+		tt.a.view = v
+	})
+	if b := body(); !b.Pending {
+		t.Fatalf("restored: %+v", b)
+	}
+	wait("restored", "first")
+	// A new revision of it is fetched again.
+	output = "second"
+	locked(func() { v.put(item(5)) })
+	body()
+	wait("updated", "second")
+}
+
+// A message of only files shows them, as cards, rather than dropping out
+// of the timeline with its bootstrap prompt (TimelineUserMessageRow.tsx:
+// 104-178, 529-541).
+func TestFileOnlyMessage(t *testing.T) {
+	file := map[string]any{"type": "file", "id": "f1", "name": "report.pdf", "mimeType": "application/pdf", "sizeBytes": 2516582}
+	pasted := map[string]any{"type": "file", "id": "f2", "name": "pasted.txt", "mimeType": "text/plain", "sizeBytes": 900,
+		"source": map[string]any{"_tag": "pasted-text"}}
+	tt := newTimelineTest(t, nil, turnItem("p", "user_message", 1, 0, "text", attachmentOnlyPrompt, "inputIntent", "turn_start",
+		"attachments", []any{file, pasted}))
+	rows := tt.rows()
+	wantShape(t, "rows", rows, "user:p")
+	m := rows[0].Message
+	if m.Text != "" || len(m.Files) != 2 || m.Files[0] != (ui.File{ID: "f1", Name: "report.pdf", Size: 2516582}) || !m.Files[1].Pasted {
+		t.Fatalf("message %+v", m)
+	}
+}

@@ -1,8 +1,11 @@
 package core
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,9 +22,12 @@ import (
 func (a *App) timeline(s *ui.Scene, t *t3.Thread, v *threadView, root string) {
 	tl := &s.Timeline
 	tl.ID = a.openID
+	_, tl.CanRun = v.env.projects[t.ProjectID]
 	tl.MoreHistory, tl.LoadingHistory, tl.HistoryError = v.more, v.loading, v.historyErr
 	in := timelineInput{working: working(t), latest: latestRun(v), running: t.ActiveRunID,
 		openRuns: v.unfolded, openGroups: v.groups}
+	in.turnEnded = in.latest != nil && turnEnded(in.latest, v.turns)
+	tl.Working = in.working
 	if req := t.PendingRuntimeRequest; req != nil && req.Kind != "user_input" {
 		in.pending = req.ID
 	}
@@ -64,7 +70,7 @@ func (a *App) timeline(s *ui.Scene, t *t3.Thread, v *threadView, root string) {
 				asked = it
 			}
 		}
-		tl.Approvals = append(tl.Approvals, pendingApproval(t.PendingRuntimeRequest, asked))
+		tl.Approvals = append(tl.Approvals, pendingApproval(t.PendingRuntimeRequest, asked, v.requestLive(in.pending)))
 	}
 }
 
@@ -78,6 +84,33 @@ func working(t *t3.Thread) bool {
 		return t.ActiveRunID != ""
 	}
 	return false
+}
+
+// turnEnded is T3's ThreadRunSummary.turnEnded (threadExecution.ts:120-148):
+// the run is still active, but the provider's latest turn for its attempt
+// has stopped, so only the run's settling is left.
+func turnEnded(r *t3.Run, turns map[string]t3.ProviderTurn) bool {
+	switch r.Status {
+	case "preparing", "starting", "running", "waiting":
+	default:
+		return false
+	}
+	var latest t3.ProviderTurn
+	found := false
+	for _, pt := range turns {
+		if r.ActiveAttemptID != "" && pt.RunAttemptID == r.ActiveAttemptID && (!found || pt.Ordinal > latest.Ordinal) {
+			latest, found = pt, true
+		}
+	}
+	return found && latest.Status != "pending" && latest.Status != "running"
+}
+
+// requestLive is whether the provider can still take request id's answer:
+// T3's responseCapability "live" (TimelinePendingApprovalRow.tsx:40). A
+// request the projection doesn't hold yet is taken to be.
+func (v *threadView) requestLive(id string) bool {
+	r, ok := v.requests[id]
+	return !ok || r.ResponseCapability.Type == "" || r.ResponseCapability.Type == "live"
 }
 
 // latestRun is the thread's newest run that isn't waiting in the queue.
@@ -145,7 +178,7 @@ func (a *App) uiRow(r *row, v *threadView, root, pending string) (ui.TimelineRow
 	case "thinking":
 		out.Kind, out.Live, out.Label = ui.RowThinking, pending == "", "Thinking"
 	case "working":
-		out.Kind, out.Since = ui.RowWorking, r.at
+		out.Kind, out.Since, out.Compacting = ui.RowWorking, r.at, r.compact
 	case "context-compaction":
 		out.Kind, out.Live, out.Failed, out.Detail = ui.RowCompaction, r.active, r.failed, r.failure
 		out.Label = r.label
@@ -160,7 +193,7 @@ func (a *App) uiRow(r *row, v *threadView, root, pending string) (ui.TimelineRow
 			}
 		}
 	case "event":
-		return eventRow(out, r.entry.item)
+		return eventRow(out, r.entry.item, v.env.id())
 	case "proposed-plan":
 		out.Kind, out.Plan = ui.RowPlan, r.entry.item.Markdown
 	default:
@@ -169,17 +202,24 @@ func (a *App) uiRow(r *row, v *threadView, root, pending string) (ui.TimelineRow
 	return out, true
 }
 
-// eventRow is an event's divider (V2LifecycleRow.tsx): an interrupted run
-// or a fork. Subagent cards, handoffs and request cards aren't drawn yet.
-func eventRow(out ui.TimelineRow, it *t3.TurnItem) (ui.TimelineRow, bool) {
+// eventRow is an event's divider (V2LifecycleRow.tsx:70-169): an
+// interrupted run, its message wrapping under it, or a fork, whose button
+// opens the conversation on its other side in environment env.
+func eventRow(out ui.TimelineRow, it *t3.TurnItem, env string) (ui.TimelineRow, bool) {
 	out.Kind = ui.RowDivider
 	switch it.Type {
 	case "run_interrupt_result":
-		out.Label, out.Detail, out.Icon = "Run interrupted", it.Message, "circle-stop"
+		out.Label, out.Detail, out.Icon, out.Wrap = "Run interrupted", it.Message, "circle-stop", true
 	case "fork":
-		out.Label, out.Icon = "Conversation fork", "git-fork"
+		out.Label, out.Icon, out.Action = "Conversation fork", "git-fork", "Open fork"
+		other := it.TargetThreadID
 		if it.Source != nil && it.Source.Type == "run" {
-			out.Label = "Forked from conversation"
+			out.Label, out.Action, other = "Forked from conversation", "Open source conversation", it.Source.ThreadID
+		}
+		if other == "" {
+			out.Action = ""
+		} else {
+			out.Thread = ref(env, other)
 		}
 	default:
 		return out, false
@@ -191,7 +231,7 @@ func eventRow(out ui.TimelineRow, it *t3.TurnItem) (ui.TimelineRow, bool) {
 func (a *App) userMessage(r *row, v *threadView) *ui.Message {
 	m := r.entry.msg
 	text := m.text
-	if strings.TrimPrefix(strings.TrimSpace(text), "Ultrathink:") == attachmentOnlyPrompt {
+	if attachmentOnly(text) {
 		text = ""
 	}
 	var chips []string
@@ -203,10 +243,11 @@ func (a *App) userMessage(r *row, v *threadView) *ui.Message {
 		return ui.ChipText(len(chips))
 	}))
 	pics := a.attachmentPictures(v.env, m.attachments)
-	if text == "" && len(pics) == 0 {
+	files := attachmentFiles(m.attachments)
+	if text == "" && len(pics) == 0 && len(files) == 0 {
 		return nil
 	}
-	out := &ui.Message{ID: m.id, Text: text, At: m.at, Chips: chips, Pictures: pics,
+	out := &ui.Message{ID: m.id, Text: text, At: m.at, Chips: chips, Pictures: pics, Files: files,
 		GroupedNext: r.next, GroupedPrev: r.prev, SentByT3: m.createdBy == "agent" && m.source == "server"}
 	if !r.steerCont {
 		switch m.intent {
@@ -244,7 +285,7 @@ func (a *App) uiEntry(e *workEntry, v *threadView, root, pending string) ui.Work
 	out := ui.WorkEntry{ID: e.id, At: e.at, Icon: e.icon(), Label: e.displayLabel(root), Open: v.open[e.id]}
 	it := e.item
 	if it.Type == "approval_request" && pending != "" && it.RequestID == pending {
-		p := pendingApproval(&t3.RuntimeRequest{ID: it.RequestID, Kind: it.RequestKind}, it)
+		p := pendingApproval(&t3.RuntimeRequest{ID: it.RequestID, Kind: it.RequestKind}, it, v.requestLive(it.RequestID))
 		out.Approval = &p
 		return out
 	}
@@ -277,7 +318,8 @@ func (a *App) uiEntry(e *workEntry, v *threadView, root, pending string) ui.Work
 	out.Failed = failed && !danger
 	reasoning := e.itemType == "reasoning"
 	if reasoning {
-		out.Thought, out.Thinking = truncate(e.detail, 8192), e.status == "inProgress"
+		// The whole thought: only its one-line preview is cut short.
+		out.Thought, out.Thinking = e.detail, e.status == "inProgress"
 		out.Expands = strings.TrimSpace(e.detail) != ""
 		return out
 	}
@@ -286,7 +328,10 @@ func (a *App) uiEntry(e *workEntry, v *threadView, root, pending string) ui.Work
 		out.Expands = true
 		return out
 	}
-	full := v.full[e.id]
+	if out.Open && needsDetailFetch(it) {
+		a.fetchTool(v, it)
+	}
+	full, fetchErr := v.fetched(it)
 	plain, hasPlain := "", false
 	switch {
 	case e.groupAction() == "read":
@@ -300,21 +345,22 @@ func (a *App) uiEntry(e *workEntry, v *threadView, root, pending string) ui.Work
 		if out.Open {
 			out.Body = &ui.EntryBody{Plain: plain}
 			if needsDetailFetch(it) {
-				fillOutput(out.Body, it, full, v.fetchErr[e.id])
+				fillOutput(out.Body, it, full, fetchErr)
 			}
 		}
 		return out
 	}
 	out.Expands = e.viewedImage != "" || hasDetail(it)
 	if out.Open {
-		out.Body = inspect(it, full, v.fetchErr[e.id], root)
+		out.Body = inspect(it, full, fetchErr, root)
 	}
 	return out
 }
 
-// pendingApproval is an approval request as its row shows it.
-func pendingApproval(req *t3.RuntimeRequest, it *t3.TurnItem) ui.PendingApproval {
-	p := ui.PendingApproval{ID: req.ID, Kind: req.Kind, Live: true}
+// pendingApproval is an approval request as its row shows it; live: the
+// provider can still take its answer.
+func pendingApproval(req *t3.RuntimeRequest, it *t3.TurnItem, live bool) ui.PendingApproval {
+	p := ui.PendingApproval{ID: req.ID, Kind: req.Kind, Live: live}
 	if it != nil {
 		p.Detail, p.App, p.Reason = it.Prompt, it.AppName, it.Reason
 		for _, o := range it.Options {
@@ -325,9 +371,8 @@ func pendingApproval(req *t3.RuntimeRequest, it *t3.TurnItem) ui.PendingApproval
 }
 
 // upcomingTime is T3's formatUpcomingTimestamp and the zone it names:
-// "4:00 PM", "tomorrow at 4:00 PM", "11/20 4:00 PM", then " (<zone>)".
-// Go knows the zone's IANA name only when TZ gives it; else its
-// abbreviation stands in.
+// "4:00 PM", "tomorrow at 4:00 PM", "11/20 4:00 PM", then " (<zone>)",
+// the zone's IANA name (Intl's resolvedOptions().timeZone).
 func upcomingTime(t, now time.Time) string {
 	t, now = t.Local(), now.Local()
 	days := func(x time.Time) int64 {
@@ -345,11 +390,26 @@ func upcomingTime(t, now time.Time) string {
 	default:
 		s = fmt.Sprintf("%d/%d/%d %s", t.Month(), t.Day(), t.Year(), clock)
 	}
-	zone := t.Location().String()
-	if zone == "Local" || zone == "" {
-		zone = t.Format("MST")
+	return s + " (" + localZone(t) + ")"
+}
+
+// localZone is the system's IANA zone name: TZ's, else the one
+// /etc/localtime points into the zone database at. A system that says
+// neither, as Windows doesn't, gets the zone's abbreviation.
+func localZone(t time.Time) string {
+	tz := strings.TrimPrefix(os.Getenv("TZ"), ":")
+	if _, name, ok := strings.Cut(tz, "zoneinfo/"); ok {
+		return name
 	}
-	return s + " (" + zone + ")"
+	if tz != "" && !strings.HasPrefix(tz, "/") {
+		return tz
+	}
+	if p, err := os.Readlink("/etc/localtime"); err == nil {
+		if _, name, ok := strings.Cut(p, "zoneinfo/"); ok {
+			return name
+		}
+	}
+	return t.Format("MST")
 }
 
 // readOutput is T3's workEntryReadOutput: the files a read read, in full.
@@ -373,10 +433,38 @@ func readOutput(e *workEntry, root string) string {
 	return strings.Join(out, "\n")
 }
 
-// needsDetailFetch is T3's turnItemNeedsDetailFetch: the socket left the
-// output out.
+// needsDetailFetch is T3's turnItemNeedsDetailFetch (itemDetail.ts:
+// 150-159): the socket left the output out, or summarized a tool's input.
 func needsDetailFetch(it *t3.TurnItem) bool {
-	return (it.Type == "command_execution" || it.Type == "dynamic_tool") && it.OutputOmitted
+	switch it.Type {
+	case "command_execution":
+		return it.OutputOmitted
+	case "dynamic_tool":
+		return it.OutputOmitted || summarized(decode(it.Input))
+	}
+	return false
+}
+
+// summarized is T3's isSummarizedValue: an input the wire cut down to a
+// summary.
+func summarized(v any) bool {
+	obj, ok := v.(map[string]any)
+	if !ok || obj["truncated"] != true {
+		return false
+	}
+	_, ok = obj["summary"].(string)
+	return ok
+}
+
+// detailRevision is T3's turnItemDetailRevision: one key while the item
+// runs and another once it's done, so an open row fetches once while it
+// streams and again when it finishes.
+func detailRevision(it *t3.TurnItem) string {
+	switch it.Status {
+	case "idle", "pending", "running", "waiting":
+		return "live"
+	}
+	return it.UpdatedAt
 }
 
 // hasDetail is T3's turnItemHasDetail: an open row would show something.
@@ -392,14 +480,16 @@ func hasDetail(it *t3.TurnItem) bool {
 	case "web_search":
 		return len(it.Results) > 0 || len(it.Patterns) > 0
 	case "dynamic_tool":
-		args, argsText := toolArgs(decode(it.Input))
+		args, argsText := toolArgs(it.Input, it.ToolName)
 		return it.OutputOmitted || len(args) > 0 || argsText != ""
 	case "approval_request":
 		return strings.TrimSpace(it.Prompt) != ""
 	case "user_input_request":
 		return len(it.Questions) > 0
-	case "notification", "system_notice":
-		return strings.TrimSpace(it.Message+it.Summary) != ""
+	case "notification":
+		return strings.TrimSpace(it.Detail) != ""
+	case "system_notice":
+		return strings.TrimSpace(it.Message) != ""
 	case "error":
 		return it.Failure != nil && strings.TrimSpace(it.Failure.Message) != ""
 	case "todo_list":
@@ -419,7 +509,11 @@ func inspect(it, full *t3.TurnItem, fetchErr, root string) *ui.EntryBody {
 			b.Exit = *it.ExitCode
 		}
 	case "dynamic_tool":
-		b.Args, b.ArgsText = toolArgs(decode(it.Input))
+		src := it
+		if full != nil && summarized(decode(it.Input)) {
+			src = full
+		}
+		b.Args, b.ArgsText = toolArgs(src.Input, it.ToolName)
 		fillOutput(b, it, full, fetchErr)
 	case "file_change":
 		src := it
@@ -474,7 +568,7 @@ func inspect(it, full *t3.TurnItem, fetchErr, root string) *ui.EntryBody {
 			if title == "" {
 				title = "Search result"
 			}
-			b.Hits = append(b.Hits, ui.SearchHit{Title: title, Text: r.Snippet, Web: true})
+			b.Hits = append(b.Hits, ui.SearchHit{Title: title, Text: r.Snippet, Web: true, URL: webAddress(r.URL)})
 		}
 	case "approval_request":
 		b.Value = it.Prompt
@@ -489,7 +583,7 @@ func inspect(it, full *t3.TurnItem, fetchErr, root string) *ui.EntryBody {
 		}
 		b.Value = strings.Join(qs, "\n\n")
 	case "notification":
-		b.Value = it.Message
+		b.Value = it.Detail
 	case "system_notice":
 		b.Value = it.Message
 	case "error":
@@ -569,30 +663,64 @@ func commandOutputText(out string) string {
 	return strings.Join(parts, "\n")
 }
 
-// toolArgs is T3's toolCallLines for a tool's arguments: an object's
-// fields, in order, or the arguments as text.
-func toolArgs(args any) (fields [][2]string, text string) {
-	if obj, ok := args.(map[string]any); ok {
-		if obj["truncated"] == true && str(obj["summary"]) != "" {
-			return nil, toolValue(args)
-		}
-		keys := make([]string, 0, len(obj))
-		for k := range obj {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			v := obj[k]
-			s, isStr := v.(string)
-			if !isStr || s == "" {
-				b, _ := json.Marshal(v)
-				s = string(b)
-			}
-			fields = append(fields, [2]string{k, s})
-		}
-		return fields, ""
+// toolArgs is T3's toolCallLines for a tool's arguments (itemDetail.ts:
+// 101-130): an object's fields in the call's own order, a string as it is
+// and anything else as compact JSON; an input that isn't an object, or
+// was summarized, as text. An "html" value is HTML, a JavaScript REPL's
+// "code" TypeScript, and JSON JSON (V2ItemInspector.tsx:197-217).
+func toolArgs(raw json.RawMessage, tool string) (fields []ui.ToolArg, text string) {
+	args := decode(raw)
+	if _, ok := args.(map[string]any); !ok || summarized(args) {
+		return nil, toolValue(args)
 	}
-	return nil, toolValue(args)
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
+		return nil, toolValue(args)
+	}
+	for dec.More() {
+		t, err := dec.Token()
+		if err != nil {
+			break
+		}
+		key, _ := t.(string)
+		var v json.RawMessage
+		if dec.Decode(&v) != nil {
+			break
+		}
+		var s string
+		if json.Unmarshal(v, &s) != nil || s == "" {
+			var b bytes.Buffer
+			if json.Compact(&b, v) != nil {
+				b.Reset()
+				b.Write(v)
+			}
+			s = b.String()
+		}
+		lang := ""
+		switch {
+		case key == "html":
+			lang = "html"
+		case key == "code" && isJavaScriptRepl(tool):
+			lang = "typescript"
+		case ui.JSONText(s):
+			lang = "json"
+		}
+		fields = append(fields, ui.ToolArg{Key: key, Value: s, Lang: lang})
+	}
+	return fields, ""
+}
+
+// webAddress is T3's resolveExternalWebLinkHref: a result's address when
+// it's a web page's, "//" taken as https.
+func webAddress(s string) string {
+	if strings.HasPrefix(s, "//") {
+		s = "https:" + s
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.Scheme != "http" && u.Scheme != "https" || u.Host == "" {
+		return ""
+	}
+	return u.String()
 }
 
 // toolValue is T3's formatToolValue: text blocks as their text, anything

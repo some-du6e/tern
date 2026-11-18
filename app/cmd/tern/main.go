@@ -99,18 +99,14 @@ func run(w *app.Window) error {
 }
 
 // moving reports whether anything on screen animates. The sign-in screen
-// schedules its own frames.
+// schedules its own frames, and so does the timeline: its timers once a
+// second, its shimmer and shine once a step, and only for rows on screen.
 func moving(s *ui.Scene) bool {
 	if s.State == ui.ThreadRunning {
 		return true
 	}
 	for _, r := range s.Active {
 		if r.State == ui.ThreadRunning {
-			return true
-		}
-	}
-	for _, r := range s.Timeline.Rows {
-		if r.Live || r.Kind == ui.RowWorking {
 			return true
 		}
 	}

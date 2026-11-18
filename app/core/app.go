@@ -706,18 +706,27 @@ type threadView struct {
 	// What the user opened in the timeline: folds by run, work groups and
 	// entries by id, kept per thread (disclosureFor).
 	unfolded, groups, open map[string]bool
+	// The provider's turns and the runtime requests, by id.
+	turns    map[string]t3.ProviderTurn
+	requests map[string]t3.RuntimeRequestRecord
 	// The latest run and its status as the timeline last saw them.
 	seenRun, seenStatus string
-	full                map[string]*t3.TurnItem
-	fetchErr            map[string]string // why an open entry's output didn't load
-	cancel              func()
+	// Open entries' full items, fetched when the socket left part out: the
+	// item, the revision it was fetched for, the revision being fetched,
+	// and why one didn't load.
+	full     map[string]*t3.TurnItem
+	fullRev  map[string]string
+	fetching map[string]string
+	fetchErr map[string]string
+	cancel   func()
 }
 
 func newView(e *envState, id string, d *disclosure) *threadView {
 	return &threadView{
 		id: id, env: e, raw: map[string]map[string]json.RawMessage{}, items: map[string]*t3.TurnItem{},
-		runs: map[string]t3.Run{}, messages: map[string]t3.Message{},
-		unfolded: d.unfolded, groups: d.groups, open: d.open, full: map[string]*t3.TurnItem{}, fetchErr: map[string]string{},
+		runs: map[string]t3.Run{}, messages: map[string]t3.Message{}, turns: map[string]t3.ProviderTurn{},
+		requests: map[string]t3.RuntimeRequestRecord{}, unfolded: d.unfolded, groups: d.groups, open: d.open, full: map[string]*t3.TurnItem{},
+		fullRev: map[string]string{}, fetching: map[string]string{}, fetchErr: map[string]string{},
 	}
 }
 
@@ -871,6 +880,14 @@ func (a *App) subscribeThread(e *envState, conn *t3.Conn, gen int, r string) {
 			for _, m := range it.Projection.Messages {
 				v.messages[m.ID] = m
 			}
+			v.turns = map[string]t3.ProviderTurn{}
+			for _, pt := range it.Projection.ProviderTurns {
+				v.turns[pt.ID] = pt
+			}
+			v.requests = map[string]t3.RuntimeRequestRecord{}
+			for _, rr := range it.Projection.RuntimeRequests {
+				v.requests[rr.ID] = rr
+			}
 			v.cursor, v.more, v.loaded = it.HistoryCursor, it.HasMoreHistory, true
 		case it.Kind == "event" && it.Event != nil:
 			switch t := it.Event.Type; {
@@ -887,6 +904,16 @@ func (a *App) subscribeThread(e *envState, conn *t3.Conn, gen int, r string) {
 				var m t3.Message
 				if json.Unmarshal(it.Event.Payload, &m) == nil {
 					v.messages[m.ID] = m
+				}
+			case t == "provider-turn.updated":
+				var pt t3.ProviderTurn
+				if json.Unmarshal(it.Event.Payload, &pt) == nil && pt.ID != "" {
+					v.turns[pt.ID] = pt
+				}
+			case t == "runtime-request.updated":
+				var rr t3.RuntimeRequestRecord
+				if json.Unmarshal(it.Event.Payload, &rr) == nil && rr.ID != "" {
+					v.requests[rr.ID] = rr
 				}
 			}
 		}
@@ -928,6 +955,9 @@ func mergeRun(dst *t3.Run, src t3.Run) {
 	if src.RequestedAt != "" {
 		dst.RequestedAt = src.RequestedAt
 	}
+	if src.ActiveAttemptID != "" {
+		dst.ActiveAttemptID = src.ActiveAttemptID
+	}
 	dst.QueuePosition, dst.QueueHeld = src.QueuePosition, src.QueueHeld
 }
 
@@ -964,45 +994,58 @@ func (a *App) loadEarlier() {
 	}()
 }
 
-// loadTool fetches an open entry's full item when the socket left its
-// output out (T3's turnItemNeedsDetailFetch).
-func (a *App) loadTool(item *t3.TurnItem) {
-	a.mu.Lock()
-	v := a.view
-	var conn *t3.Conn
-	if v != nil {
-		conn = v.env.conn
+// getTurnItem asks the server for a turn item in full. Tests replace it.
+var getTurnItem = func(conn *t3.Conn, threadID, itemID string) (json.RawMessage, error) {
+	var out struct {
+		Item json.RawMessage `json:"item"`
 	}
-	if v == nil || conn == nil || !needsDetailFetch(item) {
-		a.mu.Unlock()
+	err := conn.Call("orchestration.getTurnItem", map[string]any{"threadId": threadID, "itemId": itemID}, &out)
+	return out.Item, err
+}
+
+// fetchTool fetches an open entry's full item when the socket left part
+// of it out (T3's turnItemNeedsDetailFetch), once for each of its
+// revisions: once while it runs and again when it's done. An entry
+// opened afresh, or still open when its thread comes back, fetches the
+// same way. Call with the lock held.
+func (a *App) fetchTool(v *threadView, it *t3.TurnItem) {
+	rev := detailRevision(it)
+	if v.fullRev[it.ID] == rev || v.fetching[it.ID] == rev || v.env == nil || v.env.conn == nil {
 		return
 	}
-	if f := v.full[item.ID]; f != nil && f.UpdatedAt == item.UpdatedAt {
-		a.mu.Unlock()
-		return
-	}
-	delete(v.fetchErr, item.ID)
-	a.mu.Unlock()
+	v.fetching[it.ID] = rev
+	conn, id := v.env.conn, it.ID
 	go func() {
-		var out struct {
-			Item json.RawMessage `json:"item"`
-		}
-		err := conn.Call("orchestration.getTurnItem", map[string]any{"threadId": v.id, "itemId": item.ID}, &out)
+		raw, err := getTurnItem(conn, v.id, id)
 		a.mu.Lock()
 		defer a.changed()
 		defer a.mu.Unlock()
-		if err != nil {
-			// The open row says "Couldn't load output: …".
-			v.fetchErr[item.ID] = err.Error()
-			return
+		if v.fetching[id] != rev {
+			return // a later revision is on its way
 		}
+		delete(v.fetching, id)
 		var full t3.TurnItem
 		switch {
-		case len(out.Item) == 0 || string(out.Item) == "null":
-			v.fetchErr[item.ID] = "Output is no longer available."
-		case json.Unmarshal(out.Item, &full) == nil:
-			full.UpdatedAt = item.UpdatedAt
-			v.full[item.ID] = &full
+		case err != nil:
+			// The open row says "Couldn't load output: …".
+			v.full[id], v.fetchErr[id] = nil, err.Error()
+		case len(raw) == 0 || string(raw) == "null":
+			v.full[id], v.fetchErr[id] = nil, "Output is no longer available."
+		case json.Unmarshal(raw, &full) == nil:
+			v.full[id] = &full
+			delete(v.fetchErr, id)
+		default:
+			v.full[id], v.fetchErr[id] = nil, "Output is no longer available."
 		}
+		v.fullRev[id] = rev
 	}()
+}
+
+// fetched is the full item fetched for it's current revision, or why it
+// couldn't load; nothing while that revision is on its way.
+func (v *threadView) fetched(it *t3.TurnItem) (*t3.TurnItem, string) {
+	if v.fullRev[it.ID] != detailRevision(it) {
+		return nil, ""
+	}
+	return v.full[it.ID], v.fetchErr[it.ID]
 }

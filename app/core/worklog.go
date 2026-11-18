@@ -329,9 +329,13 @@ func (e *workEntry) failedFromOutput(withCommand bool) bool {
 	return out != "" && outputIndicatesFailure(out)
 }
 
+// truncate is s cut to at most n bytes, at a character's edge.
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
 	}
 	return s[:n]
 }
@@ -743,8 +747,29 @@ func toneIcon(tone string) string {
 	return "zap"
 }
 
-// entryIcon is T3's workEntryIconName.
+// entryIcon is T3's workEntryIconName (TimelineWorkEntryRow.logic.ts:
+// 149-193): a notification's says where it came from.
 func (e *workEntry) icon() string {
+	if it := e.item; e.itemType == "notification" && it != nil {
+		if it.Outcome == "failed" {
+			return "circle-alert"
+		}
+		kind := ""
+		if it.Source != nil {
+			kind = it.Source.Kind
+		}
+		switch kind {
+		case "subagent", "delegated_task":
+			return "bot"
+		case "command":
+			return "terminal"
+		case "monitor":
+			return "eye"
+		case "system":
+			return "t3-code"
+		}
+		return "zap"
+	}
 	if e.itemType == "user_input_request" || e.itemType == "approval_request" {
 		return "message-circle"
 	}
