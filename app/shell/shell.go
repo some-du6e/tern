@@ -1,6 +1,6 @@
 // Package shell runs a reply's code block in a console window on this
 // computer, for the ▷ on PowerShell and cmd blocks on Windows and shell
-// blocks on a Mac.
+// blocks on a Mac, and opens URLs with the app this computer has for them.
 package shell
 
 import (
@@ -24,6 +24,16 @@ var langs = map[string]string{
 // Run starts code in a new console window that stays open, so its output can
 // be read.
 func Run(lang, code string) error { return run(langs[strings.ToLower(lang)], code) }
+
+// Open hands url to the app registered for its scheme, like an editor's
+// vscode:// link.
+func Open(url string) error {
+	cmd := opener(url)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return cmd.Process.Release()
+}
 
 // encodeCommand is code for PowerShell's -EncodedCommand: UTF-16LE in
 // base64, so quotes and newlines arrive as written.

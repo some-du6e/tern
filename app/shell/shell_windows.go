@@ -10,6 +10,10 @@ import (
 // kinds are the shells in langs this computer has.
 var kinds = map[string]bool{"powershell": true, "cmd": true}
 
+func opener(url string) *exec.Cmd {
+	return exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+}
+
 func run(kind, code string) error {
 	var cmd *exec.Cmd
 	switch kind {
