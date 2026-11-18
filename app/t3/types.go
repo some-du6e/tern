@@ -142,6 +142,18 @@ type Regeneration struct {
 	RequestID string `json:"requestId"`
 }
 
+// ThreadSearchMatch is a message orchestration.searchThreads found: whose
+// thread, who wrote it, the snippet around the match, how well and how
+// often it matched (older servers send neither).
+type ThreadSearchMatch struct {
+	ThreadID         string   `json:"threadId"`
+	Source           string   `json:"source"` // "user", "assistant"
+	Snippet          string   `json:"snippet"`
+	MessageCreatedAt string   `json:"messageCreatedAt"`
+	Quality          *float64 `json:"quality"`
+	Hits             *int     `json:"hits"`
+}
+
 // ShellItem is one value from orchestration.subscribeShell.
 type ShellItem struct {
 	Kind     string `json:"kind"`

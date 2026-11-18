@@ -4,10 +4,17 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"math"
+	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 
 	"github.com/some-du6e/tern/app/t3"
 	"github.com/some-du6e/tern/app/ui"
@@ -20,7 +27,10 @@ import (
 
 // searchScene lists, in place of the list, every listed thread in scope
 // whose title, branch or pull request has all the query's words, in the
-// list's order.
+// list's order; then those the servers' message search found only in their
+// messages, each with its message. With none it says so, or that the
+// servers are still looking. The highlight stays on its thread as late
+// results arrive.
 func (a *App) searchScene(sb *ui.Sidebar, l sidebarList, q string, now time.Time) {
 	words := strings.Fields(strings.ToLower(q))
 	match := func(t *t3.Thread) bool {
@@ -36,25 +46,379 @@ func (a *App) searchScene(sb *ui.Sidebar, l sidebarList, q string, now time.Time
 		return true
 	}
 	a.results = a.results[:0]
+	add := func(t sideThread, settled bool) *ui.ThreadRow {
+		r := a.row(t, "", now)
+		if settled {
+			r.Shelf = "settled"
+		}
+		sb.Results = append(sb.Results, r)
+		a.results = append(a.results, t.ref)
+		return &sb.Results[len(sb.Results)-1]
+	}
+	byRef, settled, titled := map[string]sideThread{}, map[string]bool{}, map[string]bool{}
 	for i, shelf := range [][]sideThread{l.pinned, l.active, l.working, l.snoozed, l.settled} {
 		for _, t := range shelf {
-			if !match(t.Thread) {
-				continue
+			byRef[t.ref], settled[t.ref] = t, i == 4
+			if match(t.Thread) {
+				titled[t.ref] = true
+				add(t, i == 4)
 			}
-			r := a.row(t, "", now)
-			if i == 4 {
-				r.Shelf = "settled"
-			}
-			sb.Results = append(sb.Results, r)
-			a.results = append(a.results, t.ref)
 		}
+	}
+	ms, mq, looking := a.shownMatches(q)
+	best := map[string]refMatch{}
+	var keys []string
+	for _, m := range rankMessages(ms, byRef, now) {
+		if _, ok := best[m.ref]; !ok {
+			keys = append(keys, m.ref)
+		}
+		best[m.ref] = m
+	}
+	a.msgOrder, a.msgOrderFor = keepOrder(a.msgOrder, a.msgOrderFor, mq, keys), mq
+	for _, k := range a.msgOrder {
+		if titled[k] {
+			continue
+		}
+		m := best[k]
+		r := add(byRef[k], settled[k])
+		r.Excerpt = &ui.Excerpt{User: m.Source == "user", Snippet: m.Snippet, Marks: markRanges(m.Snippet, mq)}
 	}
 	if len(sb.Results) == 0 {
 		sb.NoResults = "No threads found"
+		if looking {
+			sb.NoResults = "Searching thread messages…"
+		}
 		return
 	}
-	a.searchSel = min(max(0, a.searchSel), len(sb.Results)-1)
-	sb.Highlight = a.searchSel
+	sb.Highlight = max(0, slices.Index(a.results, a.searchHi))
+}
+
+// ---------- the servers' message search ----------
+
+// msgSearch is a message search the servers were asked: its query, their
+// matches so far, and how many are yet to answer.
+type msgSearch struct {
+	query   string
+	matches []refMatch
+	waiting int
+}
+
+// refMatch is a server's match and its thread's ref.
+type refMatch struct {
+	t3.ThreadSearchMatch
+	ref string
+}
+
+const (
+	msgDebounce = 120 * time.Millisecond // THREAD_SEARCH_DEBOUNCE_MS
+	msgQueryMax = 200                    // THREAD_SEARCH_QUERY_MAX_LENGTH, in characters
+	msgPrefix   = 0.8                    // MESSAGE_PREFIX: a word-start match's quality
+)
+
+// msgQuery is the search as the servers get it: trimmed and cut to 200
+// characters, so a pasted wall of text searches by its start.
+func msgQuery(s string) string {
+	q := []rune(strings.TrimSpace(s))
+	return strings.TrimSpace(string(q[:min(len(q), msgQueryMax)]))
+}
+
+// wrappingQuotes is the quotes around a pasted query: "fix sidebar".
+var wrappingQuotes = regexp.MustCompile("^\\s*[\"'`“”‘’]+|[\"'`“”‘’]+\\s*$")
+
+// msgTokens is the words a matching message must hold (messageSearchTokens):
+// those of three letters or more, or two of Chinese, Japanese or Korean,
+// lower-cased, with curly apostrophes straightened as the servers index
+// them. A query without one has no message search.
+func msgTokens(q string) []string {
+	q = wrappingQuotes.ReplaceAllString(q, "")
+	q = norm.NFC.String(strings.NewReplacer("‘", "'", "’", "'").Replace(q))
+	var long []string
+	for _, w := range strings.Fields(strings.ToLower(q)) {
+		n := utf8.RuneCountInString(w)
+		if n >= 3 || n == 2 && strings.ContainsFunc(w, func(r rune) bool { return cjk(r) || r >= 0xac00 && r <= 0xd7af }) {
+			long = append(long, w)
+		}
+	}
+	return long
+}
+
+// cjk reports a Chinese or Japanese character, each of which starts a word.
+func cjk(r rune) bool {
+	return r >= 0x3040 && r <= 0x30ff || r >= 0x3400 && r <= 0x4dbf || r >= 0x4e00 && r <= 0x9fff || r >= 0xf900 && r <= 0xfaff
+}
+
+// foldQuery is a query folded for comparing (foldSearchQuery): quotes
+// around it gone, case and accents folded, spaces collapsed.
+func foldQuery(q string) string {
+	rs := []rune(norm.NFC.String(wrappingQuotes.ReplaceAllString(q, "")))
+	for i, r := range rs {
+		rs[i] = foldRune(r)
+	}
+	return strings.Join(strings.Fields(string(rs)), " ")
+}
+
+// foldRune is r with case and accents folded (foldCharacter): "É" is "e",
+// a curly apostrophe a straight one. A letter that would fold to more or
+// less than one character ("ß", "ﬁ") only loses its case.
+func foldRune(r rune) rune {
+	if r < 0x80 || r > 0xffff {
+		return unicode.ToLower(r)
+	}
+	var kept []rune
+	for _, c := range norm.NFKD.String(string(r)) {
+		if !unicode.Is(unicode.M, c) {
+			kept = append(kept, c)
+		}
+	}
+	if len(kept) != 1 || kept[0] > 0xffff {
+		return unicode.ToLower(r)
+	}
+	switch f := unicode.ToLower(kept[0]); f {
+	case 'ς':
+		return 'σ'
+	case '‘', '’':
+		return '\''
+	default:
+		return f
+	}
+}
+
+// searchMessages asks the servers for messages matching the search, once
+// the typing has paused for 120ms (useThreadSearch). Call with the lock
+// held.
+func (a *App) searchMessages() {
+	if a.msgTimer != nil {
+		a.msgTimer.Stop()
+	}
+	q := msgQuery(a.search)
+	if len(msgTokens(q)) == 0 {
+		a.msgSearch, a.msgSettled = msgSearch{}, msgSearch{}
+		return
+	}
+	a.msgTimer = time.AfterFunc(msgDebounce, func() {
+		a.mu.Lock()
+		if msgQuery(a.search) == q && a.msgSearch.query != q {
+			a.askServers(q)
+		}
+		a.mu.Unlock()
+		a.changed()
+	})
+}
+
+// askServers sends q to every connected server; the list keeps the matches
+// in its scope. Call with the lock held.
+func (a *App) askServers(q string) {
+	if a.msgSearch.settled() {
+		a.msgSettled = a.msgSearch
+	}
+	a.msgSearch = msgSearch{query: q}
+	for _, e := range a.envs {
+		if e.conn == nil {
+			continue
+		}
+		a.msgSearch.waiting++
+		conn, envID := e.conn, e.id()
+		go func() {
+			var res struct {
+				Matches []t3.ThreadSearchMatch `json:"matches"`
+			}
+			err := conn.Call("orchestration.searchThreads", map[string]any{"query": q}, &res)
+			a.mu.Lock()
+			if a.msgSearch.query == q {
+				a.msgSearch.waiting--
+				// A server that can't answer adds nothing.
+				if err == nil {
+					for _, m := range res.Matches {
+						a.msgSearch.matches = append(a.msgSearch.matches, refMatch{m, ref(envID, m.ThreadID)})
+					}
+				}
+			}
+			a.mu.Unlock()
+			a.changed()
+		}()
+	}
+}
+
+// settled reports a search with answers to show: some have come, or all
+// the servers have answered.
+func (m msgSearch) settled() bool { return m.query != "" && (m.waiting == 0 || len(m.matches) > 0) }
+
+// shownMatches is what the list shows of the servers' answers for the
+// search q (visibleThreadSearch): q's own once they've settled, else the
+// last settled search's while q only refines or widens it; the query those
+// matched; and whether the servers are still looking for q. Call with the
+// lock held.
+func (a *App) shownMatches(q string) (ms []refMatch, query string, looking bool) {
+	q = msgQuery(q)
+	online := false
+	for _, e := range a.envs {
+		online = online || e.status == "online"
+	}
+	if !online || len(msgTokens(q)) == 0 {
+		return nil, "", false
+	}
+	looking = a.msgSearch.query != q || a.msgSearch.waiting > 0
+	last := a.msgSettled
+	if a.msgSearch.settled() {
+		last = a.msgSearch
+	}
+	typed, before := foldQuery(q), foldQuery(last.query)
+	if last.query == q || typed != "" && before != "" && (strings.HasPrefix(typed, before) || strings.HasPrefix(before, typed)) {
+		return last.matches, last.query, looking
+	}
+	return nil, "", looking
+}
+
+// rankMessages orders the servers' matches across machines as T3 does
+// (rankMessageMatches, without picks): matches at whole words or word
+// starts first, then the closer match, then the thread that keeps using
+// the words and was written in last, then the newer message. Matches whose
+// thread isn't listed go.
+func rankMessages(ms []refMatch, listed map[string]sideThread, now time.Time) []refMatch {
+	type ranked struct {
+		refMatch
+		quality, score float64
+	}
+	var rs []ranked
+	for _, m := range ms {
+		t, ok := listed[m.ref]
+		if !ok {
+			continue
+		}
+		// Older servers send neither; their matches count as whole words.
+		quality, hits := 1.0, 1
+		if m.Quality != nil {
+			quality = *m.Quality
+		}
+		if m.Hits != nil {
+			hits = *m.Hits
+		}
+		rs = append(rs, ranked{m, quality, (1 + math.Log2(1+float64(hits))) * usageBoost(t.Thread, now)})
+	}
+	sort.SliceStable(rs, func(i, j int) bool {
+		a, b := rs[i], rs[j]
+		switch {
+		case (a.quality >= msgPrefix) != (b.quality >= msgPrefix):
+			return a.quality >= msgPrefix
+		case a.quality != b.quality:
+			return a.quality > b.quality
+		case a.score != b.score:
+			return a.score > b.score
+		}
+		return a.MessageCreatedAt > b.MessageCreatedAt
+	})
+	out := make([]refMatch, len(rs))
+	for i, r := range rs {
+		out[i] = r.refMatch
+	}
+	return out
+}
+
+// usageBoost is how much use lifts a thread in a search (threadUsageBoost):
+// 1 for a stale one, about 2 for one written in today, halving every two
+// weeks; a thread the user never wrote in counts from its creation. tern
+// keeps no record of opens, which T3 also counts.
+func usageBoost(t *t3.Thread, now time.Time) float64 {
+	at := parseTime(cmp.Or(t.LatestUserAuthoredMessageAt, t.CreatedAt))
+	if at.IsZero() {
+		return 1
+	}
+	return min(2.5, 1+math.Exp2(-max(0, now.Sub(at).Hours())/(14*24)))
+}
+
+// keepOrder is the message results' order (nextShownOrder): for the same
+// query, the rows already shown keep their places and the new ones follow
+// in rank order.
+func keepOrder(shown []string, shownFor, q string, ranked []string) []string {
+	if shownFor != q {
+		return ranked
+	}
+	listed := map[string]bool{}
+	for _, k := range ranked {
+		listed[k] = true
+	}
+	var out []string
+	held := map[string]bool{}
+	for _, k := range shown {
+		if listed[k] && !held[k] {
+			out, held[k] = append(out, k), true
+		}
+	}
+	for _, k := range ranked {
+		if !held[k] {
+			out, held[k] = append(out, k), true
+		}
+	}
+	return out
+}
+
+// markRanges is where q's words are in s (findSearchTokenRanges), as rune
+// ranges, sorted and joined where they overlap: each word of three letters
+// or more, whatever its case and accents; one shorter than four letters
+// only where a word starts, unless it opens with punctuation, which brings
+// its own boundary.
+func markRanges(s, q string) [][2]int {
+	rs := []rune(s)
+	text := make([]rune, len(rs))
+	for i, r := range rs {
+		text[i] = foldRune(r)
+	}
+	starts := wordStarts(rs)
+	short := map[string]bool{}
+	for _, w := range msgTokens(q) {
+		// Some words fold to nothing ("´´´"), which would match everywhere.
+		if f := foldQuery(w); f != "" {
+			short[f] = utf8.RuneCountInString(w) < 4
+		}
+	}
+	var out [][2]int
+	for w, needsStart := range short {
+		tok := []rune(w)
+		own := !unicode.IsLetter(tok[0]) && !unicode.IsNumber(tok[0]) && !unicode.Is(unicode.So, tok[0])
+		for i := 0; i+len(tok) <= len(text); i++ {
+			if string(text[i:i+len(tok)]) != w || needsStart && !own && !starts[i] {
+				continue
+			}
+			out = append(out, [2]int{i, i + len(tok)})
+			i += len(tok) - 1
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i][0] < out[j][0] })
+	var merged [][2]int
+	for _, r := range out {
+		if n := len(merged); n > 0 && r[0] <= merged[n-1][1] {
+			merged[n-1][1] = max(merged[n-1][1], r[1])
+			continue
+		}
+		merged = append(merged, r)
+	}
+	return merged
+}
+
+// wordStarts marks the runes of s that start a word (isWordStart): after
+// anything but a letter or number, at a camelCase or number boundary, at
+// the last capital of an acronym, at any Chinese or Japanese character,
+// but not after an apostrophe inside a word ("Julius’s").
+func wordStarts(s []rune) []bool {
+	alnum := func(r rune) bool { return unicode.IsLetter(r) || unicode.IsNumber(r) }
+	at := func(i int) rune {
+		if i < 0 || i >= len(s) {
+			return 0
+		}
+		return s[i]
+	}
+	out := make([]bool, len(s))
+	for i, c := range s {
+		prev, next := at(i-1), at(i+1)
+		if !alnum(c) && !unicode.Is(unicode.So, c) || (prev == '\'' || prev == '’') && alnum(at(i-2)) {
+			continue
+		}
+		out[i] = i == 0 || !alnum(prev) ||
+			unicode.IsLower(prev) && unicode.IsUpper(c) ||
+			unicode.IsUpper(prev) && unicode.IsUpper(c) && unicode.IsLower(next) ||
+			unicode.IsNumber(prev) != unicode.IsNumber(c) || cjk(c)
+	}
+	return out
 }
 
 // ---------- the project filter ----------
@@ -1322,7 +1686,9 @@ func (a *App) sidebarAction(th *ui.Theme, act ui.Action) bool {
 		return true
 	case verb == "result" && act.Kind == "hover":
 		a.mu.Lock()
-		a.searchSel = atoi(arg)
+		if i := atoi(arg); i >= 0 && i < len(a.results) {
+			a.searchHi = a.results[i]
+		}
 		a.mu.Unlock()
 		return true
 	case verb == "thread" && act.Kind == "context":
@@ -1424,7 +1790,8 @@ func (a *App) sidebarAction(th *ui.Theme, act ui.Action) bool {
 		th.SetEditorText("search", "")
 		th.Focus("search")
 		a.mu.Lock()
-		a.search, a.searchSel = "", 0
+		a.search, a.searchHi = "", ""
+		a.searchMessages()
 		a.mu.Unlock()
 	case "thread.prev":
 		a.step(th, -1)
@@ -1440,17 +1807,19 @@ func (a *App) sidebarAction(th *ui.Theme, act ui.Action) bool {
 	return true
 }
 
-// searchInput is the search field's typing and keys: the arrows move the
-// highlight through the results, wrapping; Enter opens it; Escape clears
-// the search.
+// searchInput is the search field's typing and keys: typing searches the
+// list and asks the servers for messages; the arrows move the highlight
+// through the results, wrapping; Enter opens it; Escape clears the search.
 func (a *App) searchInput(th *ui.Theme, act ui.Action) {
 	a.mu.Lock()
 	n := len(a.results)
 	switch {
 	case act.Kind == "change":
-		a.search, a.searchSel = act.Text, 0
+		a.search, a.searchHi = act.Text, ""
+		a.searchMessages()
 	case act.Kind == "key" && act.Text == "⎋":
-		a.search, a.searchSel = "", 0
+		a.search, a.searchHi = "", ""
+		a.searchMessages()
 		a.mu.Unlock()
 		th.SetEditorText("search", "")
 		return
@@ -1459,9 +1828,9 @@ func (a *App) searchInput(th *ui.Theme, act ui.Action) {
 		if act.Text == "↑" {
 			step = -1
 		}
-		a.searchSel = (a.searchSel + step + n) % n
+		a.searchHi = a.results[(max(0, slices.Index(a.results, a.searchHi))+step+n)%n]
 	case act.Kind == "submit":
-		i := a.searchSel
+		i := max(0, slices.Index(a.results, a.searchHi))
 		a.mu.Unlock()
 		a.openResult(th, i)
 		return
@@ -1469,15 +1838,18 @@ func (a *App) searchInput(th *ui.Theme, act ui.Action) {
 	a.mu.Unlock()
 }
 
-// openResult opens search result i.
+// openResult opens search result i, and the search clears.
 func (a *App) openResult(th *ui.Theme, i int) {
 	a.mu.Lock()
 	r := ""
 	if i >= 0 && i < len(a.results) {
 		r = a.results[i]
+		a.search, a.searchHi = "", ""
+		a.searchMessages()
 	}
 	a.mu.Unlock()
 	if r != "" {
+		th.SetEditorText("search", "")
 		a.switchTo(th, func() { a.openThread(r) })
 	}
 }

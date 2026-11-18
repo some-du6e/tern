@@ -36,6 +36,7 @@ const (
 	cardH      = 78 // a card with its meta line
 	cardFlatH  = 60 // a card without one
 	slimH      = 36
+	excerptH   = 44 // a search result with its matching message
 	shelfH     = 32
 	// The list's tooltips (and hover cards) open after a 150ms rest, and
 	// at once within 400ms of the last one closing (its TooltipProvider).
@@ -581,7 +582,11 @@ func (th *Theme) sideItems(gtx C, s *Scene) []sideItem {
 	if strings.TrimSpace(sb.Query) != "" || sb.Results != nil || sb.NoResults != "" {
 		for i := range sb.Results {
 			r, i := &sb.Results[i], i
-			add(slimH, "", "", -1, func(gtx C, top int) D { return th.resultRow(gtx, s, r, i, top) })
+			h := float32(slimH)
+			if r.Excerpt != nil {
+				h = excerptH
+			}
+			add(h, "", "", -1, func(gtx C, top int) D { return th.resultRow(gtx, s, r, i, top) })
 		}
 		if sb.NoResults != "" {
 			add(64, "", "", -1, func(gtx C, _ int) D { return th.listNote(gtx, sb.NoResults) })
@@ -1768,12 +1773,17 @@ func (th *Theme) listNote(gtx C, note string) D {
 
 // resultRow is a search result (§2.6, §3.11): 36dp, padded 4 by 10, 10dp
 // gaps: the project's icon, the title and the age, 32dp wide in the muted
-// foreground at 55%. The highlighted result (keyboard or pointer) and the
-// open thread take the active row fill. A settled thread's title is
-// quieter, 400 in the secondary label at 70%, until it's lit.
+// foreground at 55%; a result found by its messages grows to 44dp for the
+// matching one under the title. The highlighted result (keyboard or
+// pointer) and the open thread take the active row fill. A settled
+// thread's title is quieter, 400 in the secondary label at 70%, until it's
+// lit.
 func (th *Theme) resultRow(gtx C, s *Scene, r *ThreadRow, i, top int) D {
 	w := gtx.Constraints.Max.X
 	size := image.Pt(w, dp(gtx, slimH))
+	if r.Excerpt != nil {
+		size.Y = dp(gtx, excerptH)
+	}
 	id := liveID(s, "result:"+strconv.Itoa(i))
 	hovered := false
 	var pop func()
@@ -1814,18 +1824,32 @@ func (th *Theme) resultRow(gtx C, s *Scene, r *ThreadRow, i, top int) D {
 		defer op.Offset(image.Pt(dp(gtx, 10), 0)).Push(gtx.Ops).Pop()
 		g := gtx
 		g.Constraints = layout.Exact(image.Pt(w-2*dp(gtx, 10), size.Y))
+		line := func(gtx C) D {
+			gtx.Constraints = layout.Exact(image.Pt(gtx.Constraints.Max.X, dp(gtx, 20)))
+			return RowGap(gtx, 10,
+				flexed(func(gtx C) D { return th.Text(gtx, title, r.Title) }),
+				rigid(func(gtx C) D {
+					return FixedW(gtx, 32, func(gtx C) D {
+						return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: over(alpha(SP.MutedForeground, 0x8c), bg), MaxLines: 1, Align: text.End}, r.Age)
+					})
+				}),
+			)
+		}
 		var kids []layout.FlexChild
 		if r.Project != "" {
 			kids = append(kids, rigid(func(gtx C) D { return th.projectIcon(gtx, r.Icon, 16, bg, dim) }))
 		}
-		kids = append(kids,
-			flexed(func(gtx C) D { return th.Text(gtx, title, r.Title) }),
-			rigid(func(gtx C) D {
-				return FixedW(gtx, 32, func(gtx C) D {
-					return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: over(alpha(SP.MutedForeground, 0x8c), bg), MaxLines: 1, Align: text.End}, r.Age)
-				})
-			}),
-		)
+		kids = append(kids, flexed(func(gtx C) D {
+			if r.Excerpt == nil {
+				return line(gtx)
+			}
+			w := gtx.Constraints.Max.X
+			line(gtx)
+			defer op.Offset(image.Pt(0, dp(gtx, 20))).Push(gtx.Ops).Pop()
+			gtx.Constraints = layout.Exact(image.Pt(w, dp(gtx, 16)))
+			th.excerpt(gtx, r.Excerpt, bg)
+			return D{Size: image.Pt(w, dp(gtx, 36))}
+		}))
 		RowGap(g, 10, kids...)
 	}()
 	x0 := dp(gtx, sideInset)
@@ -1833,6 +1857,114 @@ func (th *Theme) resultRow(gtx C, s *Scene, r *ThreadRow, i, top int) D {
 	if pop != nil {
 		pop()
 	}
+	return D{Size: size}
+}
+
+// excerpt is a search result's matching message on one 16dp line, 12dp in
+// the muted foreground at 85% (ThreadSearchMatch.tsx): "You:" in the info
+// foreground or "Agent:" in the success foreground, a space, then the
+// servers' snippet with the query's words 600 in the foreground. Its runs
+// of spaces and line breaks set as one space, as white-space: nowrap has
+// them, and where the line is cut it ends in "…".
+func (th *Theme) excerpt(gtx C, e *Excerpt, bg color.NRGBA) D {
+	size := gtx.Constraints.Max
+	base := Txt{Size: 12, LineH: 16.0 / 12, Color: over(faded(SP.MutedForeground, 0.85), bg), MaxLines: 1}
+	who := base
+	who.Color = over(SP.SuccessForeground, bg)
+	name := "Agent:"
+	if e.User {
+		who.Color, name = over(SP.InfoForeground, bg), "You:"
+	}
+	mark := base
+	mark.Font, mark.Color = UI(font.SemiBold), over(SP.Foreground, bg)
+	type part struct {
+		t Txt
+		s []rune
+	}
+	parts := []part{{who, []rune(name)}, {base, []rune(" ")}}
+	marked := func(i int) bool {
+		for _, m := range e.Marks {
+			if i >= m[0] && i < m[1] {
+				return true
+			}
+		}
+		return false
+	}
+	space := true
+	for i, c := range []rune(e.Snippet) {
+		if strings.ContainsRune(" \t\n\r\f", c) {
+			if space {
+				continue
+			}
+			c, space = ' ', true
+		} else {
+			space = false
+		}
+		t := base
+		if marked(i) {
+			t = mark
+		}
+		if last := &parts[len(parts)-1]; last.t == t {
+			last.s = append(last.s, c)
+		} else {
+			parts = append(parts, part{t, []rune{c}})
+		}
+	}
+	// widthTo is how wide the line's first n characters set.
+	total := 0
+	for _, p := range parts {
+		total += len(p.s)
+	}
+	widthTo := func(n int) int {
+		x := 0
+		for _, p := range parts {
+			k := min(n, len(p.s))
+			if k > 0 {
+				x += th.textWidth(gtx, p.t, string(p.s[:k]))
+			}
+			if n -= k; n == 0 {
+				break
+			}
+		}
+		return x
+	}
+	n, dots := total, ""
+	if widthTo(total) > size.X {
+		dots = "…"
+		room := size.X - th.textWidth(gtx, base, dots)
+		lo, hi := 0, total
+		for lo < hi {
+			if mid := (lo + hi + 1) / 2; widthTo(mid) <= room {
+				lo = mid
+			} else {
+				hi = mid - 1
+			}
+		}
+		n = lo
+	}
+	m := op.Record(gtx.Ops)
+	x, h := 0, 0
+	set := func(t Txt, s string) {
+		if s == "" {
+			return
+		}
+		defer op.Offset(image.Pt(x, 0)).Push(gtx.Ops).Pop()
+		g := gtx
+		g.Constraints = layout.Constraints{Max: image.Pt(1<<20, size.Y)}
+		d := th.Text(g, t, s)
+		x, h = x+d.Size.X, max(h, d.Size.Y)
+	}
+	for _, p := range parts {
+		k := min(n, len(p.s))
+		set(p.t, string(p.s[:k]))
+		if n -= k; n == 0 {
+			break
+		}
+	}
+	set(base, dots)
+	call := m.Stop()
+	defer op.Offset(image.Pt(0, (size.Y-h)/2)).Push(gtx.Ops).Pop()
+	call.Add(gtx.Ops)
 	return D{Size: size}
 }
 

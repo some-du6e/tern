@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/color"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -138,6 +139,73 @@ func TestRowTextCentred(t *testing.T) {
 			t.Errorf("%s: ink on rows %d..%d, want %d..%d", c.what, gt, gb, wt, wb)
 		}
 	}
+}
+
+// A result found by its messages is 44dp, the matching message on a 16dp
+// line under the title (§2.6, §3.11): "You:" in the info foreground or
+// "Agent:" in the success foreground, a space, then the snippet 12/16 in
+// the muted foreground at 85% with the query's words 600 in the
+// foreground, its line breaks set as one space; cut with "…" where it
+// would pass the content's 193dp. The icon centres on the row.
+func TestSearchExcerpt(t *testing.T) {
+	th := NewTheme()
+	icon := ProjectIcon{Text: "TN", Color: "amber"}
+	s := &Scene{Sidebar: Sidebar{HasProjects: true, Query: "parser", Results: []ThreadRow{
+		{ID: "e/1", Title: "Rewrite", Project: "tern", Icon: icon, Age: "2h",
+			Excerpt: &Excerpt{User: true, Snippet: "the\n\n  parser is slow", Marks: [][2]int{{7, 13}}}},
+		{ID: "e/2", Title: "Docs", Project: "tern", Icon: icon, Age: "3d",
+			Excerpt: &Excerpt{Snippet: strings.Repeat("m", 80)}},
+	}}}
+	img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, s) })
+	active := over(SP.SidebarRowActive, SP.Sidebar)
+	// The highlighted first result is 100..144, the second 145..189.
+	wantPixel(t, img, image.Pt(240, 101), active, "the first result's top")
+	wantPixel(t, img, image.Pt(240, 143), active, "its bottom")
+	wantPixel(t, img, image.Pt(240, 144), SP.Sidebar, "the 1dp under it")
+	if top, bottom, ok := inkRows(img, image.Rect(18, 100, 34, 144), active); !ok || top != 114 || bottom != 129 {
+		t.Errorf("the icon is on rows %d..%d, want 114..129", top, bottom)
+	}
+
+	gtx := layout.Context{Ops: new(op.Ops), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+	width := func(txt Txt, s string) int { return th.textWidth(gtx, txt, s) }
+	// same checks text is drawn as txt alone would be in its line box at.
+	same := func(what string, txt Txt, text string, at image.Point, bg color.NRGBA) {
+		t.Helper()
+		ref := textAt(t, th, txt, text, at, bg)
+		h := int(float32(txt.Size)*txt.LineH + 0.5)
+		for y := at.Y; y < at.Y+h; y++ {
+			for x := at.X; x < at.X+width(txt, text); x++ {
+				if got, want := img.RGBAAt(x, y), ref.RGBAAt(x, y); !nearPixel(got, color.NRGBA(want)) {
+					t.Errorf("%s: %v at %d,%d, want %v", what, got, x, y, want)
+					return
+				}
+			}
+		}
+	}
+	tone := func(bg color.NRGBA) (who, muted, mark Txt) {
+		muted = Txt{Size: 12, LineH: 16.0 / 12, Color: over(faded(SP.MutedForeground, 0.85), bg), MaxLines: 1}
+		who, mark = muted, muted
+		mark.Font, mark.Color = UI(font.SemiBold), over(SP.Foreground, bg)
+		return who, muted, mark
+	}
+	same("the title", Txt{Size: 14, LineH: 20.0 / 14, Font: UI(font.Medium), Color: over(SP.Foreground, active), MaxLines: 1}, "Rewrite", image.Pt(44, 104), active)
+	you, muted, mark := tone(active)
+	you.Color = over(SP.InfoForeground, active)
+	x := 44 + width(you, "You:")
+	same("You:", you, "You:", image.Pt(44, 124), active)
+	same("the words before the mark", muted, " the ", image.Pt(x, 124), active)
+	x += width(muted, " the ")
+	same("the mark", mark, "parser", image.Pt(x, 124), active)
+	same("the words after it", muted, " is slow", image.Pt(x+width(mark, "parser"), 124), active)
+
+	agent, muted, _ := tone(SP.Sidebar)
+	agent.Color = over(SP.SuccessForeground, SP.Sidebar)
+	same("Agent:", agent, "Agent:", image.Pt(44, 169), SP.Sidebar)
+	k := 80
+	for 44+width(agent, "Agent:")+width(muted, " "+strings.Repeat("m", k))+width(muted, "…") > 44+193 {
+		k--
+	}
+	same("the cut", muted, "…", image.Pt(44+width(agent, "Agent:")+width(muted, " "+strings.Repeat("m", k)), 169), SP.Sidebar)
 }
 
 // The empty list's message sits 24dp down, and 8dp under it its button:

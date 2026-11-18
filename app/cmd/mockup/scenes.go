@@ -396,13 +396,18 @@ func sidebarSnoozeScene() *ui.Scene {
 }
 
 // sidebarSearchScene is the sidebar searching: its results in place of
-// the list, the first highlighted, a settled one quieter.
+// the list, the first highlighted, a settled one quieter, and two found by
+// their messages, one cut short.
 func sidebarSearchScene() *ui.Scene {
 	s := runningScene()
 	s.Sidebar.Query = "pairing"
 	s.Sidebar.Results = []ui.ThreadRow{
 		{ID: "1", Title: "Watch pairing flow", Project: "tern", Icon: ternIcon, Age: "41m"},
 		{ID: "2", Title: "Pairing URL parser", Project: "tern", Icon: ternIcon, Age: "3d", Shelf: "settled"},
+		{ID: "3", Title: "Relay handshake", Project: "tern", Icon: ternIcon, Age: "2h",
+			Excerpt: &ui.Excerpt{User: true, Snippet: "…retry the pairing once the code expires", Marks: [][2]int{{11, 18}}}},
+		{ID: "4", Title: "Notes app sync", Project: "notes", Icon: notesIcon, Age: "5d",
+			Excerpt: &ui.Excerpt{Snippet: "The pairing screen now shows the code and waits for the other device to confirm it", Marks: [][2]int{{4, 11}}}},
 	}
 	s.Sidebar.Items = nil
 	return s

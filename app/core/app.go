@@ -82,15 +82,16 @@ type App struct {
 	trash   map[string][]pastedImage // their chips were deleted; undo brings them back
 	sent    map[string]*sentThumb    // sent pictures' thumbnails, by env/attachment id
 
-	// The sidebar: the search and its highlighted result; the project
-	// scope ("<env>/<project>" keys) and the filter's popup; which shelves
-	// are open and how many Settled pages show; the multi-selection and the
-	// row a Shift range starts from; the row being renamed; the card whose
-	// snooze menu is open. working and returned hold threads on the Working
-	// shelf past the end of their work and note when they left it; ordered
-	// is the list's rows top to bottom, for the keyboard and the jump keys.
+	// The sidebar: the search, its highlighted result's ref ("" for the
+	// first) and the results' refs; the project scope ("<env>/<project>"
+	// keys) and the filter's popup; which shelves are open and how many
+	// Settled pages show; the multi-selection and the row a Shift range
+	// starts from; the row being renamed; the card whose snooze menu is
+	// open. working and returned hold threads on the Working shelf past the
+	// end of their work and note when they left it; ordered is the list's
+	// rows top to bottom, for the keyboard and the jump keys.
 	search      string
-	searchSel   int
+	searchHi    string
 	results     []string
 	scope       []string
 	filterOpen  bool
@@ -119,6 +120,15 @@ type App struct {
 	undos     []undoEntry
 	undoTimer *time.Timer
 	undoClaim bool
+	// The servers' message search: the one they were last asked, the one
+	// before it that last settled, shown while the next refines it, the
+	// timer that waits for the typing to stop, and the order the message
+	// results were last shown in, for the query they were shown for.
+	msgSearch   msgSearch
+	msgSettled  msgSearch
+	msgTimer    *time.Timer
+	msgOrder    []string
+	msgOrderFor string
 
 	picker       *pickerState
 	traitsOpen   bool

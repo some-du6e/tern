@@ -11,6 +11,7 @@ require (
 	github.com/coder/websocket v1.8.15
 	golang.org/x/image v0.26.0
 	golang.org/x/sys v0.41.0
+	golang.org/x/text v0.32.0
 )
 
 require (
@@ -33,5 +34,4 @@ require (
 	golang.org/x/exp/shiny v0.0.0-20250408133849-7e4ce0ab07d0 // indirect
 	golang.org/x/net v0.48.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
-	golang.org/x/text v0.32.0 // indirect
 )

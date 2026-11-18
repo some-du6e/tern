@@ -143,6 +143,7 @@ type ThreadRow struct {
 	Error       string   // "Error occurred", "Usage limit reached"
 	Limited     bool     // the error is a usage limit
 	PR          *PRBadge
+	Excerpt     *Excerpt // a search result's matching message
 
 	CanSettle bool // Settle (or Un-settle, Wake) is offered
 	CanSnooze bool // the snooze clock is offered
@@ -157,6 +158,15 @@ type ProjectIcon struct {
 	Text   string // one or two glyphs
 	Color  string // "amber", "blue"…
 	Lucide string // a lucide icon instead of the monogram
+}
+
+// Excerpt is the message a search result was found by, under its title
+// (ThreadSearchMatch.tsx): who wrote it, the servers' snippet around the
+// match, and the query's words in it, as rune ranges.
+type Excerpt struct {
+	User    bool // "You:", else "Agent:"
+	Snippet string
+	Marks   [][2]int
 }
 
 // PRBadge is the meta line's pull request: its state's glyph and its number,

@@ -609,6 +609,160 @@ func TestSearch(t *testing.T) {
 	if s = a.build(now); s.Sidebar.NoResults != "No threads found" {
 		t.Fatalf("no results: %q", s.Sidebar.NoResults)
 	}
+	// Enter opens the highlighted result, and the search clears.
+	th.SetEditorText("search", "sidebar")
+	a.handle(th, ui.Action{ID: "search", Kind: "change", Text: "sidebar"})
+	a.handle(th, ui.Action{ID: "search", Kind: "key", Text: "↓"})
+	a.handle(th, ui.Action{ID: "search", Kind: "submit"})
+	s = a.build(now)
+	open := ""
+	for _, it := range s.Sidebar.Items {
+		if it.Row != nil && it.Row.Active {
+			open = it.Row.Title
+		}
+	}
+	if len(s.Sidebar.Results) != 0 || open != "Docs" || th.EditorText("search") != "" {
+		t.Fatalf("after Enter: %d results, %q open, %q typed", len(s.Sidebar.Results), open, th.EditorText("search"))
+	}
+}
+
+// Threads only their messages match follow the title matches, in the order
+// the servers' matches rank: whole words and word starts first, then the
+// closer match, then the thread that keeps using the words; each shows its
+// message with the words marked. Rows already shown keep their places as
+// slower servers answer, and the highlight stays on its thread (§5.9).
+func TestMessageSearch(t *testing.T) {
+	now := time.Now()
+	a := sideApp(t,
+		t3.Thread{ID: "1", Title: "Parser rewrite", CreatedAt: ago(now, time.Hour)},
+		t3.Thread{ID: "2", Title: "Docs", CreatedAt: ago(now, 2*time.Hour)},
+		t3.Thread{ID: "3", Title: "Old notes", CreatedAt: ago(now, 90*24*time.Hour)},
+		t3.Thread{ID: "4", Title: "Release", CreatedAt: ago(now, 3*time.Hour)},
+		t3.Thread{ID: "5", Title: "Tokens", CreatedAt: ago(now, 4*time.Hour)},
+		t3.Thread{ID: "6", Title: "Late", CreatedAt: ago(now, 5*time.Hour)},
+	)
+	found := func(id, source, snippet string, quality float64, hits int) refMatch {
+		return refMatch{t3.ThreadSearchMatch{ThreadID: id, Source: source, Snippet: snippet, Quality: &quality, Hits: &hits}, "m/" + id}
+	}
+	a.mu.Lock()
+	a.search = "parser"
+	a.msgSearch = msgSearch{query: "parser", waiting: 1, matches: []refMatch{
+		found("4", "assistant", "an unparsered blob", 0.3, 1),
+		found("2", "user", "Split the parsers out", 0.8, 1),
+		found("3", "assistant", "the parser is slow", 1, 1),
+		found("5", "assistant", "the parser again", 1, 20),
+		found("1", "user", "parser", 1, 1),
+		found("9", "user", "a thread this list hasn't", 1, 1),
+	}}
+	a.mu.Unlock()
+	titles := func(s *ui.Scene) string {
+		var got []string
+		for _, r := range s.Sidebar.Results {
+			got = append(got, r.Title)
+		}
+		return strings.Join(got, ", ")
+	}
+	s := a.build(now)
+	if got := titles(s); got != "Parser rewrite, Tokens, Old notes, Docs, Release" {
+		t.Fatalf("results %q", got)
+	}
+	if r := s.Sidebar.Results[0]; r.Excerpt != nil {
+		t.Errorf("a title match shows a message: %+v", r.Excerpt)
+	}
+	if e := s.Sidebar.Results[2].Excerpt; e == nil || e.User || e.Snippet != "the parser is slow" || fmt.Sprint(e.Marks) != "[[4 10]]" {
+		t.Errorf("the agent's message: %+v", e)
+	}
+	if e := s.Sidebar.Results[3].Excerpt; e == nil || !e.User || fmt.Sprint(e.Marks) != "[[10 16]]" {
+		t.Errorf("the user's message: %+v", e)
+	}
+
+	// The highlight on Old notes; a slower server's better match goes
+	// below the shown rows, and Release's match going leaves it on Old
+	// notes.
+	a.handle(ui.NewTheme(), ui.Action{ID: "result:2", Kind: "hover"})
+	a.mu.Lock()
+	a.msgSearch.waiting = 0
+	a.msgSearch.matches = append(a.msgSearch.matches[1:], found("6", "user", "parser", 1, 50))
+	a.mu.Unlock()
+	s = a.build(now)
+	if got := titles(s); got != "Parser rewrite, Tokens, Old notes, Docs, Late" || s.Sidebar.Highlight != 2 {
+		t.Fatalf("after the late answer: %q, highlight %d", got, s.Sidebar.Highlight)
+	}
+	a.mu.Lock()
+	a.msgSearch.matches = a.msgSearch.matches[:2] // only Docs' and Old notes'
+	a.mu.Unlock()
+	if s = a.build(now); titles(s) != "Parser rewrite, Old notes, Docs" || s.Sidebar.Highlight != 1 {
+		t.Fatalf("after matches went: %q, highlight %d", titles(s), s.Sidebar.Highlight)
+	}
+
+	// Typing on shows the last answers while the servers look for the
+	// longer query, their words still the ones marked; an unrelated query
+	// shows none, and says the servers are looking until they've answered.
+	a.mu.Lock()
+	a.search = "parsers"
+	a.mu.Unlock()
+	if s = a.build(now); titles(s) != "Old notes, Docs" || fmt.Sprint(s.Sidebar.Results[0].Excerpt.Marks) != "[[4 10]]" {
+		t.Fatalf("refining: %q", titles(s))
+	}
+	a.mu.Lock()
+	a.search = "zebra"
+	a.mu.Unlock()
+	if s = a.build(now); len(s.Sidebar.Results) != 0 || s.Sidebar.NoResults != "Searching thread messages…" {
+		t.Fatalf("looking: %d results, %q", len(s.Sidebar.Results), s.Sidebar.NoResults)
+	}
+	a.mu.Lock()
+	a.msgSearch = msgSearch{query: "zebra"}
+	a.mu.Unlock()
+	if s = a.build(now); s.Sidebar.NoResults != "No threads found" {
+		t.Fatalf("answered: %q", s.Sidebar.NoResults)
+	}
+	// Two letters search no messages.
+	a.mu.Lock()
+	a.search = "ze"
+	a.mu.Unlock()
+	if s = a.build(now); s.Sidebar.NoResults != "No threads found" {
+		t.Fatalf("two letters: %q", s.Sidebar.NoResults)
+	}
+}
+
+// A message search needs a word of three letters, or two of Chinese,
+// Japanese or Korean; quotes around the query and its case go, and curly
+// apostrophes straighten (messageSearchTokens).
+func TestMessageTokens(t *testing.T) {
+	for q, want := range map[string]string{
+		"fix the UI":      "[fix the]",
+		"ab cd":           "[]",
+		`"quoted words"`:  "[quoted words]",
+		"don’t panic":     "[don't panic]",
+		"修复 버그 x":         "[修复 버그]",
+		"  spaced   out ": "[spaced out]",
+	} {
+		if got := fmt.Sprint(msgTokens(q)); got != want {
+			t.Errorf("%q: %s, want %s", q, got, want)
+		}
+	}
+}
+
+// The words marked in a message (findSearchTokenRanges): whatever their
+// case and accents; one under four letters only where a word starts (at
+// an acronym's last capital, not after an apostrophe inside a word) or
+// where it opens with punctuation; overlapping ones joined.
+func TestMarkRanges(t *testing.T) {
+	for _, c := range []struct{ s, q, want string }{
+		{"Drafts use the fts index and FTS5", "fts", "[[15 18] [29 32]]"},
+		{"Drafts use the fts index", "drafts", "[[0 6]]"},
+		{"Café crème", "cafe", "[[0 4]]"},
+		{"searching", "searching search", "[[0 9]]"},
+		{"open main.ts now", ".ts", "[[9 12]]"},
+		{"JSONSchema here", "sch", "[[4 7]]"},
+		{"JSONSCHEMA here", "sch", "[]"},
+		{"o’neil’sam sam", "sam", "[[11 14]]"},
+		{"nothing", "ab", "[]"},
+	} {
+		if got := fmt.Sprint(markRanges(c.s, c.q)); got != c.want {
+			t.Errorf("%q in %q: %s, want %s", c.q, c.s, got, c.want)
+		}
+	}
 }
 
 // A project's chosen icon is its monogram or its lucide icon in its colour;
