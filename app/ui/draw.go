@@ -30,8 +30,48 @@ func fill(gtx C, col color.NRGBA, r image.Rectangle, radius int) {
 	paint.FillShape(gtx.Ops, col, clip.UniformRRect(r, radius).Op(gtx.Ops))
 }
 
+// strokeRect paints a border the way CSS does: inside r, width wide, the
+// ring between the rounded border box and the padding box (radius less
+// the width). A stroke centred on the edge would straddle two pixels.
 func strokeRect(gtx C, col color.NRGBA, r image.Rectangle, radius int, width float32) {
-	paint.FillShape(gtx.Ops, col, clip.Stroke{Path: clip.UniformRRect(r, radius).Path(gtx.Ops), Width: width}.Op())
+	var p clip.Path
+	p.Begin(gtx.Ops)
+	x0, y0, x1, y1 := float32(r.Min.X), float32(r.Min.Y), float32(r.Max.X), float32(r.Max.Y)
+	rrect(&p, x0, y0, x1, y1, float32(radius), true)
+	if x1-x0 > 2*width && y1-y0 > 2*width {
+		rrect(&p, x0+width, y0+width, x1-width, y1-width, max(0, float32(radius)-width), false)
+	}
+	paint.FillShape(gtx.Ops, col, clip.Outline{Path: p.End()}.Op())
+}
+
+// rrect adds the rounded rect (x0, y0)-(x1, y1) to p, clockwise or counterclockwise, so a
+// second one wound the other way cuts a hole in the first.
+func rrect(p *clip.Path, x0, y0, x1, y1, rad float32, cw bool) {
+	rad = min(rad, (x1-x0)/2, (y1-y0)/2)
+	const k = 0.5522847 // a quarter circle as a cubic
+	c := rad * (1 - k)
+	if cw {
+		p.MoveTo(f32.Pt(x0+rad, y0))
+		p.LineTo(f32.Pt(x1-rad, y0))
+		p.CubeTo(f32.Pt(x1-c, y0), f32.Pt(x1, y0+c), f32.Pt(x1, y0+rad))
+		p.LineTo(f32.Pt(x1, y1-rad))
+		p.CubeTo(f32.Pt(x1, y1-c), f32.Pt(x1-c, y1), f32.Pt(x1-rad, y1))
+		p.LineTo(f32.Pt(x0+rad, y1))
+		p.CubeTo(f32.Pt(x0+c, y1), f32.Pt(x0, y1-c), f32.Pt(x0, y1-rad))
+		p.LineTo(f32.Pt(x0, y0+rad))
+		p.CubeTo(f32.Pt(x0, y0+c), f32.Pt(x0+c, y0), f32.Pt(x0+rad, y0))
+	} else {
+		p.MoveTo(f32.Pt(x0+rad, y0))
+		p.CubeTo(f32.Pt(x0+c, y0), f32.Pt(x0, y0+c), f32.Pt(x0, y0+rad))
+		p.LineTo(f32.Pt(x0, y1-rad))
+		p.CubeTo(f32.Pt(x0, y1-c), f32.Pt(x0+c, y1), f32.Pt(x0+rad, y1))
+		p.LineTo(f32.Pt(x1-rad, y1))
+		p.CubeTo(f32.Pt(x1-c, y1), f32.Pt(x1, y1-c), f32.Pt(x1, y1-rad))
+		p.LineTo(f32.Pt(x1, y0+rad))
+		p.CubeTo(f32.Pt(x1, y0+c), f32.Pt(x1-c, y0), f32.Pt(x1-rad, y0))
+		p.LineTo(f32.Pt(x0+rad, y0))
+	}
+	p.Close()
 }
 
 func hline(gtx C, col color.NRGBA, y, x0, x1 int) {
