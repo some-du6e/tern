@@ -433,7 +433,8 @@ func TestBranchPickerDrawn(t *testing.T) {
 	gtx := layout.Context{Ops: &ops, Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Constraints{Max: image.Pt(262-2-24, 400)}}
 	lines := th.boxText(gtx, Txt{Size: 12, LineH: 16.0 / 12, Font: UI(font.Medium)}, notice).Size.Y
 	end := list + 8 + 28 + 8 + 8 + lines + 8
-	if _, last := run(img, 1157+3, list, list+200, P.Popover); last != end-1 {
+	// Read past the popup's 8dp corners, left of the notice's text.
+	if _, last := run(img, 1157+9, list, list+200, P.Popover); last != end-1 {
 		t.Errorf("the picker's surface ends at %d, want %d: the notice's %ddp of lines padded 8 under the refs", last, end-1, lines)
 	}
 }
