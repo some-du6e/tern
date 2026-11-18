@@ -92,6 +92,7 @@ func TestRowTextCentred(t *testing.T) {
 		{ID: "pin", Label: "Pin thread", Icon: "pin"},
 		{ID: "settle", Label: "Settle thread", Icon: "circle-check"},
 	}}}
+	filter := &Scene{Sidebar: Sidebar{HasProjects: true, Filter: &ProjectFilter{Items: []FilterItem{{Label: "All projects", Selected: true}}}}}
 	for _, c := range []struct {
 		what string
 		s    *Scene
@@ -117,6 +118,14 @@ func TestRowTextCentred(t *testing.T) {
 		// The menu's second row is 333..361, its label after the 16dp icon.
 		{"the menu row's label", menu, image.Rect(637, 333, 680, 361), image.Pt(637, 337),
 			Txt{Size: 14, LineH: 20.0 / 14, Color: P.ContrastForeground, MaxLines: 1}, "Settle thread", P.Popover},
+		// The search field is 60..92; its input's line, and the text in it,
+		// centre in it.
+		{"the search's placeholder", rowsScene(), image.Rect(40, 60, 90, 92), image.Pt(40, 60),
+			Txt{Size: 14, LineH: 32.0 / 14, Font: UI(font.Medium), Color: SP.SidebarMutedForeground, MaxLines: 1}, "Search", SP.Sidebar},
+		// The filter's popup is at 191, 94: its 26dp input is 1 + 10 - 1
+		// down, 1 + 12 + 20 in.
+		{"the filter search's placeholder", filter, image.Rect(224, 104, 300, 130), image.Pt(224, 104),
+			Txt{Size: 14, LineH: 26.0 / 14, Color: P.MutedForeground, MaxLines: 1}, "Search projects...", P.Popover},
 	} {
 		img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, c.s) })
 		ref := textAt(t, th, c.txt, c.text, c.at, c.bg)

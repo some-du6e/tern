@@ -132,21 +132,26 @@ func (th *Theme) searchField(gtx C, s *Scene, size image.Point) {
 	if clear {
 		right -= dp(gtx, 20+8)
 	}
-	lineH := dp(gtx, 21) // 14px at the html default line height, 1.5
+	// The input's 21dp line (the html default, 1.5) is centred in the
+	// field and its text in the line, so the text centres in the field.
 	t := Txt{Size: 14, LineH: 1.5, Font: UI(font.Medium), Color: SP.SidebarForeground}
 	func() {
-		defer op.Offset(image.Pt(x0, (size.Y-lineH)/2)).Push(gtx.Ops).Pop()
+		defer op.Offset(image.Pt(x0, 0)).Push(gtx.Ops).Pop()
 		g := gtx
-		g.Constraints = layout.Exact(image.Pt(max(0, right-x0), lineH))
-		if query == "" {
-			th.Text(g, Txt{Size: 14, LineH: 1.5, Font: UI(font.Medium), Color: over(SP.SidebarMutedForeground, bg), MaxLines: 1}, "Search")
-		}
-		if s.Live {
-			th.searchKeys(g, ed)
-			th.editor(g, id, t, "")
-		} else {
-			th.Text(g, Txt{Size: 14, LineH: 1.5, Font: UI(font.Medium), Color: SP.SidebarForeground, MaxLines: 1}, query)
-		}
+		g.Constraints = layout.Exact(image.Pt(max(0, right-x0), size.Y))
+		Row(g, flexed(func(gtx C) D {
+			var d D
+			if query == "" {
+				d = th.Text(gtx, Txt{Size: 14, LineH: 1.5, Font: UI(font.Medium), Color: over(SP.SidebarMutedForeground, bg), MaxLines: 1}, "Search")
+			}
+			if s.Live {
+				th.searchKeys(gtx, ed)
+				d = th.editor(gtx, id, t, "")
+			} else if query != "" {
+				d = th.Text(gtx, Txt{Size: 14, LineH: 1.5, Font: UI(font.Medium), Color: SP.SidebarForeground, MaxLines: 1}, query)
+			}
+			return d
+		}))
 	}()
 	if clear {
 		defer op.Offset(image.Pt(size.X-dp(gtx, 8+20), (size.Y-dp(gtx, 20))/2)).Push(gtx.Ops).Pop()
@@ -296,7 +301,8 @@ func (th *Theme) filterPopup(gtx C, s *Scene) D {
 
 // filterSearch is the popup's search, padded 10 12 0 inside its 1dp
 // border, over a 1dp rule at border 70% that turns the ring colour while
-// it's focused.
+// it's focused. The block sits 1dp up (-translate-y-px): the rule is
+// placed for it, and the 26dp input moves up with it, its text centred.
 func (th *Theme) filterSearch(gtx C, s *Scene) D {
 	return pad(11, 13, 0, 13).Layout(gtx, func(gtx C) D {
 		w := gtx.Constraints.Max.X
@@ -309,16 +315,20 @@ func (th *Theme) filterSearch(gtx C, s *Scene) D {
 			LucideW("search", over(alpha(P.MutedForeground, 0x8c), P.Popover), 16)(gtx)
 		}()
 		func() {
-			defer op.Offset(image.Pt(dp(gtx, 20), 0)).Push(gtx.Ops).Pop()
+			defer op.Offset(image.Pt(dp(gtx, 20), -dp(gtx, 1))).Push(gtx.Ops).Pop()
 			g := gtx
 			g.Constraints = layout.Exact(image.Pt(w-dp(gtx, 20+9), h))
-			if !s.Live || ed.Len() == 0 {
-				th.Text(g, Txt{Size: 14, LineH: 26.0 / 14, Color: P.MutedForeground, MaxLines: 1}, "Search projects...")
-			}
-			if s.Live {
-				th.filterKeys(g, ed)
-				th.editor(g, "filter.search", Txt{Size: 14, LineH: 26.0 / 14, Color: P.PopoverForeground}, "")
-			}
+			Row(g, flexed(func(gtx C) D {
+				var d D
+				if !s.Live || ed.Len() == 0 {
+					d = th.Text(gtx, Txt{Size: 14, LineH: 26.0 / 14, Color: P.MutedForeground, MaxLines: 1}, "Search projects...")
+				}
+				if s.Live {
+					th.filterKeys(gtx, ed)
+					d = th.editor(gtx, "filter.search", Txt{Size: 14, LineH: 26.0 / 14, Color: P.PopoverForeground}, "")
+				}
+				return d
+			}))
 		}()
 		rule := over(alpha(P.Border, 0xb3), P.Popover)
 		if focused {
