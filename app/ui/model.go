@@ -304,12 +304,64 @@ type PullRequests struct {
 }
 
 // PullRequestRow is one pull request: its state's icon in its tone and
-// "#N: <title>".
+// "#N: <title>". With Detail it's the detailed form instead.
 type PullRequestRow struct {
 	State    string // open, draft, closed or merged; "" until it's read
 	Label    string
 	Tip      string // "PR #12 - Open: <title>"
 	Watching bool   // the agent watches it: an eye after the row stops that
+	Detail   *PullRequestDetailRow
+}
+
+// PullRequestDetailRow is a pull request whose detail has loaded with
+// something to say under its title (ThreadDetailsPrRow.tsx): the title on
+// up to two lines, then a meta line of "#N", its checks, the eye while the
+// agent watches it and the action it's ready for ("card.prpill:<i>").
+type PullRequestDetailRow struct {
+	Title  string
+	Number int
+	Checks *ChecksMeta
+	Pill   *PullRequestPill
+}
+
+// ChecksMeta is a pull request's checks in its meta line, a trigger for
+// their popover ("card.checks:<i>", PullRequestChecksPopover.tsx): the
+// rollup's icon and tone, and a count when there's one to give.
+type ChecksMeta struct {
+	State string // passing, failing or pending
+	Count string // "3/5 checks", "2 failed" or ""
+	Popup *ChecksPopup
+}
+
+// ChecksPopup is the open checks popover: what the checks come to, then
+// each check with its status, and whether a "Show all" ("card.checksall")
+// unfolds the finished ones.
+type ChecksPopup struct {
+	Heading string // "Some checks were not successful"
+	Summary string // "2 of 5 failing"
+	Checks  []CheckRow
+	More    string // "Show all", "Show less" or ""
+}
+
+// CheckRow is a check in the popover: its status's icon and label, and a
+// "Details" link to its page ("card.check:<i>") when it has one.
+type CheckRow struct {
+	Status, Name, Label string
+	Details             bool
+}
+
+// PullRequestPill is the action a pull request is ready for at the end of
+// its meta line, in the primary tone: Merge or Ready.
+type PullRequestPill struct {
+	Label    string // "Merge", "Merging...", "Ready", "Marking..."
+	Tip      string
+	Disabled bool // an action is on its way
+}
+
+// Alert is T3's AlertDialog asking before an action: its question, then
+// Cancel ("alert:cancel") and the action ("alert:ok").
+type Alert struct {
+	Title, Description, Action string
 }
 
 // GitActions is the quick action split (GitActionsControl.tsx).
@@ -441,6 +493,7 @@ type Scene struct {
 	Header    *ChatHeader    // the chat header, when a thread or draft is open
 	Card      *ThreadDetails // and its details card
 	Confirm   *Confirm       // a Git action asking first
+	Alert     *Alert         // a pull request action asking first
 	Items     []Item
 	MoreAbove bool
 

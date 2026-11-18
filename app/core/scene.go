@@ -289,6 +289,9 @@ func (a *App) build(now time.Time) *ui.Scene {
 		title, desc, cont := confirmCopy(c.action, c.branch, c.includesCommit, termsFor(st))
 		s.Confirm = &ui.Confirm{Title: title, Description: desc, Continue: cont, BranchOff: featureBranchOff(c.branch, dirty)}
 	}
+	if m := a.prAlert; m != nil {
+		s.Alert = &ui.Alert{Title: "Merge " + m.terms.singular + "?", Description: "This merges #" + strconv.Itoa(m.number) + " using " + m.method + ".", Action: "Merge"}
+	}
 	s.SidebarHidden, s.SidebarW = a.sidebarHidden, a.sidebarWidth
 	s.Term = a.termView()
 	s.Web = a.browserView()

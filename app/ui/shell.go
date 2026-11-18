@@ -107,15 +107,31 @@ func (th *Theme) Desktop(gtx C, s *Scene) D {
 	if s.Confirm != nil {
 		th.confirmDialog(gtx, s.Confirm, size)
 	}
+	if s.Alert != nil {
+		th.alertDialog(gtx, s.Alert, size)
+	}
 	return D{Size: size}
 }
 
 // menuOpen reports whether a menu or popover is up, for a click outside
 // or Escape to close.
 func menuOpen(s *Scene) bool {
-	card := s.Card != nil && (s.Card.Menu != nil || s.Card.Picker != nil)
+	card := s.Card != nil && (s.Card.Menu != nil || s.Card.Picker != nil || checksOpen(s.Card))
 	return s.Picker != nil || s.Traits != nil || s.Access != nil || s.Account != nil || s.Machines != nil ||
 		s.Projects != nil || s.Context != nil || s.Details || card
+}
+
+// checksOpen reports whether a pull request row's checks popover is open.
+func checksOpen(d *ThreadDetails) bool {
+	if d.PRs == nil {
+		return false
+	}
+	for _, r := range d.PRs.Rows {
+		if r.Detail != nil && r.Detail.Checks != nil && r.Detail.Checks.Popup != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // shellKeys handles T3's shell shortcuts (keybindings.ts): mod+B the
@@ -140,6 +156,8 @@ func (th *Theme) shellKeys(gtx C, s *Scene) {
 		switch {
 		case ke.Name == key.NameEscape && s.Confirm != nil:
 			th.push(Action{ID: "confirm:abort", Kind: "click"})
+		case ke.Name == key.NameEscape && s.Alert != nil:
+			th.push(Action{ID: "alert:cancel", Kind: "click"})
 		case ke.Name == key.NameEscape && menuOpen(s):
 			th.push(Action{ID: "menus.close", Kind: "click"})
 		case ke.Name == "J" && hasProject(s):

@@ -104,6 +104,13 @@ type App struct {
 	cardAtPointer bool            // the card's menu opened at a right-click
 	itemsHidden   map[string]bool // the card's items turned off (persisted)
 	prsOpen       bool            // the pull request rows show the thread's other links
+	// What the card has read of each pull request, by prKeyOf; a merge
+	// waiting on its dialog; the pull request whose checks popover is open,
+	// and whether it shows the finished checks too.
+	prLoads       map[string]*prLoad
+	prAlert       *prAlert
+	checksOpen    string
+	checksAll     bool
 	branchPicker  *refPicker
 	confirm       *pendingGit
 	vcs           map[string]*vcsState
@@ -199,6 +206,7 @@ func NewWithStore(store *t3.Store, redraw func()) (*App, error) {
 	_ = store.Delete("env-filter")   // from when a machine's chip filtered the inbox
 	_ = store.Delete("details-card") // from when one switch hid every thread's card
 	a.cardHidden, a.lastScripts, a.vcs = map[string]bool{}, map[string]string{}, map[string]*vcsState{}
+	a.prLoads = map[string]*prLoad{}
 	a.itemsHidden = map[string]bool{}
 	a.remoteEditors = probeRemoteEditors
 	_, _ = store.Get("details-hidden", &a.cardHidden)
@@ -797,6 +805,7 @@ func (a *App) closeThreadLocked() {
 	a.openID = ""
 	a.picker, a.traitsOpen, a.accessOpen, a.projectsOpen = nil, false, false, false
 	a.renaming, a.cardMenu, a.branchPicker, a.confirm, a.prsOpen = "", "", nil, nil, false
+	a.prAlert = nil
 }
 
 // openThread shows a thread, by ref, and subscribes to it. Call without the

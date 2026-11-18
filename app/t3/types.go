@@ -17,12 +17,13 @@ type OptionChoice struct {
 }
 
 type Project struct {
-	ID                    string          `json:"id"`
-	Title                 string          `json:"title"`
-	WorkspaceRoot         string          `json:"workspaceRoot"`
-	DefaultModelSelection *ModelSelection `json:"defaultModelSelection"`
-	ProjectIcon           *ProjectIcon    `json:"projectIcon"`
-	Scripts               []ProjectScript `json:"scripts"`
+	ID                    string              `json:"id"`
+	Title                 string              `json:"title"`
+	WorkspaceRoot         string              `json:"workspaceRoot"`
+	DefaultModelSelection *ModelSelection     `json:"defaultModelSelection"`
+	ProjectIcon           *ProjectIcon        `json:"projectIcon"`
+	Scripts               []ProjectScript     `json:"scripts"`
+	RepositoryIdentity    *RepositoryIdentity `json:"repositoryIdentity"`
 }
 
 // ProjectIcon is a project's chosen mark (project.ts): a lucide icon, an
@@ -321,6 +322,7 @@ type ServerConfig struct {
 			ServerResolvedCommandContext bool `json:"serverResolvedCommandContext"`
 			InlineMessageContext         bool `json:"inlineMessageContext"`
 			ThreadStop                   bool `json:"threadStop"`
+			PullRequestChecks            bool `json:"pullRequestChecks"`
 		} `json:"capabilities"`
 	} `json:"environment"`
 }

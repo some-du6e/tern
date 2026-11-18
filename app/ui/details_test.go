@@ -101,6 +101,108 @@ func TestPRRows(t *testing.T) {
 	}
 }
 
+// detailedScene is cardScene with its pull request read: a long title,
+// passing checks and Merge.
+func detailedScene() *Scene {
+	s := cardScene()
+	s.Card.PRs = &PullRequests{Rows: []PullRequestRow{{State: "open", Label: "#12: Teach the parser about tabs", Tip: "PR #12 - Open",
+		Detail: &PullRequestDetailRow{Title: "Teach the parser about tabs and the lexer about everything that follows them", Number: 12,
+			Checks: &ChecksMeta{State: "passing"}, Pill: &PullRequestPill{Label: "Merge", Tip: "Merge this pull request (merge)"}}}}}
+	return s
+}
+
+// A pull request whose detail has loaded is the detailed form (§3.8): its
+// title on two 18dp lines makes the row 50 tall, then 6dp down the 20dp
+// meta line and 6dp under it, 82 in all, which the density counts. Merge
+// is filled --primary 10dp in from the row's end; the checks' icon is
+// emerald while they pass.
+func TestPRDetailRowDrawn(t *testing.T) {
+	defer SetDark(false)
+	s := detailedScene()
+	var ops op.Ops
+	gtx := layout.Context{Ops: &ops, Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Now: time.Now(), Constraints: layout.Constraints{Max: image.Pt(280, 2000)}}
+	full := 1 + (8 + 3*32 + 10) + 1 + (8 + 32 + 82 + 2*32 + 10) + 1
+	if got := NewTheme().details(gtx, s, 1000).Size.Y; got != full {
+		t.Errorf("with a detailed pull request: %d tall, want %d", got, full)
+	}
+	for _, d := range []bool{false, true} {
+		SetDark(d)
+		th := NewTheme()
+		img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, s) })
+		// The branch row ends at 220, the title row at 270; the meta line
+		// runs from 276 to 296.
+		x, meta := 1157, 276
+		fill := over(alpha(P.Popover, 0xd5), P.Background)
+		wantPixel(t, img, image.Pt(x+262-10-3, meta+10), P.Primary, "Merge's fill")
+		wantPixel(t, img, image.Pt(x+262-10+3, meta+10), fill, "the card after Merge")
+		wantPixel(t, img, image.Pt(x+262-10-3, meta-2), fill, "above Merge")
+		if first, last := run(img, x+262-10-3, meta-6, meta+26, P.Primary); first != meta || last != meta+19 {
+			t.Errorf("dark %v: Merge spans y %d..%d, want %d..%d", d, first, last, meta, meta+19)
+		}
+		// The checks' 14dp icon, 7dp into its trigger, which starts 4dp and
+		// the line's 2dp gap after "#12".
+		ix := x + 36 + th.textW(gtx, metaFont(), "#12") + 6 + 7
+		green := false
+		for yy := meta + 3; yy < meta+17; yy++ {
+			for xx := ix; xx < ix+14; xx++ {
+				if c := img.RGBAAt(xx, yy); int(c.G) > int(c.R)+30 && c.G > c.B {
+					green = true
+				}
+			}
+		}
+		if !green {
+			t.Errorf("dark %v: the passing checks' icon isn't emerald", d)
+		}
+	}
+}
+
+// The checks popover hangs 4dp under its trigger, its end at the
+// trigger's (the card is at the window's right), 320dp wide.
+func TestChecksPopoverDrawn(t *testing.T) {
+	defer SetDark(false)
+	SetDark(true)
+	s := detailedScene()
+	c := s.Card.PRs.Rows[0].Detail.Checks
+	c.State, c.Count = "failing", "2 failed"
+	c.Popup = &ChecksPopup{Heading: "Some checks were not successful", Summary: "2 of 3 failing", Checks: []CheckRow{
+		{Status: "failure", Name: "lint", Label: "Failed", Details: true}, {Status: "cancelled", Name: "e2e", Label: "Cancelled"}}}
+	th := NewTheme()
+	img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, s) })
+	var ops op.Ops
+	gtx := layout.Context{Ops: &ops, Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Constraints{Max: image.Pt(2000, 52)}}
+	count := rowFont(P.MutedForeground)
+	count.Size, count.LineH = 12, 16.0/12
+	left := 1157 + 36 + th.textW(gtx, metaFont(), "#12") + 6
+	right := left + 1 + 6 + 14 + 4 + th.textW(gtx, count, "2 failed") + 6 + 1
+	top := 276 - 2 + 24 + 4
+	wantPixel(t, img, image.Pt(right-320+3, top+40), P.Popover, "the popover's left end, past the card")
+	wantPixel(t, img, image.Pt(right-320-3, top+40), P.Background, "left of it")
+	wantPixel(t, img, image.Pt(right-3, top+40), P.Popover, "its right end, at the trigger's")
+	// The card right of it, under a little of the popover's shadow: darker
+	// than the popover either way.
+	if got := img.RGBAAt(right+3, top+40); got.R > over(alpha(P.Popover, 0xd5), P.Background).R {
+		t.Errorf("right of the popover is #%02x%02x%02x, want the card", got.R, got.G, got.B)
+	}
+}
+
+// A merge asks in T3's alert dialog: the popup in the middle of the window
+// over the backdrop, its footer a rule over muted at 72%.
+func TestAlertDialogDrawn(t *testing.T) {
+	defer SetDark(false)
+	SetDark(true)
+	s := detailedScene()
+	s.Alert = &Alert{Title: "Merge pull request?", Description: "This merges #12 using merge.", Action: "Merge"}
+	img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return NewTheme().Desktop(gtx, s) })
+	x := 720 + 40 // clear of the title, the description and the buttons
+	first, last := run(img, x, 300, 600, footerFill())
+	if first < 0 || last-first+1 != 16+28+16-1-1 {
+		t.Fatalf("the footer spans y %d..%d, want 58 rows inside the popup's border", first, last)
+	}
+	wantPixel(t, img, image.Pt(x, first-1), over(P.Border, P.Popover), "the footer's rule")
+	wantPixel(t, img, image.Pt(x, first-8), P.Popover, "the popup over it")
+	wantPixel(t, img, image.Pt(1148+140, 64+4), over(alpha(rgb(0), 0xa3), over(alpha(P.Popover, 0xd5), P.Background)), "the backdrop over the card")
+}
+
 // With every row turned off, the card offers "Choose what to show",
 // padded 8, which opens the items menu under itself.
 func TestCardFallback(t *testing.T) {

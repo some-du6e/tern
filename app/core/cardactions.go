@@ -113,6 +113,23 @@ func (a *App) handleHeader(th *ui.Theme, act ui.Action) bool {
 		a.prsOpen = !a.prsOpen
 		a.mu.Unlock()
 		return true
+	case "card.prpill":
+		a.prPill(atoi(arg))
+		return true
+	case "card.checks":
+		a.toggleChecks(atoi(arg))
+		return true
+	case "card.checksall":
+		a.mu.Lock()
+		a.checksAll = !a.checksAll
+		a.mu.Unlock()
+		return true
+	case "card.check":
+		a.openCheck(atoi(arg))
+		return true
+	case "alert":
+		a.confirmMerge(arg == "ok")
+		return true
 	}
 	if menu, ok := strings.CutPrefix(verb, "card."); ok && arg != "" {
 		// A row of one of the card's menus: "card.<menu>:<row>".

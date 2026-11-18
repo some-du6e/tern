@@ -374,18 +374,29 @@ func (it prItem) prState() string {
 // prStateLabels are the states' names (PULL_REQUEST_STATE_PRESENTATION).
 var prStateLabels = map[string]string{"open": "Open", "draft": "Draft", "closed": "Closed", "merged": "Merged"}
 
-// prsScene is the card's pull request rows: the shown one, then, while
-// expanded, the others "Show N more" folds. Call with the lock held.
-func (a *App) prsScene(items []prItem, terms changeTerms) *ui.PullRequests {
+// prsScene is the card's pull request rows in project p: the shown one,
+// then, while expanded, the others "Show N more" folds. Each reads its
+// pull request's detail, which gives it its state and, with something to
+// say under its title, its detailed form. Call with the lock held.
+func (a *App) prsScene(e *envState, p t3.Project, items []prItem, terms changeTerms, now time.Time) *ui.PullRequests {
 	if len(items) == 0 {
 		return nil
 	}
-	p := &ui.PullRequests{Others: len(items) - 1, Expanded: a.prsOpen}
+	rows := &ui.PullRequests{Others: len(items) - 1, Expanded: a.prsOpen}
 	for i, it := range items {
 		if i > 0 && !a.prsOpen {
 			break
 		}
-		r := ui.PullRequestRow{State: it.prState(), Label: "#" + strconv.Itoa(it.number), Watching: it.watching && (it.state == "" || it.state == "open")}
+		var detail *ui.PullRequestDetailRow
+		if ref := prRefOf(e, p, it, i == 0); ref != nil {
+			key := prKeyOf(e.id(), *ref)
+			if l := a.loadPRLocked(e, key, *ref, now); l.detail != nil {
+				d := withNewerChecks(l)
+				it.state, it.draft = d.State, d.IsDraft
+				detail = a.detailRow(key, l, it.number, it.watching)
+			}
+		}
+		r := ui.PullRequestRow{State: it.prState(), Label: "#" + strconv.Itoa(it.number), Watching: it.watching && (it.state == "" || it.state == "open"), Detail: detail}
 		if title := strings.TrimSpace(it.title); title != "" {
 			r.Label += ": " + it.title
 		}
@@ -394,9 +405,9 @@ func (a *App) prsScene(items []prItem, terms changeTerms) *ui.PullRequests {
 		if label := prStateLabels[r.State]; label != "" {
 			r.Tip = terms.short + " #" + strconv.Itoa(it.number) + " - " + label + ": " + it.title
 		}
-		p.Rows = append(p.Rows, r)
+		rows.Rows = append(rows.Rows, r)
 	}
-	return p
+	return rows
 }
 
 // openPR opens the card's pull request row i in the browser, as T3 does

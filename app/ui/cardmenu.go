@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"image"
+	"image/color"
 	"strings"
 
 	"gioui.org/font"
@@ -324,22 +325,87 @@ func (th *Theme) pickerItem(id string, highlighted, disabled bool, w W) W {
 // with its title, description and, when the feature branch can't be
 // named, why; then Abort at the start and the two ways on at the end.
 func (th *Theme) confirmDialog(gtx C, c *Confirm, win image.Point) {
+	// A press on the backdrop closes it, like Abort.
+	th.dialog(gtx, win, 576, "confirm:abort", func(gtx C) D { return th.confirmBody(gtx, c) })
+}
+
+// alertDialog is a as T3's AlertDialog (alert-dialog.tsx, docs/ui/
+// 02-primitives.md §2.20, §3.22): up to 512 wide (max-w-lg), its title and
+// description, then the default footer, a rule over muted at 72%, with
+// Cancel and the action at its end. Its backdrop keeps its presses, as
+// Base UI's alert dialogs ignore them.
+func (th *Theme) alertDialog(gtx C, a *Alert, win image.Point) {
+	th.dialog(gtx, win, 512, "", func(gtx C) D {
+		w := gtx.Constraints.Max.X
+		return Col(gtx,
+			rigid(func(gtx C) D {
+				gtx.Constraints.Min.X = w
+				return pad(24, 24, 24, 24).Layout(gtx, func(gtx C) D {
+					gtx.Constraints.Min.X = gtx.Constraints.Max.X
+					return Col(gtx,
+						rigid(func(gtx C) D {
+							return th.Text(gtx, Txt{Size: 20, LineH: 27.5 / 20, Font: UI(font.SemiBold), Color: P.PopoverForeground}, a.Title)
+						}),
+						rigid(Spacer(0, 8)),
+						rigid(func(gtx C) D {
+							return th.Text(gtx, Txt{Size: 14, LineH: 20.0 / 14, Color: P.MutedForeground}, a.Description)
+						}),
+					)
+				})
+			}),
+			rigid(func(gtx C) D {
+				m := op.Record(gtx.Ops)
+				gtx.Constraints.Min.X = w
+				d := pad(16, 24, 16, 24).Layout(gtx, func(gtx C) D {
+					gtx.Constraints.Min.X = gtx.Constraints.Max.X
+					return Row(gtx,
+						flexed(func(gtx C) D { return D{Size: image.Pt(gtx.Constraints.Min.X, 0)} }),
+						rigid(th.T3Button("alert:cancel", Button{Variant: BtnOutline, Size: BtnSizeSm, Label: "Cancel", On: footerFill()})),
+						rigid(Spacer(8, 0)),
+						rigid(th.T3Button("alert:ok", Button{Variant: BtnDefault, Size: BtnSizeSm, Label: a.Action, On: footerFill()})),
+					)
+				})
+				call := m.Stop()
+				// The footer's fill runs into the popup's bottom corners,
+				// inside its border.
+				px := max(1, dp(gtx, 1))
+				rad := dp(gtx, 16) - px
+				paint.FillShape(gtx.Ops, footerFill(), clip.RRect{Rect: image.Rect(px, 0, d.Size.X-px, d.Size.Y-px), SE: rad, SW: rad}.Op(gtx.Ops))
+				hline(gtx, over(P.Border, P.Popover), 0, px, d.Size.X-px)
+				call.Add(gtx.Ops)
+				return d
+			}),
+		)
+	})
+}
+
+// footerFill is a dialog's default footer: muted at 72% over the popup.
+func footerFill() color.NRGBA { return over(alpha(P.Muted, uint8(int(P.Muted.A)*72/100)), P.Popover) }
+
+// dialog draws body as T3's dialog in the middle of a win-sized window, up
+// to maxW wide: the backdrop over everything, then the popup with the
+// dialog glass's border, shadow and dark top light. A press on the
+// backdrop clicks dismiss; with none, the backdrop keeps its presses.
+func (th *Theme) dialog(gtx C, win image.Point, maxW float32, dismiss string, body W) {
 	m := op.Record(gtx.Ops)
 	backdrop := alpha(rgb(0xfcfcfc), 0x99)
 	if dark {
 		backdrop = alpha(rgb(0), 0xa3)
 	}
 	paint.FillShape(gtx.Ops, backdrop, clip.Rect{Max: win}.Op())
-	// A press on the backdrop closes it, like Abort.
-	th.hit(gtx, "confirm:abort", win)
+	if dismiss != "" {
+		th.hit(gtx, dismiss, win)
+	} else {
+		th.hover(gtx, "dialog.backdrop", win)
+	}
 	g := gtx
-	w := min(dp(gtx, 576), win.X-2*dp(gtx, 16))
+	w := min(dp(gtx, maxW), win.X-2*dp(gtx, 16))
 	g.Constraints = layout.Constraints{Min: image.Pt(w, 0), Max: image.Pt(w, win.Y-2*dp(gtx, 16))}
 	pm := op.Record(gtx.Ops)
-	body := th.confirmBody(g, c)
+	content := body(g)
 	call := pm.Stop()
-	r := image.Rectangle{Max: body.Size}
-	at := image.Pt((win.X-w)/2, (win.Y-body.Size.Y)/2)
+	r := image.Rectangle{Max: content.Size}
+	at := image.Pt((win.X-w)/2, (win.Y-content.Size.Y)/2)
 	func() {
 		defer op.Offset(at).Push(gtx.Ops).Pop()
 		rad := dp(gtx, 16)
@@ -356,7 +422,7 @@ func (th *Theme) confirmDialog(gtx C, c *Confirm, win image.Point) {
 			hline(gtx, over(alpha(rgb(0xffffff), 0x0a), P.Popover), max(1, dp(gtx, 1)), rad, r.Max.X-rad)
 		}
 		// The popup keeps its presses.
-		th.hit(gtx, "confirm.popup", r.Max)
+		th.hit(gtx, "dialog.popup", r.Max)
 		call.Add(gtx.Ops)
 	}()
 	op.Defer(gtx.Ops, m.Stop())

@@ -348,17 +348,44 @@ func draftMenuScene() *ui.Scene {
 }
 
 // pullRequestsScene has the thread's pull requests under its branch row,
-// unfolded: the open one the agent watches, then the merged base it
-// stacks on and an older closed one. A guest watches the thread through
-// its guest link.
+// unfolded: the open one the agent watches, read in full with its checks
+// passed and Merge on offer, then the merged base it stacks on and an
+// older closed one. A guest watches the thread through its guest link.
 func pullRequestsScene() *ui.Scene {
 	s := runningScene()
 	s.Header.Guest = &ui.GuestLine{Status: "Sam is a guest"}
 	s.Card.PRs = &ui.PullRequests{Others: 2, Expanded: true, Rows: []ui.PullRequestRow{
-		{State: "open", Label: "#214: Retry relay reads on a dropped socket", Tip: "PR #214 - Open: Retry relay reads on a dropped socket", Watching: true},
+		{State: "open", Label: "#214: Retry relay reads on a dropped socket", Tip: "PR #214 - Open: Retry relay reads on a dropped socket", Watching: true,
+			Detail: &ui.PullRequestDetailRow{Title: "Retry relay reads on a dropped socket", Number: 214,
+				Checks: &ui.ChecksMeta{State: "passing"}, Pill: &ui.PullRequestPill{Label: "Merge", Tip: "Merge this pull request (merge)"}}},
 		{State: "merged", Label: "#209: Split the relay out of the RPC client", Tip: "PR #209 - Merged: Split the relay out of the RPC client"},
 		{State: "closed", Label: "#187: Try a second socket for streams", Tip: "PR #187 - Closed: Try a second socket for streams"},
 	}}
+	return s
+}
+
+// checksScene has the thread's pull request still running its checks,
+// their popover open: the failed one first, the running ones, and the
+// finished one folded behind Show all.
+func checksScene() *ui.Scene {
+	s := runningScene()
+	s.Card.PRs = &ui.PullRequests{Rows: []ui.PullRequestRow{{State: "open", Label: "#214: Retry relay reads on a dropped socket",
+		Detail: &ui.PullRequestDetailRow{Title: "Retry relay reads on a dropped socket", Number: 214,
+			Checks: &ui.ChecksMeta{State: "failing", Count: "1/4 checks", Popup: &ui.ChecksPopup{
+				Heading: "Some checks were not successful", Summary: "1 of 4 failing", More: "Show all",
+				Checks: []ui.CheckRow{
+					{Status: "failure", Name: "lint", Label: "Failed", Details: true},
+					{Status: "pending", Name: "test (linux)", Label: "Running", Details: true},
+					{Status: "pending", Name: "test (windows)", Label: "Running", Details: true},
+				},
+			}}}}}}
+	return s
+}
+
+// mergeScene asks before merging the thread's pull request.
+func mergeScene() *ui.Scene {
+	s := pullRequestsScene()
+	s.Alert = &ui.Alert{Title: "Merge pull request?", Description: "This merges #214 using merge.", Action: "Merge"}
 	return s
 }
 
