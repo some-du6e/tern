@@ -175,7 +175,7 @@ func TestStreamingBlocks(t *testing.T) {
 // (MarkdownCodeBlock.tsx:163).
 func TestCodeBlockWrapSurvivesReparse(t *testing.T) {
 	defer SetDark(false)
-	src := "```go\n" + strings.Repeat("x", 300) + "\n```"
+	src := "```go\n" + strings.Repeat("retry ", 60) + "\n```"
 	st := mdBody()
 	st.owner = "m"
 	th := NewTheme()

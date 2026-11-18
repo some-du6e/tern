@@ -288,7 +288,9 @@ func (th *Theme) tipAt(gtx C, id, tip string, size image.Point, up bool, align i
 	}
 	m2 := op.Record(gtx.Ops)
 	op.Offset(at).Add(gtx.Ops)
-	paint.PushOpacity(gtx.Ops, t)
+	// The fade's layer ends with the tooltip: one left open past its
+	// macro has no end for the GPU to draw it to.
+	fade := paint.PushOpacity(gtx.Ops, t)
 	// It grows from 98% out of the side facing the trigger.
 	origin := f32.Pt(float32(td.Size.X)/2, 0)
 	if up {
@@ -297,6 +299,7 @@ func (th *Theme) tipAt(gtx C, id, tip string, size image.Point, up bool, align i
 	k := 0.98 + 0.02*t
 	op.Affine(f32.Affine2D{}.Scale(origin, f32.Pt(k, k))).Add(gtx.Ops)
 	call.Add(gtx.Ops)
+	fade.Pop()
 	op.Defer(gtx.Ops, m2.Stop())
 }
 
