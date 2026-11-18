@@ -8,6 +8,8 @@ import (
 
 var kinds = map[string]bool{"sh": true, "bash": true}
 
+func opener(url string) *exec.Cmd { return exec.Command("open", url) }
+
 // run writes code to a .command file, which Terminal opens in a new window.
 // The window ends in a login shell, so it stays open to read.
 func run(kind, code string) error {

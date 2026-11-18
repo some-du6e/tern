@@ -273,7 +273,7 @@ func TestFullThreadMenu(t *testing.T) {
 			t.Errorf("%s: separator %v", it.ID, it.Sep)
 		}
 	}
-	if got := strings.Join(copyItems, ", "); got != "Path, Branch, Thread ID" {
+	if got := strings.Join(copyItems, ", "); got != "Path, Branch, Thread, Thread ID" {
 		t.Fatalf("copy = %s", got)
 	}
 	// A read-only session can still copy and mark unread, nothing else.
@@ -283,6 +283,14 @@ func TestFullThreadMenu(t *testing.T) {
 		if it.Off != needsOperate(it.ID) {
 			t.Errorf("%s read-only: off %v", it.ID, it.Off)
 		}
+	}
+}
+
+// Copy › Thread copies a link that opens the thread from anywhere, through
+// T3's hosted app, its ids escaped down to their punctuation.
+func TestHostedThreadLink(t *testing.T) {
+	if got, want := hostedThreadLink("env-1", "a b.c!"), "https://app.t3.codes/threads/env-1/a%20b%2Ec%21"; got != want {
+		t.Fatalf("link %s, want %s", got, want)
 	}
 }
 

@@ -58,6 +58,9 @@ type App struct {
 	relay *t3.Relay
 
 	redraw func()
+	// OpenURL opens a URL on this computer: a pull request's, in its
+	// browser.
+	OpenURL func(string) error
 
 	mu       sync.Mutex
 	booted   bool // boot has decided between sign-in and the inbox

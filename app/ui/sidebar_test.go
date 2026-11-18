@@ -239,6 +239,29 @@ func TestListRevealsOpenRow(t *testing.T) {
 	wantPixel(t, img, image.Pt(20, 110), draft, "the first card, back at the top")
 }
 
+// A click on a card's pull request is the badge's: it opens the pull
+// request, not the thread.
+func TestPullRequestIsntARowClick(t *testing.T) {
+	th := NewTheme()
+	s := &Scene{Live: true, Sidebar: Sidebar{Items: []SidebarItem{
+		{Row: &ThreadRow{ID: "e/1", Title: "One", Age: "5m", Branch: "main", PR: &PRBadge{State: "open", Text: "42"}}},
+	}}}
+	frame, r := sidebarFrames(th, s)
+	frame()
+	// The meta line is 16dp at 48 + 2 + 54; the badge ends 6dp short of
+	// the line's end at 237, where the empty trailing icons sit.
+	at := f32.Pt(225, 112)
+	r.Queue(pointer.Event{Kind: pointer.Move, Position: at, Source: pointer.Mouse})
+	frame()
+	r.Queue(
+		pointer.Event{Kind: pointer.Press, Position: at, Buttons: pointer.ButtonPrimary, Source: pointer.Mouse},
+		pointer.Event{Kind: pointer.Release, Position: at, Source: pointer.Mouse},
+	)
+	if acts := frame(); len(acts) != 1 || acts[0].ID != "pr:e/1" {
+		t.Fatalf("actions %+v, want just pr:e/1", acts)
+	}
+}
+
 // In light the open row is rung 1dp inside with the sidebar border at 70%.
 func TestOpenRowRing(t *testing.T) {
 	th := NewTheme()

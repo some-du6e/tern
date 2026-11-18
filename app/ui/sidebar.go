@@ -1193,7 +1193,7 @@ func (th *Theme) metaLine(gtx C, s *Scene, r *ThreadRow, in rowInk) D {
 		kids = append(kids, rigid(th.terminalButton(s, r, in)))
 	}
 	if r.PR != nil {
-		kids = append(kids, rigid(func(gtx C) D { return th.prBadge(gtx, r.PR, in) }))
+		kids = append(kids, rigid(func(gtx C) D { return th.prBadge(gtx, s, r, in) }))
 	}
 	kids = append(kids, rigid(func(gtx C) D { return th.trailingIcons(gtx, r, in) }))
 	return RowGap(gtx, 6, kids...)
@@ -1276,8 +1276,17 @@ func (th *Theme) terminalButton(s *Scene, r *ThreadRow, in rowInk) W {
 }
 
 // prBadge is the meta line's pull request: its state's glyph at 12dp in
-// its tone, then the number in the secondary label, 2dp on.
-func (th *Theme) prBadge(gtx C, pr *PRBadge, in rowInk) D {
+// its tone, then the number in the secondary label, 2dp on. It's T3's
+// InlineButton: a click opens the pull request, and hovered the number
+// underlines 2dp under its baseline.
+func (th *Theme) prBadge(gtx C, s *Scene, r *ThreadRow, in rowInk) D {
+	pr := r.PR
+	id := liveID(s, "pr:"+r.ID)
+	hovered := false
+	if id != "" {
+		c, _ := th.events(gtx, id)
+		hovered = c.Hovered()
+	}
 	icon, tone := "git-pull-request-arrow", SP.MutedForeground
 	pick := func(light, darkName string, a uint8) color.NRGBA {
 		if dark {
@@ -1295,12 +1304,21 @@ func (th *Theme) prBadge(gtx C, pr *PRBadge, in rowInk) D {
 	case "closed":
 		icon, tone = "git-pull-request-closed", pick("red-600", "red-300", 0xe6)
 	}
-	return RowGap(gtx, 2,
+	col := in.of(SP.SecondaryLabel)
+	d := RowGap(gtx, 2,
 		rigid(LucideW(icon, in.of(tone), 12)),
 		rigid(func(gtx C) D {
-			return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: in.of(SP.SecondaryLabel), MaxLines: 1}, pr.Text)
+			d := th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: col, MaxLines: 1}, pr.Text)
+			if hovered {
+				hline(gtx, col, d.Size.Y-d.Baseline+dp(gtx, 2), 0, d.Size.X)
+			}
+			return d
 		}),
 	)
+	if id != "" {
+		th.hit(gtx, id, d.Size)
+	}
+	return d
 }
 
 // slimRow is a snoozed or settled thread (§2.5, §3.8): 36dp, padded 0 by

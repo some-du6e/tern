@@ -363,9 +363,9 @@ func sidebarMenuScene() *ui.Scene {
 		{ID: "regenerate-title", Label: "Regenerating…", Icon: "refresh-cw", Off: true},
 		{ID: "mark-unread", Label: "Mark unread", Icon: "mail-open"},
 		{ID: "filter-by-project", Label: "Filter by tern", Icon: "folder-tree"},
-		{ID: "copy", Label: "Copy", Icon: "copy", Sep: true, Children: sub("Path", "Branch", "Thread ID")},
+		{ID: "copy", Label: "Copy", Icon: "copy", Sep: true, Children: sub("Path", "Branch", "Thread", "Thread ID")},
 		{ID: "archive", Label: "Archive thread", Icon: "archive", Sep: true},
-		{ID: "delete", Label: "Delete", Icon: "trash-2", Danger: true},
+		{ID: "delete", Label: "Delete", Icon: "trash", Danger: true},
 	}}
 	return s
 }

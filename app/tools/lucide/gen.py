@@ -20,7 +20,7 @@ LUCIDE = ["settings", "server", "laptop", "monitor", "circle-user", "git-branch"
           "user-round", "circle-alert", "circle-check", "alarm-clock", "alarm-clock-off", "undo-2",
           "folder-git-2", "folder-code", "message-square-dashed", "cloud", "arrow-right-left",
           "git-pull-request-arrow", "git-pull-request-draft", "git-pull-request-closed", "git-merge",
-          "pencil", "refresh-cw", "mail-open", "folder-tree", "timer", "copy", "hash"]
+          "pencil", "refresh-cw", "mail-open", "folder-tree", "timer", "copy", "hash", "message-square", "trash"]
 
 assets = pathlib.Path(sys.argv[1])
 bundle = "\n".join(p.read_text(errors="replace") for p in assets.glob("*.js"))

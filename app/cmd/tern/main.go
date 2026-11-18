@@ -49,6 +49,7 @@ func run(w *app.Window) error {
 	if err != nil {
 		return err
 	}
+	c.OpenURL = shell.Open
 	c.Start()
 	th.Focus("signin.email")
 	var ops op.Ops

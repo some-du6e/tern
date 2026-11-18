@@ -405,10 +405,12 @@ func (a *App) threadMenu(e *envState, t *t3.Thread, now time.Time) []ui.MenuItem
 	if t.Branch != "" {
 		copyItems = append(copyItems, ui.MenuItem{ID: "copy-branch", Label: "Branch", Icon: "git-branch"})
 	}
-	copyItems = append(copyItems, ui.MenuItem{ID: "copy-thread-id", Label: "Thread ID", Icon: "hash"})
+	copyItems = append(copyItems,
+		ui.MenuItem{ID: "copy-thread", Label: "Thread", Icon: "message-square"},
+		ui.MenuItem{ID: "copy-thread-id", Label: "Thread ID", Icon: "hash"})
 	m = append(m, ui.MenuItem{ID: "copy", Label: "Copy", Icon: "copy", Sep: true, Children: copyItems})
 	m = append(m, ui.MenuItem{ID: "archive", Label: "Archive thread", Icon: "archive", Off: running(t), Sep: true})
-	del := ui.MenuItem{ID: "delete", Label: "Delete", Icon: "trash-2", Danger: true}
+	del := ui.MenuItem{ID: "delete", Label: "Delete", Icon: "trash", Danger: true}
 	if a.ctxConfirm {
 		del.Label = "Click again to delete"
 	}
@@ -426,11 +428,11 @@ func (a *App) threadMenu(e *envState, t *t3.Thread, now time.Time) []ui.MenuItem
 	return m
 }
 
-// needsOperate reports the menu items that change a thread; reading,
-// marking unread, copying and filtering work without write access.
+// needsOperate reports the menu items that need write access: all but
+// marking unread and copying (threadActionRequiresOperate).
 func needsOperate(id string) bool {
 	switch id {
-	case "mark-unread", "copy", "copy-path", "copy-branch", "copy-thread-id", "filter-by-project":
+	case "mark-unread", "copy", "copy-path", "copy-branch", "copy-thread", "copy-thread-id":
 		return false
 	}
 	return true
@@ -595,8 +597,48 @@ func (a *App) menuPick(th *ui.Theme, id string) {
 		th.WriteClipboard(path)
 	case "copy-branch":
 		th.WriteClipboard(t.Branch)
+	case "copy-thread":
+		th.WriteClipboard(hostedThreadLink(e.id(), t.ID))
 	case "copy-thread-id":
 		th.WriteClipboard(t.ID)
+	}
+}
+
+// hostedThreadLink is a link that opens the thread from anywhere, through
+// T3's hosted app (threadLinks.ts): its ids escaped as encodeURIComponent
+// does, and its punctuation too, so a sentence's full stop never reads as
+// part of an id.
+func hostedThreadLink(envID, threadID string) string {
+	seg := func(id string) string {
+		var b strings.Builder
+		for _, c := range []byte(id) {
+			if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_' {
+				b.WriteByte(c)
+			} else {
+				fmt.Fprintf(&b, "%%%02X", c)
+			}
+		}
+		return b.String()
+	}
+	return "https://app.t3.codes/threads/" + seg(envID) + "/" + seg(threadID)
+}
+
+// openPullRequest opens the row's pull request in this computer's browser.
+func (a *App) openPullRequest(r string) {
+	a.mu.Lock()
+	url := ""
+	if _, t := a.thread(r); t != nil {
+		if b := prBadge(t); b != nil {
+			url = b.URL
+		}
+	}
+	open := a.OpenURL
+	a.mu.Unlock()
+	if url == "" || open == nil {
+		return
+	}
+	if err := open(url); err != nil {
+		a.failf("Unable to open pull request link: %v", err)
 	}
 }
 
@@ -998,6 +1040,8 @@ func (a *App) sidebarAction(th *ui.Theme, act ui.Action) bool {
 		a.threadAction(th, arg, "unsnooze")
 	case "woke":
 		a.acknowledgeWoke(arg)
+	case "pr":
+		a.openPullRequest(arg)
 	case "discard":
 		saveDraft(arg, "")
 		a.mu.Lock()
