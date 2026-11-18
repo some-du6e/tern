@@ -70,7 +70,10 @@ func (th *Theme) heroHeadline(gtx C, s *Scene) D {
 	centre := func(row W) layout.FlexChild {
 		return rigid(func(gtx C) D {
 			gtx.Constraints.Min.X = w
-			return layout.N.Layout(gtx, row)
+			return layout.N.Layout(gtx, func(gtx C) D {
+				gtx.Constraints.Min.X = 0
+				return row(gtx)
+			})
 		})
 	}
 	switch {
@@ -103,7 +106,7 @@ func (th *Theme) heroHeadline(gtx C, s *Scene) D {
 	if s.Scratch || s.CanScratch {
 		kids = append(kids, rigid(Spacer(0, 8)), centre(func(gtx C) D {
 			return FixedH(gtx, 24, func(gtx C) D {
-				return layout.W.Layout(gtx, func(gtx C) D {
+				return layout.Center.Layout(gtx, func(gtx C) D {
 					sub := Txt{Size: 14, LineH: 20.0 / 14}
 					if s.Scratch {
 						sub.Font, sub.Color = UI(font.Medium), P.Foreground

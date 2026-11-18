@@ -254,6 +254,7 @@ func (th *Theme) questionDrawer(gtx C, s *Scene, joined bool) D {
 // count, the chevron and the dismiss button.
 func (th *Theme) questionHeader(gtx C, s *Scene, q Question, folded bool) D {
 	w := gtx.Constraints.Max.X
+	gtx.Constraints.Min = image.Point{}
 	h := dp(gtx, 36)
 	g := glass()
 	if s.Live {
@@ -372,6 +373,7 @@ func (th *Theme) questionBody(gtx C, s *Scene, q Question) D {
 // --muted at 30% under the pointer.
 func (th *Theme) questionOption(gtx C, s *Scene, q Question, i int, label string) D {
 	w := gtx.Constraints.Max.X
+	gtx.Constraints.Min = image.Point{}
 	g := glass()
 	chosen := i < len(q.Chosen) && q.Chosen[i]
 	id := liveID(s, "q:"+strconv.Itoa(s.Question)+":"+strconv.Itoa(i))
@@ -591,6 +593,7 @@ func (th *Theme) queue(gtx C, s *Scene) D {
 // then 4 under it, its actions.
 func (th *Theme) queuedRow(gtx C, s *Scene, i int, text string) D {
 	w := gtx.Constraints.Max.X
+	gtx.Constraints.Min = image.Point{}
 	m := op.Record(gtx.Ops)
 	bg := gtx
 	bg.Constraints = layout.Constraints{Max: image.Pt(w*8/10-dp(gtx, 24), gtx.Constraints.Max.Y)}
@@ -813,6 +816,7 @@ func (th *Theme) commandMenu(gtx C, s *Scene, w int) {
 // moves the highlight.
 func (th *Theme) commandItem(gtx C, s *Scene, i int, it Suggestion) D {
 	w := gtx.Constraints.Max.X
+	gtx.Constraints.Min = image.Point{}
 	h := dp(gtx, 28)
 	id := liveID(s, "suggest:"+strconv.Itoa(i))
 	if id != "" {

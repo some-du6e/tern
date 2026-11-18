@@ -134,11 +134,45 @@ func TestComposerTriggers(t *testing.T) {
 	for left > 45 && near(img.RGBAAt(left-1, 77), accent) {
 		left--
 	}
-	if w := 687 - left; w < 60 {
+	if w := 687 - left; w < 60 || w > 200 {
 		t.Errorf("open chip: %d wide, want its icon and label", w)
 	}
 	if n := count(img, 77, 45, left-2, accent); n != 0 {
 		t.Errorf("the trigger is filled too: %d pixels", n)
+	}
+	if l, r := ink(img, 80, 95, 45, left-2); l < left-170 || r < left-20 {
+		t.Errorf("the trigger's ink spans x %d..%d, want it just before the chip at %d", l, r, left)
+	}
+}
+
+// ink is the leftmost and rightmost x in [x0, x1) of rows [y0, y1) that
+// text darkened (light theme), or -1, -1.
+func ink(img *image.RGBA, y0, y1, x0, x1 int) (left, right int) {
+	left, right = -1, -1
+	for y := y0; y < y1; y++ {
+		for x := x0; x < x1; x++ {
+			if c := img.RGBAAt(x, y); c.R < 0x90 && c.G < 0x90 {
+				if left < 0 || x < left {
+					left = x
+				}
+				right = max(right, x)
+			}
+		}
+	}
+	return left, right
+}
+
+// Queued messages are dashed bubbles at the lane's end with their Send now
+// and remove under them, also at the end (QueuedRunsControl.tsx).
+func TestQueue(t *testing.T) {
+	th := NewTheme()
+	img := drawComposer(t, th, &Scene{Model: "Opus 5.5", Queue: []string{"then add a tray icon"}}, 300, 0)
+	// The bubble (36 tall) and 4 under it, the 24dp row of actions.
+	if l, r := ink(img, 0, 36, 0, 736); l < 500 || r > 736 {
+		t.Errorf("the bubble's ink spans x %d..%d, want it at the end", l, r)
+	}
+	if l, _ := ink(img, 40, 64, 0, 736); l < 560 {
+		t.Errorf("the actions start at x %d, want them at the end", l)
 	}
 }
 
@@ -162,10 +196,18 @@ func TestQuestionDrawer(t *testing.T) {
 	th := NewTheme()
 	s := &Scene{Model: "Opus 5.5", Questions: []Question{{Header: "Session", Text: "Which one?", Options: []string{"A", "B"}, Chosen: []bool{false, true}}}}
 	img := drawComposer(t, th, s, 400, 0)
+	g := glass()
 	wantPixel(t, img, image.Pt(56, 119), P.PrimaryForeground, "the picked radio's dot")
 	wantPixel(t, img, image.Pt(61, 119), P.Primary, "the picked radio")
 	wantPixel(t, img, image.Pt(56, 87), P.Background, "the other radio")
-	wantPixel(t, img, image.Pt(300, 143), over(composerOutline(), glass()), "the composer's top edge")
+	wantPixel(t, img, image.Pt(300, 143), over(composerOutline(), g), "the composer's top edge")
+	// The digit's Kbd ends the row, 20dp in a 24dp column.
+	wantPixel(t, img, image.Pt(674, 79), over(alpha(P.Foreground, 0x12), g), "the first option's key")
+	wantPixel(t, img, image.Pt(668, 79), g, "before the key")
+	// The header: its text 26dp in, the chevron at the end.
+	if l, r := ink(img, 10, 34, 22, 714); l < 44 || l > 52 || r < 670 || r > 710 {
+		t.Errorf("the header's ink spans x %d..%d, want the header from 48 and the chevron by the end", l, r)
+	}
 }
 
 // The @ menu rises out of the card's top edge, 22dp in, its rows 28dp in
@@ -197,7 +239,7 @@ func TestHero(t *testing.T) {
 		gtx.Constraints.Min.Y = gtx.Constraints.Max.Y
 		return th.hero(gtx, s, false)
 	})
-	ink := func(y0, y1 int) (first, last int) {
+	rows := func(y0, y1 int) (first, last int) {
 		first, last = -1, -1
 		for y := y0; y < y1; y++ {
 			for x := 100; x < 636; x++ {
@@ -212,13 +254,23 @@ func TestHero(t *testing.T) {
 		}
 		return first, last
 	}
-	if f, l := ink(240, 300); f < 258 || l >= 294 {
+	if f, l := rows(240, 300); f < 258 || l >= 294 {
 		t.Errorf("heading ink in rows %d..%d, want inside 258..294", f, l)
 	}
-	if f, l := ink(294, 330); f < 302 || l >= 326 {
+	if f, l := rows(294, 330); f < 302 || l >= 326 {
 		t.Errorf("subline ink in rows %d..%d, want inside 302..326", f, l)
 	}
 	wantPixel(t, img, image.Pt(500, 342+50), glass(), "the card")
 	wantPixel(t, img, image.Pt(300, 342), over(composerOutline(), glass()), "the card's top edge")
 	wantPixel(t, img, image.Pt(100, 342+112+20), stripGlass(), "the strip")
+	// The heading and its line are centred in the lane.
+	for _, band := range [][2]int{{258, 294}, {302, 326}} {
+		if l, r := ink(img, band[0], band[1], 0, 736); l < 0 || (l+r)/2 < 364 || (l+r)/2 > 372 {
+			t.Errorf("ink in rows %d..%d spans x %d..%d, want it centred on 368", band[0], band[1], l, r)
+		}
+	}
+	// The strip's permissions sit at its end, 8dp in.
+	if l, r := ink(img, 342+112+8, 342+112+32, 0, 736); l < 600 || r > 728 {
+		t.Errorf("the strip's ink spans x %d..%d, want the permissions at its end", l, r)
+	}
 }

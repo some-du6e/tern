@@ -455,6 +455,8 @@ func (th *Theme) composerFooter(gtx C, s *Scene, at *composerAnchors) D {
 	}
 	w := gtx.Constraints.Max.X
 	return pad(top, 8, 8, 8).Layout(gtx, func(gtx C) D {
+		// Everything here is placed by its own size.
+		gtx.Constraints.Min = image.Point{}
 		h := dp(gtx, 32)
 		x := 0
 		left := dp(gtx, top) // the anchors' frame starts at the footer's top-left, 8 in
@@ -575,6 +577,7 @@ func (th *Theme) composerControlW(gtx C, c composerControl) D {
 	if c.padStart > 0 {
 		ps = c.padStart
 	}
+	gtx.Constraints.Min = image.Point{}
 	txt := over(c.text(), c.on)
 	m := op.Record(gtx.Ops)
 	cd := layout.Flex{Alignment: layout.Middle}.Layout(gtx,
