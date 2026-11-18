@@ -548,10 +548,10 @@ func (a *App) menuPick(th *ui.Theme, id string) {
 		a.mu.Unlock()
 		return
 	}
-	presets := a.ctxPresets
+	presets, operate, root := a.ctxPresets, e.operate, e.projects[t.ProjectID].WorkspaceRoot
 	a.closeMenusLocked()
 	a.mu.Unlock()
-	if !e.operate && needsOperate(id) {
+	if !operate && needsOperate(id) {
 		a.failf("Thread action unavailable: this connection cannot change one or more selected threads.")
 		return
 	}
@@ -586,7 +586,7 @@ func (a *App) menuPick(th *ui.Theme, id string) {
 	case "copy-path":
 		path := t.WorktreePath
 		if path == "" {
-			path = e.projects[t.ProjectID].WorkspaceRoot
+			path = root
 		}
 		if path == "" {
 			a.failf("Path unavailable: this thread does not have a workspace path to copy.")
