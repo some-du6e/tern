@@ -54,6 +54,7 @@ type input struct {
 	// The shell: whether the details card fits inline (from the last
 	// layout), and the sidebar rail's drag.
 	cardFits    bool
+	menuHover   bool // the menu row being drawn is under the pointer
 	railDrag    bool
 	railW       float32
 	railEdge    handle
@@ -554,4 +555,26 @@ func cutPrefix(s, prefix string) (string, bool) {
 		return s[len(prefix):], true
 	}
 	return s, false
+}
+
+// menuItem is Click for a menu row: T3 highlights the row under the pointer
+// with accent, composited on the popover rather than the window.
+func (th *Theme) menuItem(id string, w W) W {
+	if id == "" {
+		return w
+	}
+	return func(gtx C) D {
+		c, _ := th.events(gtx, id)
+		th.in.menuHover = c.Hovered()
+		m := op.Record(gtx.Ops)
+		dims := w(gtx)
+		call := m.Stop()
+		if th.in.menuHover {
+			fill(gtx, over(P.Accent, P.Popover), image.Rectangle{Max: dims.Size}, dp(gtx, 4))
+		}
+		th.in.menuHover = false
+		call.Add(gtx.Ops)
+		th.hit(gtx, id, dims.Size)
+		return dims
+	}
 }

@@ -28,4 +28,7 @@ var lucide = map[string]string{
 	"panel-left-close": `M5 3H19A2 2 0 0 1 21 5V19A2 2 0 0 1 19 21H5A2 2 0 0 1 3 19V5A2 2 0 0 1 5 3ZM9 3v18M16 15l-3-3 3-3`,
 	"maximize-2":       `M15 3h6v6M21 3l-7 7M3 21l7-7M9 21H3v-6`,
 	"minimize-2":       `M14 10l7-7M20 10h-6V4M3 21l7-7M4 14h6v6`,
+	"check":            `M20 6 9 17l-5-5`,
+	"chevron-right":    `M9 18l6-6-6-6`,
+	"chevron-down":     `M6 9l6 6 6-6`,
 }

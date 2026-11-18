@@ -1488,17 +1488,31 @@ func (th *Theme) deferBelow(gtx C, at image.Point, w W) {
 	op.Defer(gtx.Ops, m.Stop())
 }
 
+// popupFrame is T3's menu and popover surface (docs/ui/02-primitives.md
+// §3.5, §3.6): popover with a 1dp border at foreground 10%, radius 8, the
+// popup elevation and the lip. It's the solid fallback T3 itself paints
+// without backdrop-filter; Gio has no backdrop blur.
 func popupFrame(gtx C, w W) D {
 	m := op.Record(gtx.Ops)
 	dims := w(gtx)
 	call := m.Stop()
 	r := image.Rectangle{Max: dims.Size}
-	for i := 1; i <= 4; i++ {
-		e := dp(gtx, float32(i*3))
-		fill(gtx, alpha(rgb(0x000000), 0x18), image.Rect(-e, -e+dp(gtx, 4), r.Max.X+e, r.Max.Y+e+dp(gtx, 4)), dp(gtx, 8)+e)
+	rad := dp(gtx, 8)
+	elev := boxShadow{0, 16, 40, -18, alpha(rgb(0), 0x8c)}
+	border, lip := alpha(rgb(0x14141d), 0x1a), alpha(rgb(0), 0x0a)
+	if dark {
+		elev = boxShadow{0, 18, 44, -18, alpha(rgb(0), 0xcc)}
+		border, lip = alpha(rgb(0xf5f5f5), 0x1a), alpha(rgb(0xffffff), 0x0f)
 	}
-	fill(gtx, ColPanelHi, r, dp(gtx, 7))
-	strokeRect(gtx, ColBorderHi, r, dp(gtx, 7), float32(max(1, dp(gtx, 1))))
+	shadow(gtx, r, rad, []boxShadow{elev})
+	fill(gtx, P.Popover, r, rad)
+	strokeRect(gtx, over(border, P.Popover), r, rad, float32(max(1, dp(gtx, 1))))
+	px := max(1, dp(gtx, 1))
+	if dark {
+		hline(gtx, over(lip, P.Popover), px, rad, r.Max.X-rad)
+	} else {
+		hline(gtx, over(lip, P.Popover), r.Max.Y-2*px, rad, r.Max.X-rad)
+	}
 	call.Add(gtx.Ops)
 	return dims
 }
@@ -1658,24 +1672,28 @@ func (th *Theme) pickerRow(gtx C, m PickerModel) D {
 func (th *Theme) traitsMenu(gtx C, s *Scene, prefix string, t *Traits) D {
 	return popupFrame(gtx, func(gtx C) D {
 		return FixedW(gtx, 236, func(gtx C) D {
-			return pad(6, 6, 6, 6).Layout(gtx, func(gtx C) D {
+			return pad(4, 4, 4, 4).Layout(gtx, func(gtx C) D {
 				var kids []layout.FlexChild
 				for i, g := range t.Groups {
 					g, i := g, i
 					if i > 0 {
+						// T3's menu separator: 1dp of border, 4dp above and below.
 						kids = append(kids, rigid(func(gtx C) D {
-							hline(gtx, ColBorder, dp(gtx, 5), -dp(gtx, 6), gtx.Constraints.Max.X+dp(gtx, 6))
-							return D{Size: image.Pt(gtx.Constraints.Max.X, dp(gtx, 11))}
+							hline(gtx, over(P.Border, P.Popover), dp(gtx, 4), dp(gtx, 4), gtx.Constraints.Max.X-dp(gtx, 4))
+							return D{Size: image.Pt(gtx.Constraints.Max.X, dp(gtx, 9))}
 						}))
 					}
 					if g.Bool {
-						kids = append(kids, rigid(th.Click(liveID(s, fmt.Sprintf("%s:%d", prefix, i)), func(gtx C) D { return th.traitSwitch(gtx, g) })))
+						kids = append(kids, rigid(th.menuItem(liveID(s, fmt.Sprintf("%s:%d", prefix, i)), func(gtx C) D { return th.traitSwitch(gtx, g) })))
 						continue
 					}
 					if g.Label != "" {
+						// The group label: 28 tall, 12/16 medium, muted.
 						kids = append(kids, rigid(func(gtx C) D {
-							return pad(4, 8, 4, 8).Layout(gtx, func(gtx C) D {
-								return th.Text(gtx, Txt{Size: 10.5, Color: ColFaint, Font: UI(font.SemiBold), MaxLines: 1}, strings.ToUpper(g.Label))
+							return FixedH(gtx, 28, func(gtx C) D {
+								return pad(6, 8, 6, 8).Layout(gtx, func(gtx C) D {
+									return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: P.MutedForeground, Font: UI(font.Medium), MaxLines: 1}, g.Label)
+								})
 							})
 						}))
 					}
@@ -1685,7 +1703,7 @@ func (th *Theme) traitsMenu(gtx C, s *Scene, prefix string, t *Traits) D {
 						if c.Off {
 							id = ""
 						}
-						kids = append(kids, rigid(th.Click(id, func(gtx C) D { return th.traitChoice(gtx, c, on) })))
+						kids = append(kids, rigid(th.menuItem(id, func(gtx C) D { return th.traitChoice(gtx, c, on) })))
 					}
 				}
 				return Col(gtx, kids...)
@@ -1694,37 +1712,32 @@ func (th *Theme) traitsMenu(gtx C, s *Scene, prefix string, t *Traits) D {
 	})
 }
 
+// traitChoice is a menu row, T3's radio item: 14/20 text padded 4 by 8,
+// at least 28 tall; checked rows get foreground at 8% and a 14dp check at
+// the end. tern's rows can carry a description, under the label in muted
+// 12/16.
 func (th *Theme) traitChoice(gtx C, c TraitChoice, on bool) D {
-	h := float32(26)
-	if c.Desc != "" {
-		h = 40
-	}
-	return FixedH(gtx, h, func(gtx C) D {
-		size := image.Pt(gtx.Constraints.Max.X, gtx.Constraints.Min.Y)
-		if on {
-			fill(gtx, ColSelected, image.Rectangle{Max: size}, dp(gtx, 4))
-		}
-		gtx.Constraints.Min.X = size.X
-		return pad(0, 8, 0, 8).Layout(gtx, func(gtx C) D {
+	m := op.Record(gtx.Ops)
+	d := func(gtx C) D {
+		gtx.Constraints.Min.X = gtx.Constraints.Max.X
+		gtx.Constraints.Min.Y = dp(gtx, 28)
+		return pad(4, 8, 4, 8).Layout(gtx, func(gtx C) D {
 			gtx.Constraints.Min.X = gtx.Constraints.Max.X
 			return Row(gtx,
 				flexed(func(gtx C) D {
 					return Col(gtx,
 						rigid(func(gtx C) D {
-							col := ColText
-							switch {
-							case c.Off:
-								col = ColFaint
-							case c.Danger:
-								col = ColDelFg
+							col := P.PopoverForeground
+							if c.Danger {
+								col = P.DestructiveForeground
 							}
-							return th.Label(gtx, col, font.Normal, c.Label)
+							return th.Text(gtx, Txt{Size: 14, LineH: 20.0 / 14, Color: col, MaxLines: 1}, c.Label)
 						}),
 						rigid(func(gtx C) D {
 							if c.Desc == "" {
 								return D{}
 							}
-							return pad(2, 0, 0, 0).Layout(gtx, func(gtx C) D { return th.Small(gtx, ColFaint, c.Desc) })
+							return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: P.MutedForeground, MaxLines: 1}, c.Desc)
 						}),
 					)
 				}),
@@ -1732,11 +1745,20 @@ func (th *Theme) traitChoice(gtx C, c TraitChoice, on bool) D {
 					if !on {
 						return D{}
 					}
-					return IconW(IconCheck, ColAccentHi, 13)(gtx)
+					return pad(3, 0, 0, 8).Layout(gtx, LucideW("check", P.PopoverForeground, 14))
 				}),
 			)
 		})
-	})
+	}(gtx)
+	call := m.Stop()
+	if on && !th.in.menuHover {
+		fill(gtx, over(alpha(P.Foreground, 0x14), P.Popover), image.Rectangle{Max: d.Size}, dp(gtx, 4))
+	}
+	if c.Off {
+		defer paint.PushOpacity(gtx.Ops, 0.64).Pop()
+	}
+	call.Add(gtx.Ops)
+	return d
 }
 
 // traitSwitch is a boolean option: label, then a switch whose knob slides

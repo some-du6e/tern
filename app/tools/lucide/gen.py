@@ -12,7 +12,8 @@ import sys
 LUCIDE = ["settings", "server", "laptop", "monitor", "circle-user", "git-branch",
           "folder", "lock", "lock-open", "square-menu", "sparkles", "panel-bottom", "panel-right",
           "terminal", "globe", "arrow-left", "arrow-right", "rotate-cw", "plus", "x",
-          "panel-left", "panel-left-close", "maximize-2", "minimize-2"]
+          "panel-left", "panel-left-close", "maximize-2", "minimize-2", "check", "chevron-right",
+          "chevron-down"]
 
 assets = pathlib.Path(sys.argv[1])
 bundle = "\n".join(p.read_text(errors="replace") for p in assets.glob("*.js"))
