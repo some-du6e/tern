@@ -17,29 +17,37 @@ var (
 	notesIcon = ui.ProjectIcon{Text: "NS", Color: "violet"}
 )
 
+// cardItem is a fixture card: in tern unless it says otherwise, on the
+// workstation, with Claude, offering its controls; the open thread when
+// it's titled selected.
+func cardItem(r ui.ThreadRow, selected string) ui.SidebarItem {
+	if r.Project == "" {
+		r.Project, r.Icon = "tern", ternIcon
+	}
+	r.ID = r.Title
+	r.Active = r.Title == selected
+	r.Recede = r.Recede && !r.Active
+	r.Providers = []string{"Claude"}
+	r.Machine, r.MachineIcon = "workstation", "server"
+	r.CanSettle, r.CanSnooze, r.CanUnpin = true, true, true
+	return ui.SidebarItem{Row: &r}
+}
+
+// slimItem is a fixture row on the shelf: snoozed or settled.
+func slimItem(shelf string, r ui.ThreadRow, selected string) ui.SidebarItem {
+	it := cardItem(r, selected)
+	it.Row.Slim, it.Row.Shelf, it.Row.Recede = true, shelf, true
+	return it
+}
+
 // sidebar fills the sidebar with a row in each of T3's states: pinned,
 // approval, input, a guest's request, working, waiting, failed, done, woke
 // and seen; the Working shelf open; Snoozed folded; Settled open on two
 // rows with more to show. selected is the open thread.
 func sidebar(s *ui.Scene, selected string) {
 	s.Envs = envs()
-	card := func(r ui.ThreadRow) ui.SidebarItem {
-		if r.Project == "" {
-			r.Project, r.Icon = "tern", ternIcon
-		}
-		r.ID = r.Title
-		r.Active = r.Title == selected
-		r.Recede = r.Recede && !r.Active
-		r.Providers = []string{"Claude"}
-		r.Machine, r.MachineIcon = "workstation", "server"
-		r.CanSettle, r.CanSnooze, r.CanUnpin = true, true, true
-		return ui.SidebarItem{Row: &r}
-	}
-	slim := func(shelf string, r ui.ThreadRow) ui.SidebarItem {
-		it := card(r)
-		it.Row.Slim, it.Row.Shelf, it.Row.Recede = true, shelf, true
-		return it
-	}
+	card := func(r ui.ThreadRow) ui.SidebarItem { return cardItem(r, selected) }
+	slim := func(shelf string, r ui.ThreadRow) ui.SidebarItem { return slimItem(shelf, r, selected) }
 	s.Sidebar = ui.Sidebar{HasProjects: true, Ticking: true, Items: []ui.SidebarItem{
 		card(ui.ThreadRow{Title: "Roadmap", Pinned: true, Branch: "main", Age: "2d", Recede: true}),
 		card(ui.ThreadRow{Title: "Nightly backup check", Project: "atlas", Icon: atlasIcon, Pinned: true, Status: ui.StatusDone, Label: "Done", Unread: true, Age: "7h"}),
@@ -448,5 +456,73 @@ func sidebarEmptyScene() *ui.Scene {
 	s.Sidebar.Scope = []ui.ProjectIcon{notesIcon}
 	s.Sidebar.ScopeLabel = "Filter threads by project: notes"
 	s.Sidebar.Empty = &ui.SidebarEmpty{Text: "No threads in notes yet", Button: "Show all projects"}
+	return s
+}
+
+// renamed is the row sidebarStatesScene renames, and its title in the
+// field.
+const renamed = "Choose the snapshot format"
+
+// sidebarStatesScene has two rows picked out of the list, a title being
+// renamed, a row with the keyboard's focus ring, and the labels the main
+// list doesn't show: Setting up, Goal and Limited.
+func sidebarStatesScene() *ui.Scene {
+	s := runningScene()
+	card := func(r ui.ThreadRow) ui.SidebarItem { return cardItem(r, s.Title) }
+	s.Sidebar.Items = []ui.SidebarItem{
+		card(ui.ThreadRow{Title: "Settings page copy", Project: "notes", Icon: notesIcon, Selected: true, Age: "3h"}),
+		card(ui.ThreadRow{Title: "Bounded snapshot history", Selected: true, Branch: "t3/snapshots", Age: "5h"}),
+		card(ui.ThreadRow{Title: renamed, Age: "1d"}),
+		card(ui.ThreadRow{Title: "Pairing URL parser", Focus: true, Age: "2d"}),
+		card(ui.ThreadRow{Title: "Bootstrap the worktree", Status: ui.StatusWorking, Label: "Setting up", Timer: "8s", Recede: true, Age: "now"}),
+		card(ui.ThreadRow{Title: "Ship the release notes", Project: "atlas", Icon: atlasIcon, Status: ui.StatusWorking, Label: "Goal", Timer: "4h 12m", Recede: true, Age: "4h"}),
+		card(ui.ThreadRow{Title: "Long refactor of the relay", Status: ui.StatusLimited, Label: "Limited", Error: "Usage limit reached", Limited: true, Age: "20m"}),
+	}
+	s.Sidebar.Renaming = renamed
+	return s
+}
+
+// sidebarShelvesScene has the Snoozed and Settled shelves open: snoozed
+// rows with their wake times, one hovered for its Wake button, and settled
+// ones, one hovered for Un-settle, with more to show.
+func sidebarShelvesScene() *ui.Scene {
+	s := runningScene()
+	card := func(r ui.ThreadRow) ui.SidebarItem { return cardItem(r, s.Title) }
+	slim := func(shelf string, r ui.ThreadRow) ui.SidebarItem { return slimItem(shelf, r, s.Title) }
+	s.Sidebar.Items = []ui.SidebarItem{
+		card(ui.ThreadRow{Title: "Port the T3 Connect client to Go", Status: ui.StatusWorking, Label: "Working", Timer: "1m", Branch: "t3/go-client", Worktree: true, Age: "now"}),
+		card(ui.ThreadRow{Title: "Watch pairing flow", Status: ui.StatusInput, Label: "Input", Age: "41m"}),
+		{Shelf: &ui.Shelf{ID: "working", Label: "Working", Count: 2}},
+		{Shelf: &ui.Shelf{ID: "snoozed", Label: "Snoozed", Count: 2, Open: true}},
+		slim("snoozed", ui.ThreadRow{Title: "Follow up on the flaky test", Wake: "3h", Age: "2d", Hover: true}),
+		slim("snoozed", ui.ThreadRow{Title: "Revisit the cache keys", Project: "atlas", Icon: atlasIcon, Wake: "2d", Age: "5d"}),
+		{Shelf: &ui.Shelf{ID: "settled", Label: "Settled", Count: 40, Open: true}},
+		slim("settled", ui.ThreadRow{Title: "Bounded snapshot history", Age: "1d", Hover: true}),
+		slim("settled", ui.ThreadRow{Title: "Email-code sign-in", Project: "atlas", Icon: atlasIcon, Age: "3d"}),
+		{More: 25},
+	}
+	return s
+}
+
+// sidebarSearchingScene is a search no title matches while the servers
+// are still looking through the messages.
+func sidebarSearchingScene() *ui.Scene {
+	s := runningScene()
+	s.Sidebar.Query, s.Sidebar.Items, s.Sidebar.NoResults = "keychain", nil, "Searching thread messages…"
+	return s
+}
+
+// sidebarNoResultsScene is a search nothing matches.
+func sidebarNoResultsScene() *ui.Scene {
+	s := sidebarSearchingScene()
+	s.Sidebar.NoResults = "No threads found"
+	return s
+}
+
+// sidebarNoProjectsScene is a machine with no projects yet: no filter, New
+// thread off, and the list saying so.
+func sidebarNoProjectsScene() *ui.Scene {
+	s := draftScene()
+	s.Sidebar = ui.Sidebar{NoNew: true, Empty: &ui.SidebarEmpty{Text: "No projects yet"}}
 	return s
 }
