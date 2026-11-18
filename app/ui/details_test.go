@@ -136,8 +136,9 @@ func TestPRDetailRowDrawn(t *testing.T) {
 		wantPixel(t, img, image.Pt(x+262-10-3, meta+10), P.Primary, "Merge's fill")
 		wantPixel(t, img, image.Pt(x+262-10+3, meta+10), fill, "the card after Merge")
 		wantPixel(t, img, image.Pt(x+262-10-3, meta-2), fill, "above Merge")
-		if first, last := run(img, x+262-10-3, meta-6, meta+26, P.Primary); first != meta || last != meta+19 {
-			t.Errorf("dark %v: Merge spans y %d..%d, want %d..%d", d, first, last, meta, meta+19)
+		// Its 20dp box, less what its 6dp corners round off 3dp in.
+		if first, last := run(img, x+262-10-3, meta-6, meta+26, P.Primary); first < meta || first > meta+2 || last < meta+17 || last > meta+19 {
+			t.Errorf("dark %v: Merge spans y %d..%d, want about %d..%d", d, first, last, meta, meta+19)
 		}
 		// The checks' 14dp icon, 7dp into its trigger, which starts 4dp and
 		// the line's 2dp gap after "#12".
@@ -374,6 +375,7 @@ func TestBranchPickerDrawn(t *testing.T) {
 	if first, last := run(img, x, list, list+80, P.Popover); first != list || last != list+36-1 {
 		t.Errorf("the empty block spans y %d..%d, want %d..%d", first, last, list, list+36-1)
 	}
+
 }
 
 // A Git action on the default branch asks in T3's dialog: the backdrop
