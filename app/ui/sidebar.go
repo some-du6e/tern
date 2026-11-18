@@ -1666,11 +1666,12 @@ func (th *Theme) slimSlot(gtx C, s *Scene, r *ThreadRow, in rowInk, rest func(co
 		defer op.Offset(image.Pt(w-ld.Size.X, (h-ld.Size.Y)/2)).Push(gtx.Ops).Pop()
 		call.Add(gtx.Ops)
 	}()
-	if !r.CanSettle || (r.Shelf != "snoozed" && r.Shelf != "settled") {
+	// The Wake or Un-settle button: padded 0 by 6, its icon 1dp high (mb-px),
+	// over the label's end and 4dp into the padding. At rest it isn't drawn:
+	// faded into the row's colour, its icon would cut into the label.
+	if !r.CanSettle || (r.Shelf != "snoozed" && r.Shelf != "settled") || shown == 0 {
 		return D{Size: image.Pt(w, h)}
 	}
-	// The Wake or Un-settle button: padded 0 by 6, its icon 1dp high (mb-px),
-	// over the label's end and 4dp into the padding.
 	id, icon, sz, tip := "wake:"+r.ID, "alarm-clock-off", float32(12), ""
 	if r.Shelf == "settled" {
 		id, icon, sz, tip = "unsettle:"+r.ID, "undo-2", 14, "Un-settle thread"
@@ -1688,7 +1689,7 @@ func (th *Theme) slimSlot(gtx C, s *Scene, r *ThreadRow, in rowInk, rest func(co
 		defer op.Offset(image.Pt(dp(gtx, 6), (h-dp(gtx, sz))/2-max(1, dp(gtx, 1))/2)).Push(gtx.Ops).Pop()
 		LucideW(icon, fade(in.of(col), shown), sz)(gtx)
 	}()
-	if id != "" && shown > 0 {
+	if id != "" {
 		th.hit(gtx, id, image.Pt(bw, h))
 		th.listTip(gtx, id, tip, image.Pt(bw, h))
 	}

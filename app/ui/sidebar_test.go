@@ -1147,6 +1147,25 @@ func TestMenuGivesFocusBack(t *testing.T) {
 	wantPixel(t, img, ring(2), SP.Ring, "and Down goes on to the third")
 }
 
+// At rest a slim row's Wake or Un-settle button doesn't show, and doesn't
+// cut into the wake time or age under it either (§3.8: opacity 0 until the
+// row is hovered): the slot is drawn as one with no button.
+func TestSlimButtonAtRest(t *testing.T) {
+	th := NewTheme()
+	scene := func(shelf string, button bool) *Scene {
+		return &Scene{Sidebar: Sidebar{HasProjects: true, Items: []SidebarItem{
+			{Shelf: &Shelf{ID: shelf, Label: "Shelf", Count: 1, Open: true}},
+			{Row: &ThreadRow{ID: "e/1", Slim: true, Shelf: shelf, Title: "Parked", Wake: "2d", Age: "3d", CanSettle: button}},
+		}}}
+	}
+	for _, shelf := range []string{"snoozed", "settled"} {
+		got := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, scene(shelf, true)) })
+		want := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, scene(shelf, false)) })
+		// The row is 812..848; its slot ends at 237, and the button 4dp on.
+		sameInk(t, got, want, image.Rect(180, 812, 248, 848), shelf+": the slot")
+	}
+}
+
 // A row drawn again after a frame without it starts at rest, as a remounted
 // row does: what the theme kept for it went with the frame that didn't draw
 // it, so the rows a session shows don't pile up there (§6).
