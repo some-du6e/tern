@@ -349,9 +349,11 @@ func draftMenuScene() *ui.Scene {
 
 // pullRequestsScene has the thread's pull requests under its branch row,
 // unfolded: the open one the agent watches, then the merged base it
-// stacks on and an older closed one.
+// stacks on and an older closed one. A guest watches the thread through
+// its guest link.
 func pullRequestsScene() *ui.Scene {
 	s := runningScene()
+	s.Header.Guest = &ui.GuestLine{Status: "Sam is a guest"}
 	s.Card.PRs = &ui.PullRequests{Others: 2, Expanded: true, Rows: []ui.PullRequestRow{
 		{State: "open", Label: "#214: Retry relay reads on a dropped socket", Tip: "PR #214 - Open: Retry relay reads on a dropped socket", Watching: true},
 		{State: "merged", Label: "#209: Split the relay out of the RPC client", Tip: "PR #209 - Merged: Split the relay out of the RPC client"},

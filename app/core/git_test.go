@@ -408,3 +408,59 @@ func TestRunScript(t *testing.T) {
 		t.Fatalf("drawer %v, last %q", s.Term != nil, a.lastScripts["p1"])
 	}
 }
+
+// A shared thread's header says who its guest is, or that the link waits
+// or has expired, by the minute as T3's clock reads it. Stop sharing sends
+// thread.guest-share.close, off until the server answers, and the record
+// that follows without a link takes the line away.
+func TestGuestShare(t *testing.T) {
+	a, f := liveApp(t, status(nil))
+	pending := make(chan fakeReq, 2)
+	f.on("orchestration.dispatchCommand", func(f *fakeEnv, r fakeReq) {
+		if r.Payload["type"] != "thread.guest-share.close" {
+			f.exit(r, map[string]any{"sequence": 1})
+			return
+		}
+		pending <- r
+	})
+	sub := f.wait("orchestration.subscribeThread", 1)
+	expires := time.Now().UTC().Add(time.Hour).Truncate(time.Minute).Add(30 * time.Second)
+	share := map[string]any{"id": "share-1", "host": "example.test", "createdAt": expires.Add(-24 * time.Hour).Format(time.RFC3339Nano),
+		"expiresAt": expires.Format(time.RFC3339Nano), "guestName": nil, "messages": []any{}}
+	f.chunk(sub, map[string]any{"kind": "snapshot", "projection": map[string]any{"thread": map[string]any{"id": "t1", "guestShare": share}}})
+	guest := func(now time.Time) *ui.GuestLine { return built(a, now).Header.Guest }
+	eventually(t, "the link shows", func() bool { return guest(time.Now()) != nil })
+	if g := guest(time.Now()); g.Status != "Guest link active" || g.Closing {
+		t.Fatalf("waiting: %+v", g)
+	}
+	// Its minute has come though its second hasn't.
+	if g := guest(expires.Add(-30 * time.Second)); g.Status != "Guest link expired" {
+		t.Errorf("at the minute it expires in: %q", g.Status)
+	}
+	if g := guest(expires.Add(-31 * time.Second)); g.Status != "Guest link active" {
+		t.Errorf("the second before that minute: %q", g.Status)
+	}
+	share["guestName"] = "Sam"
+	f.chunk(sub, map[string]any{"kind": "event", "event": map[string]any{"type": "thread.guest-share-updated", "payload": map[string]any{"id": "t1", "guestShare": share}}})
+	eventually(t, "the guest's name", func() bool { return guest(time.Now()).Status == "Sam is a guest" })
+
+	th := ui.NewTheme()
+	a.handle(th, ui.Action{ID: "header.unshare", Kind: "click"})
+	r := <-pending
+	if r.Payload["type"] != "thread.guest-share.close" || r.Payload["threadId"] != "t1" {
+		t.Fatalf("close %v", r.Payload)
+	}
+	if g := guest(time.Now()); !g.Closing {
+		t.Error("Stop sharing should be off while the close is on its way")
+	}
+	a.handle(th, ui.Action{ID: "header.unshare", Kind: "click"})
+	f.exit(r, map[string]any{"sequence": 2})
+	eventually(t, "Stop sharing comes back", func() bool { return !guest(time.Now()).Closing })
+	select {
+	case r := <-pending:
+		t.Fatalf("a second close while the first was on its way: %v", r.Payload)
+	default:
+	}
+	f.chunk(sub, map[string]any{"kind": "event", "event": map[string]any{"type": "thread.guest-share-updated", "payload": map[string]any{"id": "t1", "guestShare": nil}}})
+	eventually(t, "the line goes with the link", func() bool { return guest(time.Now()) == nil })
+}

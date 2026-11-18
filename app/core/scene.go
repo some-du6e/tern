@@ -366,7 +366,7 @@ func (a *App) draftScene(s *ui.Scene, now time.Time) {
 	s.State = ui.ThreadIdle
 	if e != nil {
 		_, ok := e.projects[a.draft]
-		a.headerScene(s, e, nil, p, ok)
+		a.headerScene(s, e, nil, p, ok, now)
 		a.cardScene(s, e, nil, p, ok, now)
 	}
 	s.Hero = p.Title
@@ -447,7 +447,7 @@ func (a *App) threadScene(s *ui.Scene, now time.Time) {
 	}
 	s.State = threadState(t)
 	p, ok := e.projects[t.ProjectID]
-	a.headerScene(s, e, t, p, ok)
+	a.headerScene(s, e, t, p, ok, now)
 	a.cardScene(s, e, t, p, ok, now)
 	s.Placeholder = "Ask, steer or queue.   /  commands    @  files"
 	v := a.view

@@ -736,6 +736,10 @@ type threadView struct {
 	open     map[string]bool // tool and thought rows the user expanded
 	full     map[string]*t3.TurnItem
 	cancel   func()
+	// The thread's guest link, from its record: the header says who it's
+	// shared with. unsharing is the close on its way.
+	guestShare *t3.GuestShare
+	unsharing  bool
 }
 
 func newView(e *envState, id string) *threadView {
@@ -872,6 +876,9 @@ func (a *App) subscribeThread(e *envState, conn *t3.Conn, gen int, r string) {
 			for _, m := range it.Projection.Messages {
 				v.messages[m.ID] = m
 			}
+			if th := it.Projection.Thread; th != nil {
+				a.setGuestShare(v, th.GuestShare)
+			}
 			v.cursor, v.more, v.loaded = it.HistoryCursor, it.HasMoreHistory, true
 		case it.Kind == "event" && it.Event != nil:
 			switch t := it.Event.Type; {
@@ -888,6 +895,12 @@ func (a *App) subscribeThread(e *envState, conn *t3.Conn, gen int, r string) {
 				var m t3.Message
 				if json.Unmarshal(it.Event.Payload, &m) == nil {
 					v.messages[m.ID] = m
+				}
+			case strings.HasPrefix(t, "thread.") && t != "thread.pull-request-link-updated":
+				// Every other thread event carries the whole record.
+				var th t3.AppThread
+				if json.Unmarshal(it.Event.Payload, &th) == nil {
+					a.setGuestShare(v, th.GuestShare)
 				}
 			}
 		}
@@ -907,6 +920,22 @@ func (a *App) subscribeThread(e *envState, conn *t3.Conn, gen int, r string) {
 	go func() {
 		_ = conn.Dispatch(map[string]any{"type": "thread.visit", "threadId": id, "visitedAt": time.Now().UTC().Format(time.RFC3339Nano), "opened": true})
 	}()
+}
+
+// setGuestShare keeps the thread's guest link from its record. The header
+// says "Guest link expired" from the minute T3's clock reaches its expiry,
+// so a new expiry wants a frame then. Call with the lock held.
+func (a *App) setGuestShare(v *threadView, gs *t3.GuestShare) {
+	same := gs != nil && v.guestShare != nil && gs.ExpiresAt == v.guestShare.ExpiresAt
+	v.guestShare = gs
+	if gs == nil || same {
+		return
+	}
+	if at, err := time.Parse(time.RFC3339Nano, gs.ExpiresAt); err == nil {
+		if d := time.Until(at.Truncate(time.Minute)); d > 0 {
+			time.AfterFunc(d, a.changed)
+		}
+	}
 }
 
 func mergeRun(dst *t3.Run, src t3.Run) {

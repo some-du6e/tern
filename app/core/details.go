@@ -85,7 +85,7 @@ func isScratch(p t3.Project, cfg *t3.ServerConfig) bool {
 
 // headerScene fills the chat header for thread t (nil for a draft) in
 // project p.
-func (a *App) headerScene(s *ui.Scene, e *envState, t *t3.Thread, p t3.Project, hasProject bool) {
+func (a *App) headerScene(s *ui.Scene, e *envState, t *t3.Thread, p t3.Project, hasProject bool, now time.Time) {
 	h := &ui.ChatHeader{Server: t != nil}
 	if hasProject {
 		h.Project, h.Icon = p.Title, projectIcon(p)
@@ -105,8 +105,28 @@ func (a *App) headerScene(s *ui.Scene, e *envState, t *t3.Thread, p t3.Project, 
 		}
 		h.CanRename = true
 		h.Renaming = a.renaming == a.openID
+		if v := a.view; v != nil && v.env == e && v.id == t.ID && v.guestShare != nil {
+			h.Guest = &ui.GuestLine{Status: guestStatus(v.guestShare, now), Closing: v.unsharing}
+		}
 	}
 	s.Header = h
+}
+
+// guestStatus is what the header says of a guest link (GuestShareStatus):
+// expired once T3's minute clock reaches the minute it expires in, else
+// who redeemed it, else that it's waiting for someone to.
+func guestStatus(gs *t3.GuestShare, now time.Time) string {
+	exp := gs.ExpiresAt
+	if len(exp) > 16 {
+		exp = exp[:16]
+	}
+	switch {
+	case exp <= now.UTC().Format("2006-01-02T15:04"):
+		return "Guest link expired"
+	case gs.GuestName != "":
+		return gs.GuestName + " is a guest"
+	}
+	return "Guest link active"
 }
 
 // ---------- Git, as GitActionsControl.logic.ts has it ----------

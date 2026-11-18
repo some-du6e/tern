@@ -148,6 +148,8 @@ func (a *App) handleHeader(th *ui.Theme, act ui.Action) bool {
 		if parent != "" {
 			a.switchTo(th, func() { a.openThread(parent) })
 		}
+	case "header.unshare":
+		a.stopGuestShare()
 	case "header.title":
 		// The title drops the thread's menu under itself; a second click
 		// closes it.
@@ -386,6 +388,31 @@ func (a *App) pickHighlighted(th *ui.Theme) {
 	if ok {
 		a.pickRef(th, r, create)
 	}
+}
+
+// stopGuestShare ends the open thread's guest link
+// (thread.guest-share.close), Stop sharing off until the server answers.
+// The thread's record then comes without the link. T3 only logs a failure,
+// so the button just comes back.
+func (a *App) stopGuestShare() {
+	a.mu.Lock()
+	e, t := a.thread(a.openID)
+	v := a.view
+	if t == nil || e.conn == nil || v == nil || v.env != e || v.id != t.ID || v.unsharing {
+		a.mu.Unlock()
+		return
+	}
+	v.unsharing = true
+	conn, id := e.conn, t.ID
+	a.mu.Unlock()
+	a.changed()
+	go func() {
+		_ = conn.Dispatch(map[string]any{"type": "thread.guest-share.close", "threadId": id})
+		a.mu.Lock()
+		v.unsharing = false
+		a.mu.Unlock()
+		a.changed()
+	}()
 }
 
 // draftIn starts a new thread in project on environment envID, as the

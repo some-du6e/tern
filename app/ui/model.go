@@ -224,6 +224,14 @@ type ChatHeader struct {
 	Origin    string      // the linked environment whose agent started it: "From <Origin>"
 	CanRename bool        // a double-click on the title renames it
 	Renaming  bool        // the title is the "header.title" editor
+	Guest     *GuestLine  // the thread's guest link, after the breadcrumb
+}
+
+// GuestLine is the header's guest link indicator (GuestShareIndicator):
+// who the thread is shared with, and "Stop sharing" ("header.unshare").
+type GuestLine struct {
+	Status  string // "<name> is a guest", "Guest link active" or "Guest link expired"
+	Closing bool   // the close is on its way: Stop sharing is off
 }
 
 // ProjectIcon is a project's mark (ProjectFavicon.tsx): a monogram on a

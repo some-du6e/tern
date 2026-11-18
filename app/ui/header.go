@@ -44,7 +44,8 @@ func (th *Theme) textW(gtx C, t Txt, s string) int {
 
 // chatHeader draws the header's content in its content box
 // (gtx.Constraints.Max: the row less its padding and the reserve for the
-// fixed toggles). at is that box's top left in the window, for the thread
+// fixed toggles): the breadcrumb, then a shared thread's guest link, which
+// keeps its width. at is that box's top left in the window, for the thread
 // menu and the rename editor. Narrow is the window under 640dp, where the
 // gaps close to 8.
 func (th *Theme) chatHeader(gtx C, s *Scene, at image.Point, narrow bool) D {
@@ -58,9 +59,28 @@ func (th *Theme) chatHeader(gtx C, s *Scene, at image.Point, narrow bool) D {
 	if h.Server && !h.Renaming {
 		th.contextArea(gtx, "header", size)
 	}
-	l := th.layoutCrumbs(gtx, h, s.Title, size.X, narrow)
 	mid := size.Y / 2
-	defer clip.Rect{Max: image.Pt(size.X+dp(gtx, 2), size.Y)}.Push(gtx.Ops).Pop()
+	nav, gap := size.X, dp(gtx, 12)
+	if narrow {
+		gap = dp(gtx, 8)
+	}
+	if h.Guest != nil {
+		nav = max(0, size.X-th.guestLineW(gtx, h.Guest)-gap)
+	}
+	th.breadcrumb(gtx, s, nav, mid, at, narrow)
+	if h.Guest != nil {
+		defer op.Offset(image.Pt(nav+gap, 0)).Push(gtx.Ops).Pop()
+		th.guestLine(gtx, h.Guest, mid)
+	}
+	return D{Size: size}
+}
+
+// breadcrumb draws the crumbs and the title in the first w of the row,
+// their middles on mid, clipped 2dp past w as T3's nav clips them.
+func (th *Theme) breadcrumb(gtx C, s *Scene, w, mid int, at image.Point, narrow bool) {
+	h := s.Header
+	l := th.layoutCrumbs(gtx, h, s.Title, w, narrow)
+	defer clip.Rect{Max: image.Pt(w+dp(gtx, 2), gtx.Constraints.Max.Y)}.Push(gtx.Ops).Pop()
 	x := 0
 	sep := func() {
 		off := op.Offset(image.Pt(x, 0)).Push(gtx.Ops)
@@ -95,7 +115,60 @@ func (th *Theme) chatHeader(gtx C, s *Scene, at image.Point, narrow bool) D {
 		sep()
 	}
 	th.titleCrumb(gtx, s, image.Pt(x, mid), l.title, at)
-	return D{Size: size}
+}
+
+// guestFont is the guest link's type: 12/16 in muted foreground.
+func guestFont() Txt { return Txt{Size: 12, LineH: 16.0 / 12, Color: P.MutedForeground, MaxLines: 1} }
+
+// stopSharing is the guest link's button: xs, ghost-muted, off while the
+// close is on its way.
+func stopSharing(g *GuestLine) Button {
+	return Button{Variant: BtnGhostMuted, Size: BtnSizeXs, Label: "Stop sharing", Disabled: g.Closing}
+}
+
+// guestLineW is the guest link's width: the 14dp icon, its status and
+// Stop sharing, 4dp apart.
+func (th *Theme) guestLineW(gtx C, g *GuestLine) int {
+	m := op.Record(gtx.Ops)
+	b := th.T3Button("", stopSharing(g))(gtx).Size.X
+	m.Stop()
+	return dp(gtx, crumbIcon+4) + th.textW(gtx, guestFont(), g.Status) + dp(gtx, 4) + b
+}
+
+// guestLine is a shared thread's guest link (GuestShareIndicator), its
+// middle on mid: the user icon, who it's shared with or that the link is
+// active or expired, and Stop sharing, a stop for Tab after the title.
+// Its 16dp line centres as the caps do: in Inter and SF Pro the two
+// middles are within a twentieth of a dp.
+func (th *Theme) guestLine(gtx C, g *GuestLine, mid int) {
+	const id = "header.unshare"
+	icon := dp(gtx, crumbIcon)
+	func() {
+		defer op.Offset(image.Pt(0, mid-icon/2)).Push(gtx.Ops).Pop()
+		LucideW("user", P.MutedForeground, crumbIcon)(gtx)
+	}()
+	x := icon + dp(gtx, 4)
+	func() {
+		defer op.Offset(image.Pt(x, 0)).Push(gtx.Ops).Pop()
+		x += th.capText(gtx, guestFont(), g.Status, mid) + dp(gtx, 4)
+	}()
+	focused := false
+	if !g.Closing {
+		focused = th.keyTarget(gtx, id)
+	}
+	b := stopSharing(g)
+	h := dp(gtx, buttonSizes[b.Size].h)
+	defer op.Offset(image.Pt(x, mid-h/2)).Push(gtx.Ops).Pop()
+	d := th.T3Button(id, b)(gtx)
+	if focused {
+		// T3's control ring, inside the button's 1dp border: 1dp of
+		// --background, then 2dp of --ring. The label is clear of it, so
+		// it can go on top.
+		px := max(1, dp(gtx, 1))
+		r, rad := image.Rectangle{Max: d.Size}, dp(gtx, 8)
+		strokeRect(gtx, P.Background, r.Inset(px), rad-px, float32(px))
+		strokeRect(gtx, P.Ring, r.Inset(2*px), rad-2*px, float32(2*px))
+	}
 }
 
 // crumbs is the breadcrumb laid out across its list: each crumb's width

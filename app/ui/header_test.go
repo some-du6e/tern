@@ -223,3 +223,97 @@ func TestHeaderRename(t *testing.T) {
 	wantPixel(t, img, image.Pt(x, 26), over(alpha(P.Ring, 0x80), P.Background), "rename ring")
 	wantPixel(t, img, image.Pt(x+lay.title-1, 26), over(alpha(P.Ring, 0x80), P.Background), "the editor spans the title's crumb")
 }
+
+// darkest is the lowest red in r: in light mode, how dark the ink there
+// gets, 0xff where nothing is drawn.
+func darkest(img *image.RGBA, r image.Rectangle) uint8 {
+	low := uint8(0xff)
+	for y := r.Min.Y; y < r.Max.Y; y++ {
+		for x := r.Min.X; x < r.Max.X; x++ {
+			low = min(low, img.RGBAAt(x, y).R)
+		}
+	}
+	return low
+}
+
+// A shared thread's guest link ends the row (§2.2, §3.1): the 14dp user
+// icon, its status in 12dp muted and Stop sharing, a ghost-muted xs
+// button, 4dp apart, 12 after the breadcrumb, which gives it the room.
+// Stop sharing fills with --accent under the pointer, clicks, is the Tab
+// stop after the title with T3's ring inside its border, and is off at 64%
+// while the close is on its way.
+func TestHeaderGuestShare(t *testing.T) {
+	s := headerScene()
+	s.Title = "Wire up the parser and the lexer and everything that comes after them, all of it"
+	g := &GuestLine{Status: "Sam is a guest"}
+	s.Header.Guest = g
+	l := newLive(image.Pt(900, 52), nil)
+	l.draw = func(gtx C) {
+		fill(gtx, P.Background, image.Rectangle{Max: gtx.Constraints.Max}, 0)
+		defer op.Offset(image.Pt(20, 0)).Push(gtx.Ops).Pop()
+		g := gtx
+		g.Constraints = layout.Exact(image.Pt(800, 52))
+		l.th.chatHeader(g, s, image.Pt(20, 0), false)
+	}
+	l.frame(0)
+	img := l.pixels(t)
+	var ops op.Ops
+	gtx := layout.Context{Ops: &ops, Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Constraints{Max: image.Pt(2000, 52)}}
+	x0 := 20 + 800 - l.th.guestLineW(gtx, g)
+	textW := l.th.textW(gtx, guestFont(), g.Status)
+	bx := x0 + 14 + 4 + textW + 4
+	if ink := darkest(img, image.Rect(x0, 19, x0+14, 33)); ink > 0xc0 {
+		t.Errorf("no user icon in its 14dp box (darkest red %#x)", ink)
+	}
+	if ink := darkest(img, image.Rect(x0+18, 14, x0+18+textW, 38)); ink < P.MutedForeground.R-3 || ink > P.MutedForeground.R+0x20 {
+		t.Errorf("the status's ink reaches %#x, want muted foreground's %#x", ink, P.MutedForeground.R)
+	}
+	if ink := darkest(img, image.Rect(x0-12+2, 0, x0, 52)); ink != P.Background.R {
+		t.Errorf("ink in the 12dp gap before the link (%#x): the title should stop short of it", ink)
+	}
+	if ink := darkest(img, image.Rect(x0-12-30, 14, x0-12, 38)); ink > 0x60 {
+		t.Errorf("the long title should run up to the gap (darkest red there %#x)", ink)
+	}
+	wantPixel(t, img, image.Pt(bx+3, 26), P.Background, "Stop sharing at rest, no fill")
+
+	l.move(float32(bx+3), 26)
+	l.frame(0)
+	l.frame(0)
+	img = l.pixels(t)
+	wantPixel(t, img, image.Pt(bx+3, 26), P.Accent, "Stop sharing under the pointer")
+	if ink := darkest(img, image.Rect(bx+8, 14, bx+40, 38)); ink > 0x40 {
+		t.Errorf("Stop sharing's label under the pointer is %#x, want foreground", ink)
+	}
+	l.click(float32(bx+3), 26)
+	if acts := l.frame(10 * time.Millisecond); len(acts) != 1 || acts[0] != (Action{ID: "header.unshare", Kind: "click"}) {
+		t.Fatalf("click: %+v", acts)
+	}
+
+	// Tab: the project crumb, the title, then Stop sharing.
+	l.move(890, 50)
+	l.frame(0)
+	for range 3 {
+		l.r.MoveFocus(key.FocusForward)
+		l.frame(0)
+	}
+	img = l.pixels(t)
+	wantPixel(t, img, image.Pt(bx+1, 26), P.Background, "the ring's --background band")
+	wantPixel(t, img, image.Pt(bx+2, 26), P.Ring, "the ring, inside the border and the band")
+	wantPixel(t, img, image.Pt(bx+3, 26), P.Ring, "the ring's second dp")
+	wantPixel(t, img, image.Pt(bx+4, 26), P.Background, "inside the ring")
+	l.r.Queue(key.Event{Name: key.NameReturn, State: key.Press})
+	if acts := l.frame(0); len(acts) != 1 || acts[0].ID != "header.unshare" {
+		t.Fatalf("Enter on Stop sharing: %+v", acts)
+	}
+
+	g.Closing = true
+	l.frame(time.Second)
+	l.click(float32(bx+3), 26)
+	if acts := l.frame(10 * time.Millisecond); len(acts) != 0 {
+		t.Fatalf("Stop sharing while closing: %+v", acts)
+	}
+	img = l.pixels(t)
+	if ink := darkest(img, image.Rect(bx+8, 14, bx+40, 38)); ink < 0x90 {
+		t.Errorf("the closing button's label reaches %#x, want muted at 64%%", ink)
+	}
+}

@@ -99,6 +99,19 @@ type LinkOrigin struct {
 	Label string `json:"label"`
 }
 
+// GuestShare is a thread's guest link (guestShare.ts): when it expires,
+// and the name of the guest who redeemed it, if one has.
+type GuestShare struct {
+	ExpiresAt string `json:"expiresAt"`
+	GuestName string `json:"guestName"`
+}
+
+// AppThread is the part of a thread's full record (OrchestrationV2AppThread)
+// that its stream's projection and thread events carry beyond the shell.
+type AppThread struct {
+	GuestShare *GuestShare `json:"guestShare"`
+}
+
 // PullRequestLink is a pull request linked to a thread, with the server's
 // last snapshot of it (ThreadPullRequestLink, threadPullRequest.ts:107).
 // Host, Repository and Number are its key.
@@ -248,6 +261,7 @@ type Message struct {
 type ThreadItem struct {
 	Kind       string `json:"kind"`
 	Projection *struct {
+		Thread           *AppThread `json:"thread"`
 		VisibleTurnItems []struct {
 			Item json.RawMessage `json:"item"`
 		} `json:"visibleTurnItems"`
