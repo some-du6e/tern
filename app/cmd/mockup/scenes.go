@@ -358,7 +358,7 @@ func settledScene() *ui.Scene {
 	s.Title = "Gio sidebar: virtualize 1k rows"
 	s.State, s.StateLabel = ui.ThreadIdle, "Idle"
 	s.Run.Status = "Idle"
-	s.Timeline = ui.Timeline{ID: "settled", Rows: settledRows()}
+	s.Timeline = ui.Timeline{ID: "settled", MoreHistory: true, Rows: settledRows()}
 	s.Changes = nil
 	return s
 }
