@@ -416,7 +416,8 @@ func TestMenuReasonDrawn(t *testing.T) {
 	l.frame(0)
 	l.frame(100 * time.Millisecond)
 	img := l.pixels(t)
-	beside := image.Pt(1100, row+3)
+	// Under the popover's border and dark lip, above its text.
+	beside := image.Pt(1100, row+4)
 	wantPixel(t, img, beside, P.Background, "no reason before the pointer rests")
 	l.frame(300 * time.Millisecond)
 	img = l.pixels(t)
