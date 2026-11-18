@@ -50,6 +50,23 @@ func wantPixel(t *testing.T, img *image.RGBA, p image.Point, c color.NRGBA, what
 	}
 }
 
+// run is the first and last y in [y0, y1) at column x whose pixel is c,
+// give or take a step, or -1, -1 when none is.
+func run(img *image.RGBA, x, y0, y1 int, c color.NRGBA) (first, last int) {
+	first, last = -1, -1
+	near := func(a, b uint8) bool { return a-b < 3 || b-a < 3 }
+	for y := y0; y < y1; y++ {
+		got := img.RGBAAt(x, y)
+		if near(got.R, c.R) && near(got.G, c.G) && near(got.B, c.B) {
+			if first < 0 {
+				first = y
+			}
+			last = y
+		}
+	}
+	return first, last
+}
+
 // The window wears T3's light or dark theme with the system: the
 // conversation on --background, the sidebar on its own --sidebar (black in
 // dark mode, from the sidebar's scoped palette).
