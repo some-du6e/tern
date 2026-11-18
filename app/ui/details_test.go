@@ -141,6 +141,18 @@ func TestCardPopover(t *testing.T) {
 	fill := over(alpha(P.Popover, 0xd5), P.Background)
 	wantPixel(t, img, at.Add(image.Pt(140, 4)), fill, "open: the card")
 	wantPixel(t, img, at.Add(image.Pt(140, -4)), P.Background, "8dp of the popover's padding above it")
+
+	// A header narrower than the popover's 296 squeezes it to the header
+	// less 8: in a 290-wide column the card runs from 12 to 278.
+	s.SidebarHidden = true
+	l = newLive(image.Pt(290, 800), nil)
+	l.draw = func(gtx C) { l.th.Desktop(gtx, s) }
+	l.frame(0)
+	img = l.pixels(t)
+	wantPixel(t, img, image.Pt(12+3, 52+8+20), fill, "the squeezed card's left edge")
+	wantPixel(t, img, image.Pt(12-3, 52+8+20), P.Background, "left of it")
+	wantPixel(t, img, image.Pt(278-3, 52+8+20), fill, "its right edge")
+	wantPixel(t, img, image.Pt(278+3, 52+8+20), P.Background, "right of it")
 }
 
 // The card's menus hang 4dp under their row as wide as it, here the Git

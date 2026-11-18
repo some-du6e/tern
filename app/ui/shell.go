@@ -464,15 +464,18 @@ func (th *Theme) chatColumn(gtx C, s *Scene, x int, panelOpen, narrow bool) {
 		}
 		// Without room for the card, the details are a popover off the
 		// header's bottom right: the card 8dp into a box whose right edge is
-		// 4dp in, at most the window less 104dp tall, its density judged
-		// against the canvas less 52.
+		// 4dp in, as wide as the card and its padding or the header less 8,
+		// at most the window less 104dp tall, its density judged against the
+		// canvas less 52.
 		open := !th.in.cardFits && s.Details && s.Card != nil
-		th.deferBelow(g, image.Pt(size.X-dp(gtx, 4+8+cardW), top+dp(gtx, 8)), func(gtx C) D {
-			return th.popover(gtx, "details", open, f32.Pt(float32(dp(gtx, cardW)), 0), func(gtx C) D {
+		box := min(dp(gtx, cardW+16), size.X-dp(gtx, 8))
+		w := max(0, box-dp(gtx, 16))
+		th.deferBelow(g, image.Pt(size.X-dp(gtx, 4)-box+dp(gtx, 8), top+dp(gtx, 8)), func(gtx C) D {
+			return th.popover(gtx, "details", open, f32.Pt(float32(w), 0), func(gtx C) D {
 				if s.Card == nil {
 					return D{}
 				}
-				gtx.Constraints = layout.Constraints{Max: image.Pt(dp(gtx, cardW), max(0, size.Y-dp(gtx, 104)))}
+				gtx.Constraints = layout.Constraints{Max: image.Pt(w, max(0, size.Y-dp(gtx, 104)))}
 				return th.details(gtx, s, size.Y-top-drawer-dp(gtx, 52))
 			})
 		})
