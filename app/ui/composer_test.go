@@ -224,14 +224,18 @@ func TestStash(t *testing.T) {
 	wantPixel(t, img, image.Pt(714, 15), P.Background, "past the tab")
 	wantPixel(t, img, image.Pt(300, 15), P.Background, "no column of notices")
 	wantPixel(t, img, image.Pt(300, 34), over(composerOutline(), g), "the composer's top edge")
-	if l, r := ink(img, 5, 29, 0, 736); l < 610 || r > 712 {
-		t.Errorf("the tab's ink spans x %d..%d, want about 96dp at the end", l, r)
+	// From its bookmark, 6dp into its 24dp icon column, to its count.
+	if l, r := ink(img, 5, 29, 0, 736); l < 625 || l > 640 || r > 712 {
+		t.Errorf("the tab's ink spans x %d..%d, want the bookmark from about 630 and the count by 712", l, r)
 	}
 	s.StashOpen, s.StashSel = true, 1
 	img = drawComposer(t, th, s, 320, 150)
 	wantPixel(t, img, image.Pt(400, 168), over(P.Accent, g), "the highlighted row")
 	wantPixel(t, img, image.Pt(400, 143), g, "the row above it")
 	wantPixel(t, img, image.Pt(22, 120), over(composerOutline(), g), "the list's edge")
+	if l, _ := ink(img, 135, 151, 22, 50); l < 30 || l > 40 {
+		t.Errorf("the first row's ink starts at x %d, want its file icon at about 32", l)
+	}
 }
 
 // The @ menu rises out of the card's top edge, 22dp in, its rows 28dp in
