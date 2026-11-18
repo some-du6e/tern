@@ -37,11 +37,13 @@ func cubicBezier(x1, y1, x2, y2, t float32) float32 {
 	return at(y1, y2, (lo+hi)/2)
 }
 
-// fade is one value on its way to 1 (on) or 0, from where it was at.
+// fade is one value on its way to 1 (on) or 0, from where it was at, and
+// the frame it was last drawn in.
 type fade struct {
 	on   bool
 	from float32
 	at   time.Time
+	seen uint64
 }
 
 func level(on bool) float32 {
@@ -80,6 +82,7 @@ func (th *Theme) transition(gtx C, id string, on bool, d time.Duration) float32 
 	if f.on != on {
 		f.from, f.on, f.at = f.value(gtx.Now, d), on, gtx.Now
 	}
+	f.seen = th.in.frame
 	v := f.value(gtx.Now, d)
 	if v != level(on) {
 		gtx.Execute(op.InvalidateCmd{})

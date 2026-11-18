@@ -150,6 +150,7 @@ type ThreadRow struct {
 	CanUnpin  bool // the pin is a button
 	Jump      int  // the n of its jump key, mod+n (thread.jump.n), 1 to 9; 0 for none
 	Hover     bool // a mockup draws it hovered
+	Focus     bool // a mockup draws it with the keyboard's focus ring
 }
 
 // ProjectIcon is a project's monogram (ProjectMonogram.tsx) in one of T3's

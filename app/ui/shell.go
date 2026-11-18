@@ -45,6 +45,7 @@ func (th *Theme) contentLeft() float32 { return th.ControlsLeft + controlSize + 
 
 // Desktop draws the whole window.
 func (th *Theme) Desktop(gtx C, s *Scene) D {
+	th.forget()
 	if s.Live {
 		defer th.trackPointer(gtx, gtx.Constraints.Max)
 	}
@@ -58,6 +59,9 @@ func (th *Theme) Desktop(gtx C, s *Scene) D {
 	}
 	if s.Live {
 		th.shellKeys(gtx, s)
+	}
+	if s.Menu == nil && th.in.menu.open {
+		th.menuClosed(gtx)
 	}
 	size := gtx.Constraints.Max
 	th.in.winSize = size
@@ -92,8 +96,6 @@ func (th *Theme) Desktop(gtx C, s *Scene) D {
 	}
 	if s.Menu != nil {
 		th.contextMenu(gtx, size, s)
-	} else {
-		th.in.menu.open = false
 	}
 	sb := &s.Sidebar
 	if s.Live && (s.Picker != nil || s.Traits != nil || s.Access != nil || s.Account != nil || s.Machines != nil || s.Projects != nil ||
@@ -111,6 +113,34 @@ var modifierKeys = map[key.Name]key.Modifiers{
 	key.NameSuper: key.ModSuper, key.NameCommand: key.ModCommand,
 }
 
+// shellFilters are the keys shellKeys takes, made once, so a frame that
+// only animates asks for them without allocating. mod+Shift+[ and ] come
+// as "{" and "}" on a Mac and on Linux, where Gio names a key by what
+// Shift makes of it, and as "[" and "]" on Windows.
+var shellFilters = func() []event.Filter {
+	fs := []event.Filter{
+		key.Filter{Name: "B", Required: key.ModShortcut, Optional: key.ModShift | key.ModAlt},
+		key.Filter{Name: "J", Required: key.ModShortcut},
+		key.Filter{Name: "N", Required: key.ModShortcut},
+		key.Filter{Name: "[", Required: key.ModShortcut | key.ModShift},
+		key.Filter{Name: "]", Required: key.ModShortcut | key.ModShift},
+		key.Filter{Name: "{", Required: key.ModShortcut | key.ModShift},
+		key.Filter{Name: "}", Required: key.ModShortcut | key.ModShift},
+		key.Filter{Name: "S", Required: key.ModShortcut | key.ModShift},
+		key.Filter{Name: "P", Required: key.ModShortcut | key.ModShift},
+		key.Filter{Name: "Z", Required: key.ModShortcut},
+	}
+	for n := 1; n <= 9; n++ {
+		fs = append(fs, key.Filter{Name: key.Name(strconv.Itoa(n)), Required: key.ModShortcut})
+	}
+	// The modifier keys themselves, for the jump keys' hints.
+	mods := key.ModCtrl | key.ModShift | key.ModAlt | key.ModSuper | key.ModCommand
+	for name := range modifierKeys {
+		fs = append(fs, key.Filter{Name: name, Optional: mods})
+	}
+	return fs
+}()
+
 // shellKeys handles T3's shell shortcuts (keybindings.ts): mod+B the
 // sidebar, mod+J the terminal, mod+Alt+B the right panel, mod+Shift+B the
 // thread details; and the sidebar's: mod+N a new thread, mod+Shift+[ and ]
@@ -119,26 +149,8 @@ var modifierKeys = map[key.Name]key.Modifiers{
 // focused terminal alone; a focused text field keeps its own mod+Z. It
 // also keeps which modifier keys are held, for the rows' jump hints.
 func (th *Theme) shellKeys(gtx C, s *Scene) {
-	filters := []event.Filter{
-		key.Filter{Name: "B", Required: key.ModShortcut, Optional: key.ModShift | key.ModAlt},
-		key.Filter{Name: "J", Required: key.ModShortcut},
-		key.Filter{Name: "N", Required: key.ModShortcut},
-		key.Filter{Name: "[", Required: key.ModShortcut | key.ModShift},
-		key.Filter{Name: "]", Required: key.ModShortcut | key.ModShift},
-		key.Filter{Name: "S", Required: key.ModShortcut | key.ModShift},
-		key.Filter{Name: "P", Required: key.ModShortcut | key.ModShift},
-		key.Filter{Name: "Z", Required: key.ModShortcut},
-	}
-	for n := 1; n <= 9; n++ {
-		filters = append(filters, key.Filter{Name: key.Name(strconv.Itoa(n)), Required: key.ModShortcut})
-	}
-	// The modifier keys themselves, for the jump keys' hints.
-	mods := key.ModCtrl | key.ModShift | key.ModAlt | key.ModSuper | key.ModCommand
-	for name := range modifierKeys {
-		filters = append(filters, key.Filter{Name: name, Optional: mods})
-	}
 	for {
-		ev, ok := gtx.Event(filters...)
+		ev, ok := gtx.Event(shellFilters...)
 		if !ok {
 			return
 		}
@@ -159,9 +171,9 @@ func (th *Theme) shellKeys(gtx C, s *Scene) {
 		switch {
 		case ke.Name == "N":
 			th.push(Action{ID: "new", Kind: "click"})
-		case ke.Name == "[":
+		case ke.Name == "[" || ke.Name == "{":
 			th.push(Action{ID: "thread.prev", Kind: "click"})
-		case ke.Name == "]":
+		case ke.Name == "]" || ke.Name == "}":
 			th.push(Action{ID: "thread.next", Kind: "click"})
 		case ke.Name == "S" && !term:
 			th.push(Action{ID: "thread.settle", Kind: "click"})
@@ -182,6 +194,11 @@ func (th *Theme) shellKeys(gtx C, s *Scene) {
 		}
 	}
 }
+
+// WindowBlurred is the window losing the keyboard to another. Modifiers let
+// go of there never reach this window, so none count as held any more, as
+// T3 resets its modifier state on blur (shortcutModifierState.ts).
+func (th *Theme) WindowBlurred() { th.in.heldMods = 0 }
 
 // detailsAction toggles the details card where it fits, else its popover.
 func (th *Theme) detailsAction() Action { return Action{ID: th.detailsID(), Kind: "click"} }

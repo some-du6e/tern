@@ -78,13 +78,15 @@ type input struct {
 	// hides it, as :focus-visible does).
 	keyFocus bool
 	// The sidebar's list: its keyboard tree from the last layout, each
-	// row's focus tag and the row to focus once it's laid out; the list's
-	// height and how far it's scrolled; the open thread's row it last
-	// scrolled to, the search result it last scrolled to as it lit, and the
-	// project scope it last started at the top for.
+	// row's focus tag, the row to focus once it's laid out and the one the
+	// keyboard moved to, which scrolls into view before the next layout;
+	// the list's height and how far it's scrolled; the open thread's row it
+	// last scrolled to, the search result it last scrolled to as it lit,
+	// and the project scope it last started at the top for.
 	nav         listNav
-	rowTags     map[string]*int
+	rowTags     map[string]*rowTag
 	focusRow    string
+	reveal      string
 	listView    int
 	listScroll  int
 	listOpen    string
@@ -103,16 +105,20 @@ type input struct {
 	heldMods  key.Modifiers
 	heldSince time.Time
 	jumping   bool
-	// The hover card: the row it's for, when the pointer came to rest there,
-	// whether it opened at once (within 400ms of the last one closing) and
-	// when the last one closed; tipBusy is a control's tooltip in the row
-	// being drawn, which the card stands aside for.
+	// The hover card: the rows the list drew with one, the row it's for,
+	// when the pointer came to rest there, whether it opened at once (from
+	// an open card, or within 400ms of the last one closing) and when the
+	// last open one closed; tipBusy is a control's tooltip in the row under
+	// the pointer, which the card stands aside for.
+	cards       []listCard
 	cardRow     string
 	cardSince   time.Time
 	cardInstant bool
 	cardShut    time.Time
 	tipBusy     bool
+	snoozeShown bool      // the snooze menu was drawn this frame
 	menu        menuState // the open context menu's submenus and highlight
+	frame       uint64    // counts Desktop's frames, to forget what the last one didn't draw
 	actions     []Action
 }
 
@@ -137,6 +143,24 @@ func (th *Theme) Actions() []Action {
 }
 
 func (th *Theme) push(a Action) { th.in.actions = append(th.in.actions, a) }
+
+// forget drops the transitions and the rows' focus tags the last frame
+// didn't draw, which would otherwise pile up one per row a session ever
+// showed. A row drawn again starts at rest, as a remounted one does; Gio
+// has already dropped the focus of a tag a frame didn't draw.
+func (th *Theme) forget() {
+	for k, f := range th.in.fades {
+		if f.seen != th.in.frame {
+			delete(th.in.fades, k)
+		}
+	}
+	for k, t := range th.in.rowTags {
+		if t.seen != th.in.frame {
+			delete(th.in.rowTags, k)
+		}
+	}
+	th.in.frame++
+}
 
 // Editor is the persistent editor behind a text field.
 func (th *Theme) Editor(id string) *widget.Editor {

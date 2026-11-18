@@ -81,9 +81,9 @@ func (th *Theme) jumpHints(gtx C, s *Scene) bool {
 	return true
 }
 
-// jumpKey is a row's jump hint: T3's Kbd with mod+n on the row's surface.
+// jumpKey is a row's jump hint: T3's Kbd with mod+n, in the row's ink.
 func (th *Theme) jumpKey(r *ThreadRow, in rowInk) W {
-	return th.T3Kbd(Shortcut(strconv.Itoa(r.Jump)), in.bg)
+	return th.T3Kbd(Shortcut(strconv.Itoa(r.Jump)), in.of)
 }
 
 // ---------- the search and filter row ----------
@@ -265,22 +265,23 @@ func (th *Theme) headerButton(gtx C, id, tip string, off, open bool, icon func(c
 // overlapping by 4dp inside a 2dp ring of the sidebar's colour.
 func (th *Theme) filterButton(gtx C, s *Scene) {
 	sb := &s.Sidebar
+	on := rowInk{bg: SP.Sidebar, k: 1}
 	icon := func(col color.NRGBA) W {
 		return func(gtx C) D {
 			switch len(sb.Scope) {
 			case 0:
 				return LucideW("list-filter", col, 16)(gtx)
 			case 1:
-				return th.projectIcon(gtx, sb.Scope[0], 16, SP.Sidebar, 0)
+				return th.projectIcon(gtx, sb.Scope[0], 16, on, 0)
 			}
 			off := op.Offset(image.Pt(0, dp(gtx, 1))).Push(gtx.Ops)
-			th.projectIcon(gtx, sb.Scope[0], 14, SP.Sidebar, 0)
+			th.projectIcon(gtx, sb.Scope[0], 14, on, 0)
 			off.Pop()
 			x := dp(gtx, 14-4)
 			ring := dp(gtx, 2)
 			fill(gtx, SP.Sidebar, image.Rect(x-ring, dp(gtx, 1)-ring, x+dp(gtx, 14)+ring, dp(gtx, 15)+ring), dp(gtx, 14*0.25)+ring)
 			defer op.Offset(image.Pt(x, dp(gtx, 1))).Push(gtx.Ops).Pop()
-			th.projectIcon(gtx, sb.Scope[1], 14, SP.Sidebar, 0)
+			th.projectIcon(gtx, sb.Scope[1], 14, on, 0)
 			return D{Size: image.Pt(dp(gtx, 16), dp(gtx, 16))}
 		}
 	}
@@ -411,7 +412,7 @@ func (th *Theme) filterItem(gtx C, s *Scene, it FilterItem) D {
 		if it.ID == "" {
 			LucideW("folder", P.MutedForeground, 16)(gtx)
 		} else {
-			th.projectIcon(gtx, it.Icon, 16, bg, 0)
+			th.projectIcon(gtx, it.Icon, 16, rowInk{bg: bg, k: 1}, 0)
 		}
 		if it.Selected {
 			// The badge: 12dp of primary in a 2dp ring of the popover, a
@@ -467,6 +468,7 @@ func (th *Theme) threadList(gtx C, s *Scene, top int) {
 	if s.Sidebar.Renaming == "" {
 		th.in.renaming = false
 	}
+	th.in.cards, th.in.tipBusy, th.in.snoozeShown = th.in.cards[:0], false, false
 	items := th.sideItems(gtx, s)
 	gap, bottom := max(1, dp(gtx, 1)), dp(gtx, sideInset)
 	total := bottom
@@ -506,7 +508,10 @@ func (th *Theme) threadList(gtx C, s *Scene, top int) {
 	// thread's row scrolls into view once, unless the pointer is on it,
 	// where a click leaves it; while the row isn't listed (a search
 	// replaces the list), it waits (routeReveal.ts). A search result
-	// scrolls into view as it lights, as T3's highlighted option does.
+	// scrolls into view as it lights, as T3's highlighted option does, and
+	// so does the row the keyboard moved to (sidebarTree.ts), here rather
+	// than while the list is being laid out. A row to focus that's no
+	// longer listed is let go.
 	sb := &s.Sidebar
 	if sb.ScopeKey != th.in.listScope {
 		th.in.listScope = sb.ScopeKey
@@ -535,8 +540,18 @@ func (th *Theme) threadList(gtx C, s *Scene, top int) {
 	} else {
 		th.in.listHi = ""
 	}
-	scroll := scrolled()
-	th.in.listScroll = scroll
+	if focus, reveal := th.in.focusRow, th.in.reveal; focus != "" || reveal != "" {
+		th.in.focusRow, th.in.reveal = "", ""
+		for i, it := range items {
+			if it.nav == focus {
+				th.in.focusRow = focus
+			}
+			if it.nav == reveal {
+				th.revealItem(i)
+			}
+		}
+	}
+	before := scrolled()
 	inset := dp(gtx, sideInset)
 	l.Layout(gtx, len(items)+1, func(gtx C, i int) D {
 		if i == len(items) {
@@ -551,11 +566,25 @@ func (th *Theme) threadList(gtx C, s *Scene, top int) {
 		g.Constraints = layout.Exact(image.Pt(size.X-2*inset, it.h))
 		func() {
 			defer op.Offset(image.Pt(inset, 0)).Push(gtx.Ops).Pop()
-			it.draw(g, top+tops[i]-scroll)
+			it.draw(g, top+tops[i]-before)
 		}()
 		return D{Size: image.Pt(size.X, h)}
 	})
-	th.listFade(gtx, size, scroll, max(0, total-size.Y-scroll))
+	// Layout scrolls the list by this frame's wheel or drag before it lays
+	// the rows out, and they placed what they put in the window (a menu,
+	// the context menu key's spot) for where it was. The hover cards and
+	// the fade go where it is now; the rest follows in the next frame.
+	after := scrolled()
+	th.in.listScroll = after
+	th.hoverCards(gtx, s, top, before-after)
+	th.listFade(gtx, size, after, max(0, total-size.Y-after))
+	if after != before {
+		gtx.Execute(op.InvalidateCmd{})
+	}
+	if s.Live && sb.Snooze != nil && !th.in.snoozeShown {
+		// Its card went out of sight, and the menu goes with it.
+		th.push(Action{ID: "menus.close", Kind: "click"})
+	}
 }
 
 // listFade is the list's edge mask: the sidebar's colour painted over the
@@ -674,11 +703,12 @@ func (th *Theme) area(gtx C, id string, size image.Point, cursor pointer.Cursor)
 
 // rowTarget makes a list row the target nav at the current offset: its
 // clicks, right clicks and hover, and its keyboard focus (§5.12). Controls
-// drawn before pop nest in it, and a click on one isn't the row's too.
-// rect is the row's box in the window, where its context menu key opens
-// the menu. It reports whether the row is hovered and keyboard-focused.
+// drawn before pop nest in it. A click on one is the control's alone; a
+// right click on one is the row's, which opens its menu, as T3's bubbles
+// up to the row (SidebarThreadRow.tsx). rect is the row's box in the
+// window, where its context menu key opens the menu. It reports whether
+// the row is hovered and keyboard-focused.
 func (th *Theme) rowTarget(gtx C, s *Scene, nav string, size image.Point, rect image.Rectangle) (hovered, focused bool, pop func()) {
-	th.in.tipBusy = false
 	if !s.Live {
 		return false, false, func() {}
 	}
@@ -695,23 +725,40 @@ func (th *Theme) rowTarget(gtx C, s *Scene, nav string, size image.Point, rect i
 	pointer.CursorPointer.Add(gtx.Ops)
 	return c.Hovered(), focused, func() {
 		st.Pop()
-		if len(th.in.actions) > mine && mine > start {
-			// A control inside took the click.
-			th.in.actions = append(th.in.actions[:start], th.in.actions[mine:]...)
+		if len(th.in.actions) == mine {
+			return
 		}
+		inner := false
+		for _, a := range th.in.actions[mine:] {
+			inner = inner || a.Kind == "click"
+		}
+		acts := th.in.actions[:start]
+		for i, a := range th.in.actions[start:] {
+			switch row := start+i < mine; {
+			case row && inner && a.Kind == "click":
+			case !row && (a.Kind == "context" || a.Kind == "middle"):
+			default:
+				acts = append(acts, a)
+			}
+		}
+		th.in.actions = acts
 	}
 }
 
+// rowTag is a row's keyboard focus tag, and the frame it was last drawn in.
+type rowTag struct{ seen uint64 }
+
 // rowKey is nav's keyboard focus tag.
-func (th *Theme) rowKey(nav string) *int {
+func (th *Theme) rowKey(nav string) *rowTag {
 	if th.in.rowTags == nil {
-		th.in.rowTags = map[string]*int{}
+		th.in.rowTags = map[string]*rowTag{}
 	}
 	t := th.in.rowTags[nav]
 	if t == nil {
-		t = new(int)
+		t = new(rowTag)
 		th.in.rowTags[nav] = t
 	}
+	t.seen = th.in.frame
 	return t
 }
 
@@ -720,7 +767,7 @@ func (th *Theme) rowKey(nav string) *int {
 // to the ends; Right opens a folded shelf or steps into an open one, Left
 // folds it or steps out to the row's shelf; Enter and Space open the row,
 // F2 renames it, and Shift+F10 opens its menu at its bottom left.
-func (th *Theme) rowKeys(gtx C, nav string, tag *int, rect image.Rectangle) {
+func (th *Theme) rowKeys(gtx C, nav string, tag *rowTag, rect image.Rectangle) {
 	if th.in.focusRow == nav {
 		gtx.Execute(key.FocusCmd{Tag: tag})
 		th.in.focusRow = ""
@@ -750,6 +797,10 @@ func (th *Theme) rowKeys(gtx C, nav string, tag *int, rect image.Rectangle) {
 			}
 			th.in.keyFocus = true
 			th.rowKey1(nav, e.Name, rect)
+			if th.in.reveal != "" {
+				// The list scrolls to it before the next frame's layout.
+				gtx.Execute(op.InvalidateCmd{})
+			}
 		}
 	}
 }
@@ -806,13 +857,13 @@ func (th *Theme) rowKey1(nav string, name key.Name, rect image.Rectangle) {
 		}
 	}
 	if target >= 0 {
-		th.in.focusRow = items[target].nav
-		th.revealItem(target)
+		th.in.focusRow, th.in.reveal = items[target].nav, items[target].nav
 	}
 }
 
 // revealItem scrolls the list so item i shows, moving it as little as it
-// can (block: nearest).
+// can (block: nearest). Call it before the list's layout: the list carries
+// on from where it's told it is while it lays its rows out.
 func (th *Theme) revealItem(i int) {
 	n := th.in.nav
 	l := th.List("sidebar", false)
@@ -830,6 +881,7 @@ func (th *Theme) revealItem(i int) {
 	for j := len(n.items) - 1; j >= 0; j-- {
 		if n.tops[j] <= scroll {
 			l.Position.First, l.Position.Offset, l.Position.BeforeEnd = j, scroll-n.tops[j], true
+			th.in.listScroll = scroll
 			return
 		}
 	}
@@ -838,7 +890,8 @@ func (th *Theme) revealItem(i int) {
 // ---------- the parts of a row ----------
 
 // rowInk paints a row's colours as T3 composites them: onto the row's own
-// fill, then the row at opacity k onto the sidebar.
+// fill, then the row at opacity k onto the sidebar. At k 1 it paints onto
+// any opaque surface bg.
 type rowInk struct {
 	bg color.NRGBA // the row's surface, opaque
 	k  float32
@@ -908,13 +961,13 @@ func (th *Theme) cardRow(gtx C, s *Scene, r *ThreadRow, top int) D {
 	nav := "thread:" + r.ID
 	hovered, focused, pop := th.rowTarget(gtx, s, nav, size, rect)
 	defer pop()
-	hot := hovered || r.Hover
+	hot, focused := hovered || r.Hover, focused || r.Focus
 	menuOpen := s.Sidebar.Snooze != nil && s.Sidebar.Snooze.Row == r.ID
 	bg, ring := rowSurface(r, hot)
 	in := rowInk{bg: bg, k: 1}
-	// A receded working row is at 70% until hovered or focused.
+	// A receded working row is at 70% until hovered or focused, all of it.
 	if r.Recede && r.Status == StatusWorking {
-		in.k = 0.7 + 0.3*th.transition(gtx, nav+".fade", hot || focused, 150*time.Millisecond)
+		in.k = 0.7 + 0.3*th.transition(gtx, nav+".fade", hot || focused, transitionDur)
 	}
 	paintRow(gtx, size, in, ring, focused)
 	cw := w - 2*dp(gtx, 10)
@@ -933,7 +986,7 @@ func (th *Theme) cardRow(gtx C, s *Scene, r *ThreadRow, top int) D {
 			kids = append(kids, rigid(LucideW("square-pen", in.of(SP.WarningForeground), 12)))
 		}
 		if r.Project != "" {
-			kids = append(kids, rigid(func(gtx C) D { return th.projectIcon(gtx, r.Icon, 16, in.bg, 0) }))
+			kids = append(kids, rigid(func(gtx C) D { return th.projectIcon(gtx, r.Icon, 16, in, 0) }))
 		}
 		if r.Pinned {
 			kids = append(kids, rigid(th.pin(s, r, in)))
@@ -959,7 +1012,7 @@ func (th *Theme) cardRow(gtx C, s *Scene, r *ThreadRow, top int) D {
 	if meta {
 		at(dp(gtx, 8+20+4+20+2), dp(gtx, 16), func(gtx C) D { return th.metaLine(gtx, s, r, in) })
 	}
-	th.hoverCard(gtx, s, r, rect, hot && !menuOpen)
+	th.hoverRow(r, rect, hot && !menuOpen)
 	return D{Size: image.Pt(w, h+dp(gtx, 4))}
 }
 
@@ -996,7 +1049,7 @@ func (th *Theme) draftRow(gtx C, s *Scene, d *DraftRow, top int) D {
 	at(dp(gtx, 8), dp(gtx, 20), func(gtx C) D {
 		return RowGap(gtx, 6,
 			rigid(LucideW("square-pen", in.of(SP.WarningForeground), 12)),
-			rigid(func(gtx C) D { return th.projectIcon(gtx, d.Icon, 16, in.bg, 0) }),
+			rigid(func(gtx C) D { return th.projectIcon(gtx, d.Icon, 16, in, 0) }),
 			flexed(func(gtx C) D {
 				return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Font: UI(font.Medium), Color: in.of(SP.SecondaryLabel), MaxLines: 1}, d.Project)
 			}),
@@ -1016,7 +1069,7 @@ func (th *Theme) draftRow(gtx C, s *Scene, d *DraftRow, top int) D {
 // 150ms while the row is hovered.
 func (th *Theme) discardButton(gtx C, s *Scene, d *DraftRow, in rowInk, hot bool) D {
 	size := image.Pt(dp(gtx, 12+2*4), gtx.Constraints.Max.Y)
-	k := th.transition(gtx, "discard:"+d.ID, hot, 150*time.Millisecond)
+	k := th.transition(gtx, "discard:"+d.ID, hot, transitionDur)
 	id := liveID(s, "discard:"+d.ID)
 	col := SP.MutedForeground
 	if id != "" {
@@ -1052,24 +1105,27 @@ func faded(c color.NRGBA, k float32) color.NRGBA {
 
 // title is a row's title, or its editor while it's renamed.
 func (th *Theme) title(gtx C, s *Scene, r *ThreadRow, in rowInk, lit, slim bool) D {
-	if s.Live && s.Sidebar.Renaming == r.ID {
-		return th.renameField(gtx)
+	if s.Sidebar.Renaming == r.ID {
+		return th.renameField(gtx, s.Live)
 	}
 	return th.rowTitle(gtx, r, in, lit, slim)
 }
 
 // renameField is the title's editor (§3.17): 22dp, padded 0 by 4, radius
 // 4, the card in a 1dp input border that turns the foreground while it's
-// focused, 14px medium. Enter or leaving it commits, Escape cancels.
-func (th *Theme) renameField(gtx C) D {
+// focused, 14px medium. Enter or leaving it commits, Escape cancels. A
+// mockup's is focused, as T3's is from the moment it shows.
+func (th *Theme) renameField(gtx C, live bool) D {
 	const id = "rename"
 	ed := th.Editor(id)
 	ed.SingleLine, ed.Submit = true, true
-	focused := gtx.Focused(ed)
-	if th.in.renaming && !focused {
-		th.push(Action{ID: id, Kind: "blur"})
+	focused := gtx.Focused(ed) || !live
+	if live {
+		if th.in.renaming && !focused {
+			th.push(Action{ID: id, Kind: "blur"})
+		}
+		th.in.renaming = focused
 	}
-	th.in.renaming = focused
 	w, h := gtx.Constraints.Max.X, dp(gtx, 22)
 	r := image.Rect(0, 0, w, h)
 	border := SP.Input
@@ -1121,7 +1177,7 @@ func slimTitle(r *ThreadRow, lit bool) color.NRGBA {
 		return SP.SecondaryLabel
 	case r.Recede:
 		return SP.SecondaryLabel
-	case r.Active || r.Woke || r.Status == StatusInput || r.Status == StatusRequest:
+	case r.Active || r.Status == StatusInput || r.Status == StatusRequest:
 		return SP.Foreground
 	case r.Unread:
 		return SP.MutedForeground
@@ -1525,7 +1581,7 @@ func (th *Theme) slimRow(gtx C, s *Scene, r *ThreadRow, top int) D {
 	nav := "thread:" + r.ID
 	hovered, focused, pop := th.rowTarget(gtx, s, nav, size, rect)
 	defer pop()
-	hot := hovered || r.Hover
+	hot, focused := hovered || r.Hover, focused || r.Focus
 	settled := r.Shelf == "settled"
 	bg, ring := rowSurface(r, hot)
 	in := rowInk{bg: bg, k: 1}
@@ -1540,16 +1596,16 @@ func (th *Theme) slimRow(gtx C, s *Scene, r *ThreadRow, top int) D {
 	}
 	dim := float32(0)
 	if !r.Active || settled {
-		dim = 1 - th.transition(gtx, nav+".icon", lit, 150*time.Millisecond)
+		dim = 1 - th.transition(gtx, nav+".icon", lit, transitionDur)
 	}
-	shown := th.transition(gtx, nav+".slot", hot, 150*time.Millisecond)
-	th.hoverCard(gtx, s, r, rect, hot)
+	shown := th.transition(gtx, nav+".slot", hot, transitionDur)
+	th.hoverRow(r, rect, hot)
 	defer op.Offset(image.Pt(dp(gtx, 10), 0)).Push(gtx.Ops).Pop()
 	g := gtx
 	g.Constraints = layout.Exact(image.Pt(w-2*dp(gtx, 10), size.Y))
 	var kids []layout.FlexChild
 	if r.Project != "" {
-		kids = append(kids, rigid(func(gtx C) D { return th.projectIcon(gtx, r.Icon, 16, in.bg, dim) }))
+		kids = append(kids, rigid(func(gtx C) D { return th.projectIcon(gtx, r.Icon, 16, in, dim) }))
 	}
 	if r.Draft {
 		kids = append(kids, rigid(LucideW("square-pen", in.of(rest(SP.WarningForeground)), 12)))
@@ -1563,16 +1619,18 @@ func (th *Theme) slimRow(gtx C, s *Scene, r *ThreadRow, top int) D {
 	if r.Terminals > 0 {
 		kids = append(kids, rigid(th.terminalButton(s, r, in)))
 	}
-	kids = append(kids, rigid(func(gtx C) D { return th.slimSlot(gtx, s, r, in, rest, hot, shown) }))
+	kids = append(kids, rigid(func(gtx C) D { return th.slimSlot(gtx, s, r, in, rest, shown) }))
 	RowGap(g, 10, kids...)
 	return D{Size: size}
 }
 
 // slimSlot is a slim row's trailing slot: 24dp, at least 32 wide, right
-// aligned. Its age, wake time or Woke label fades out on hover (Woke
-// stays), as the Wake or Un-settle button fades in, 4dp into the padding.
-// While the jump keys show, it shows only the row's.
-func (th *Theme) slimSlot(gtx C, s *Scene, r *ThreadRow, in rowInk, rest func(color.NRGBA) color.NRGBA, hot bool, shown float32) D {
+// aligned. Its age or wake time fades out on hover, as the Wake or
+// Un-settle button fades in, 4dp into the padding. While the jump keys
+// show, it shows only the row's. A slim row never says Woke: a snoozed
+// thread hasn't woken yet, and a settled one's wake is past noticing
+// (threadWokeAt); T3 keeps it for boring-sidebar folder rows.
+func (th *Theme) slimSlot(gtx C, s *Scene, r *ThreadRow, in rowInk, rest func(color.NRGBA) color.NRGBA, shown float32) D {
 	h := dp(gtx, 24)
 	if th.in.jumping && r.Jump > 0 {
 		g := gtx
@@ -1589,24 +1647,11 @@ func (th *Theme) slimSlot(gtx C, s *Scene, r *ThreadRow, in rowInk, rest func(co
 	fade := func(c color.NRGBA, k float32) color.NRGBA { return over(alpha(c, uint8(k*255+0.5)), in.bg) }
 	label := func(gtx C) D {
 		k := 1 - shown
-		if r.Woke {
-			k = 1
-		}
-		switch {
-		case r.Shelf == "snoozed" && r.Wake != "":
+		if r.Shelf == "snoozed" && r.Wake != "" {
 			col := fade(in.of(rest(SP.InfoForeground)), k)
 			return RowGap(gtx, 4,
 				rigid(LucideW("alarm-clock", col, 12)),
 				rigid(func(gtx C) D { return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: col, MaxLines: 1}, r.Wake) }))
-		case r.Woke:
-			col := in.of(rest(SP.WarningForeground))
-			return th.wokeButton(gtx, s, r, func(gtx C) D {
-				return RowGap(gtx, 4,
-					rigid(LucideW("alarm-clock", col, 12)),
-					rigid(func(gtx C) D {
-						return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Font: UI(font.Medium), Color: col, MaxLines: 1}, "Woke")
-					}))
-			})
 		}
 		t.Color = fade(t.Color, k)
 		return th.Text(gtx, t, r.Age)
@@ -1625,19 +1670,14 @@ func (th *Theme) slimSlot(gtx C, s *Scene, r *ThreadRow, in rowInk, rest func(co
 		return D{Size: image.Pt(w, h)}
 	}
 	// The Wake or Un-settle button: padded 0 by 6, its icon 1dp high (mb-px),
-	// over the label's end and 4dp into the padding; a woke row keeps its
-	// label, and the button follows it.
+	// over the label's end and 4dp into the padding.
 	id, icon, sz, tip := "wake:"+r.ID, "alarm-clock-off", float32(12), ""
 	if r.Shelf == "settled" {
 		id, icon, sz, tip = "unsettle:"+r.ID, "undo-2", 14, "Un-settle thread"
 	}
 	id = liveID(s, id)
 	bw := dp(gtx, sz+12)
-	total, x := w, w-bw+dp(gtx, 4)
-	if r.Woke && hot {
-		total, x = w+bw-dp(gtx, 4), w
-	}
-	defer op.Offset(image.Pt(x, 0)).Push(gtx.Ops).Pop()
+	defer op.Offset(image.Pt(w-bw+dp(gtx, 4), 0)).Push(gtx.Ops).Pop()
 	col := SP.MutedForeground
 	if id != "" {
 		if c, _ := th.events(gtx, id); c.Hovered() {
@@ -1652,7 +1692,7 @@ func (th *Theme) slimSlot(gtx C, s *Scene, r *ThreadRow, in rowInk, rest func(co
 		th.hit(gtx, id, image.Pt(bw, h))
 		th.listTip(gtx, id, tip, image.Pt(bw, h))
 	}
-	return D{Size: image.Pt(total, h)}
+	return D{Size: image.Pt(w, h)}
 }
 
 // shelfHeader is a shelf's header (CollapsibleSectionHeader, §3.9): 32dp,
@@ -1671,7 +1711,7 @@ func (th *Theme) shelfHeader(gtx C, s *Scene, sh *Shelf) D {
 		strokeRect(gtx, over(alpha(SP.Ring, 0xb3), SP.Sidebar), image.Rectangle{Max: size}, dp(gtx, 6), float32(2*max(1, dp(gtx, 1))))
 	}
 	col := SP.SidebarMutedForeground
-	open := th.transition(gtx, nav+".chevron", sh.Open, 150*time.Millisecond)
+	open := th.transition(gtx, nav+".chevron", sh.Open, transitionDur)
 	defer op.Offset(image.Pt(dp(gtx, 8), 0)).Push(gtx.Ops).Pop()
 	g := gtx
 	g.Constraints = layout.Exact(image.Pt(size.X-2*dp(gtx, 8), size.Y))
@@ -1755,7 +1795,7 @@ func (th *Theme) emptyButton(gtx C, id, label string, w int) {
 		c, _ := th.events(gtx, id)
 		hovered = c.Hovered()
 	}
-	k := th.transition(gtx, "empty.hover", hovered, 150*time.Millisecond)
+	k := th.transition(gtx, "empty.hover", hovered, transitionDur)
 	col := lerpCol(SP.SidebarMutedForeground, SP.SidebarForeground, k)
 	bg := lerpCol(SP.Sidebar, over(SP.SidebarRowHover, SP.Sidebar), k)
 	g := gtx
@@ -1856,7 +1896,7 @@ func (th *Theme) resultRow(gtx C, s *Scene, r *ThreadRow, i, top int) D {
 		}
 		var kids []layout.FlexChild
 		if r.Project != "" {
-			kids = append(kids, rigid(func(gtx C) D { return th.projectIcon(gtx, r.Icon, 16, bg, dim) }))
+			kids = append(kids, rigid(func(gtx C) D { return th.projectIcon(gtx, r.Icon, 16, rowInk{bg: bg, k: 1}, dim) }))
 		}
 		kids = append(kids, flexed(func(gtx C) D {
 			if r.Excerpt == nil {
@@ -1872,7 +1912,7 @@ func (th *Theme) resultRow(gtx C, s *Scene, r *ThreadRow, i, top int) D {
 		RowGap(g, 10, kids...)
 	}()
 	x0 := dp(gtx, sideInset)
-	th.hoverCard(gtx, s, r, image.Rectangle{Min: image.Pt(x0, top), Max: image.Pt(x0+w, top+size.Y)}, hovered)
+	th.hoverRow(r, image.Rectangle{Min: image.Pt(x0, top), Max: image.Pt(x0+w, top+size.Y)}, hovered)
 	if pop != nil {
 		pop()
 	}
@@ -2031,11 +2071,12 @@ func grey(c color.NRGBA) color.NRGBA {
 	return color.NRGBA{R: l, G: l, B: l, A: c.A}
 }
 
-// projectIcon draws a project's icon sizeDp square on bg: its monogram,
-// mono 700 stretched to 6 (one glyph) or 12 (two) of the tile's 16 units,
-// on its colour at 14% with 25% corners (ProjectMonogram.tsx); or its
-// lucide icon. dim runs to 1 for the quiet rows' grey at 40%.
-func (th *Theme) projectIcon(gtx C, ic ProjectIcon, sizeDp float32, bg color.NRGBA, dim float32) D {
+// projectIcon draws a project's icon sizeDp square in the ink in, on its
+// surface and at its opacity: its monogram, mono 700 stretched to 6 (one
+// glyph) or 12 (two) of the tile's 16 units, on its colour at 14% with 25%
+// corners (ProjectMonogram.tsx); or its lucide icon. dim runs to 1 for the
+// quiet rows' grey at 40%.
+func (th *Theme) projectIcon(gtx C, ic ProjectIcon, sizeDp float32, in rowInk, dim float32) D {
 	col := projectColor(ic.Color)
 	if ic.Color == "" && ic.Lucide == "" && ic.Text == "" {
 		col = SP.IconMuted
@@ -2043,7 +2084,7 @@ func (th *Theme) projectIcon(gtx C, ic ProjectIcon, sizeDp float32, bg color.NRG
 	ink := func(c color.NRGBA) color.NRGBA {
 		c = lerpCol(c, grey(c), dim)
 		c.A = uint8(float32(c.A)*(1-0.6*dim) + 0.5)
-		return over(c, bg)
+		return in.of(c)
 	}
 	s := dp(gtx, sizeDp)
 	if ic.Lucide != "" || ic.Text == "" {
@@ -2055,7 +2096,7 @@ func (th *Theme) projectIcon(gtx C, ic ProjectIcon, sizeDp float32, bg color.NRG
 		}
 		return LucideW(name, ink(col), sizeDp)(gtx)
 	}
-	tile := over(alpha(col, 0x24), bg)
+	tile := over(alpha(col, 0x24), in.bg)
 	fill(gtx, ink(tile), image.Rect(0, 0, s, s), s/4)
 	k := float32(s) / 16
 	t := Txt{Size: unit.Sp(8.25 * k / gtx.Metric.PxPerSp), Font: font.Font{Typeface: Mono().Typeface, Weight: font.Bold}, Color: ink(col), MaxLines: 1}
@@ -2174,34 +2215,69 @@ func (th *Theme) textWidth(gtx C, t Txt, s string) int {
 
 // ---------- the hover card ----------
 
-// hoverCard is a row's hover card (ThreadHoverCard.tsx, §3.15), shown once
-// the pointer has rested on the row for 150ms: T3's glass tooltip 4dp
-// right of the row, level with its top, kept inside the window. It grows
-// from 98% and fades in over 150ms from the side facing the row, and back
-// out as it closes; opening on the next row within 400ms of the last
-// closing, it and the card it replaces change at once (Base UI's
-// data-instant). rect is the row's box in the window.
-func (th *Theme) hoverCard(gtx C, s *Scene, r *ThreadRow, rect image.Rectangle, hot bool) {
+// listCard is a row the list drew that has a hover card: the row, its box
+// in the window as it was drawn, and whether the pointer is on it.
+type listCard struct {
+	r   *ThreadRow
+	box image.Rectangle
+	hot bool
+}
+
+// hoverRow notes a row with a hover card as the list draws it. The cards
+// are drawn once the whole list is, by hoverCards, so which row has the
+// card never hangs on the order the rows are drawn in.
+func (th *Theme) hoverRow(r *ThreadRow, box image.Rectangle, hot bool) {
+	th.in.cards = append(th.in.cards, listCard{r: r, box: box, hot: hot})
+}
+
+// hoverCards draws the hover cards of the rows the list drew
+// (ThreadHoverCard.tsx, §3.15). The row under the pointer shows its card
+// once the pointer has rested there for 150ms, unless a control's tooltip
+// in it is showing. In the list's tooltip group (delay 150, timeout 400)
+// a card that takes over from an open one, or opens within 400ms of the
+// last open one closing, opens at once, and the one it replaces goes at
+// once too (Base UI's data-instant). top is the list's y in the window and
+// shift how far this frame's scrolling moved the rows from where they were
+// drawn.
+func (th *Theme) hoverCards(gtx C, s *Scene, top, shift int) {
+	if s.Live {
+		hot := ""
+		for _, c := range th.in.cards {
+			if c.hot {
+				hot = c.r.ID
+			}
+		}
+		if hot != th.in.cardRow {
+			if th.in.cardRow != "" && gtx.Now.Sub(th.in.cardSince) >= listTipDelay {
+				th.in.cardShut = gtx.Now // the card the pointer left was open
+			}
+			th.in.cardRow, th.in.cardSince, th.in.cardInstant = hot, gtx.Now, false
+			if hot != "" && gtx.Now.Sub(th.in.cardShut) < listTipInstant {
+				th.in.cardSince, th.in.cardInstant = gtx.Now.Add(-listTipDelay), true
+			}
+		}
+		if left := listTipDelay - gtx.Now.Sub(th.in.cardSince); hot != "" && left > 0 {
+			gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(left)})
+		}
+	}
+	for _, c := range th.in.cards {
+		th.hoverCard(gtx, s, c.r, c.box.Add(image.Pt(0, shift)), top)
+	}
+}
+
+// hoverCard is a row's card: T3's glass tooltip 4dp right of the row,
+// level with its top, kept inside the window. It grows from 98% and fades
+// in over 150ms from the side facing the row, and back out as it closes.
+// box is the row's box in the window, top the list's y there.
+func (th *Theme) hoverCard(gtx C, s *Scene, r *ThreadRow, box image.Rectangle, top int) {
 	key := "card:" + r.ID
 	open, instant := r.Hover, true
 	if s.Live {
-		switch {
-		case hot && th.in.cardRow != r.ID:
-			th.in.cardRow, th.in.cardSince, th.in.cardInstant = r.ID, gtx.Now, false
-			if gtx.Now.Sub(th.in.cardShut) < listTipInstant {
-				th.in.cardSince, th.in.cardInstant = gtx.Now.Add(-listTipDelay), true
-			}
-		case !hot && th.in.cardRow == r.ID:
-			th.in.cardRow, th.in.cardShut = "", gtx.Now
-		}
-		left := listTipDelay - gtx.Now.Sub(th.in.cardSince)
-		if hot && left > 0 {
-			gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(left)})
-		}
-		open = hot && !th.in.tipBusy && left <= 0
+		open = r.ID == th.in.cardRow && !th.in.tipBusy && gtx.Now.Sub(th.in.cardSince) >= listTipDelay
 		instant = (open && th.in.cardInstant) || (!open && th.in.cardRow != "" && th.in.cardRow != r.ID)
 	}
-	if th.in.fades[key] == nil {
+	f := th.in.fades[key]
+	if f == nil {
 		if !open {
 			return
 		}
@@ -2209,14 +2285,15 @@ func (th *Theme) hoverCard(gtx C, s *Scene, r *ThreadRow, rect image.Rectangle, 
 		if th.in.fades == nil {
 			th.in.fades = map[string]*fade{}
 		}
-		th.in.fades[key] = &fade{}
+		f = &fade{}
+		th.in.fades[key] = f
 	}
 	var k float32
 	if instant {
-		th.in.fades[key] = &fade{on: open, from: level(open)}
+		*f = fade{on: open, from: level(open), seen: th.in.frame}
 		k = level(open)
 	} else {
-		k = th.transition(gtx, key, open, 150*time.Millisecond)
+		k = th.transition(gtx, key, open, transitionDur)
 	}
 	if k == 0 {
 		// Closed, it's forgotten; opening, it's yet to show.
@@ -2234,14 +2311,14 @@ func (th *Theme) hoverCard(gtx C, s *Scene, r *ThreadRow, rect image.Rectangle, 
 	// padding does.
 	win := th.in.winSize
 	dy := 0
-	if bottom := rect.Min.Y + cd.Size.Y + dp(gtx, 5); win.Y > 0 && bottom > win.Y {
-		dy = max(-rect.Min.Y+dp(gtx, 5), win.Y-bottom)
+	if bottom := box.Min.Y + cd.Size.Y + dp(gtx, 5); win.Y > 0 && bottom > win.Y {
+		dy = max(-box.Min.Y+dp(gtx, 5), win.Y-bottom)
 	}
 	m2 := op.Record(gtx.Ops)
-	op.Offset(image.Pt(rect.Dx()+dp(gtx, 4), dy)).Add(gtx.Ops)
+	op.Offset(image.Pt(box.Max.X+dp(gtx, 4), box.Min.Y-top+dy)).Add(gtx.Ops)
 	// It grows from its left edge, level with the row's middle.
 	sc := 0.98 + 0.02*k
-	origin := f32.Pt(0, float32(min(cd.Size.Y, rect.Dy()/2-dy)))
+	origin := f32.Pt(0, float32(min(cd.Size.Y, box.Dy()/2-dy)))
 	op.Affine(f32.Affine2D{}.Scale(origin, f32.Pt(sc, sc))).Add(gtx.Ops)
 	fd := paint.PushOpacity(gtx.Ops, k)
 	call.Add(gtx.Ops)
@@ -2279,18 +2356,20 @@ func (th *Theme) cardBody(gtx C, r *ThreadRow) D {
 		lines = append(lines, line(icon, text, col))
 	}
 	if r.Project != "" {
-		add(func(gtx C) D { return th.projectIcon(gtx, r.Icon, 12, bg, 0) }, r.Project, soft)
+		add(func(gtx C) D { return th.projectIcon(gtx, r.Icon, 12, rowInk{bg: bg, k: 1}, 0) }, r.Project, soft)
 	}
 	if r.Machine != "" {
 		add(machineIcon(r.MachineIcon, muted, 12), r.Machine, soft)
 	}
 	if r.Branch != "" {
+		// The branch keeps the lines' own muted foreground: T3's
+		// MiddleTruncate here has no colour of its own.
 		gap()
 		lines = append(lines, rigid(func(gtx C) D {
 			return pad(0, 0, 0, 2).Layout(gtx, func(gtx C) D {
 				return RowGap(gtx, 8,
 					rigid(LucideW("git-branch", muted, 12)),
-					flexed(func(gtx C) D { return th.middleTruncate(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: soft}, r.Branch) }))
+					flexed(func(gtx C) D { return th.middleTruncate(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: muted}, r.Branch) }))
 			})
 		}))
 	}
@@ -2359,6 +2438,7 @@ func (th *Theme) listTip(gtx C, id, tip string, size image.Point) {
 // goes above the clock when there's no room below.
 func (th *Theme) snoozeMenu(gtx C, s *Scene, trigger image.Point, at image.Rectangle) {
 	sm := s.Sidebar.Snooze
+	th.in.snoozeShown = true
 	th.deferBelow(gtx, image.Point{}, func(gtx C) D {
 		// Inside the 1dp border and 4dp of padding.
 		w := dp(gtx, 160-2*5)

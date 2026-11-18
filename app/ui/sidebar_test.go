@@ -512,7 +512,9 @@ func TestHoverCardMotion(t *testing.T) {
 }
 
 // Holding mod on its own for 200ms puts each of the first rows' jump keys,
-// T3's Kbd, in its slot; letting go takes them away (§4, §5.12).
+// T3's Kbd, in its slot; letting go takes them away (§4, §5.12), and so
+// does the window losing the keyboard, where mod is let go of somewhere
+// this window never hears (shortcutModifierState.ts resets on blur).
 func TestJumpHints(t *testing.T) {
 	th := NewTheme()
 	s := &Scene{Live: true, Sidebar: Sidebar{Items: []SidebarItem{{Row: &ThreadRow{ID: "e/1", Title: "One", Jump: 1}}}}}
@@ -536,6 +538,61 @@ func TestJumpHints(t *testing.T) {
 	wantPixel(t, at(250*time.Millisecond), probe, kbd, "the jump key, held")
 	lw.r.Queue(key.Event{Name: mod, State: key.Release})
 	wantPixel(t, at(300*time.Millisecond), probe, SP.Sidebar, "let go")
+	lw.r.Queue(key.Event{Name: mod, State: key.Press, Modifiers: key.ModShortcut})
+	at(400 * time.Millisecond)
+	wantPixel(t, at(650*time.Millisecond), probe, kbd, "the jump key, held again")
+	th.WindowBlurred()
+	wantPixel(t, at(700*time.Millisecond), probe, SP.Sidebar, "the window lost the keyboard")
+}
+
+// mod+Shift+[ and ] open the thread before and after (thread.previous,
+// thread.next, §5.12). Gio names the keys by what Shift makes of them on a
+// Mac and on Linux, "{" and "}", and by the keys themselves on Windows.
+func TestThreadStepKeys(t *testing.T) {
+	th := NewTheme()
+	s := &Scene{Live: true}
+	var r gioinput.Router
+	var ops op.Ops
+	frame := func() []Action {
+		ops.Reset()
+		gtx := layout.Context{Ops: &ops, Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Exact(image.Pt(1440, 900)), Source: r.Source(), Now: time.Now()}
+		th.Desktop(gtx, s)
+		r.Frame(&ops)
+		return th.Actions()
+	}
+	frame()
+	for _, c := range []struct {
+		name key.Name
+		want string
+	}{{"{", "thread.prev"}, {"}", "thread.next"}, {"[", "thread.prev"}, {"]", "thread.next"}} {
+		r.Queue(key.Event{Name: c.name, Modifiers: key.ModShortcut | key.ModShift, State: key.Press})
+		if acts := frame(); len(acts) != 1 || acts[0].ID != c.want {
+			t.Errorf("mod+Shift+%s: actions %+v, want just %s", c.name, acts, c.want)
+		}
+	}
+}
+
+// The shell's shortcuts cost a frame nothing: shellKeys asks for its keys
+// without allocating, so a frame that only animates doesn't for them.
+func TestShellKeysDontAllocate(t *testing.T) {
+	th := NewTheme()
+	s := &Scene{Live: true}
+	var r gioinput.Router
+	var ops op.Ops
+	gtx := layout.Context{Ops: &ops, Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Exact(image.Pt(800, 600)), Source: r.Source()}
+	frame := func(keys bool) func() {
+		return func() {
+			ops.Reset()
+			if keys {
+				th.shellKeys(gtx, s)
+			}
+			r.Frame(&ops)
+		}
+	}
+	frame(true)()
+	if n, base := testing.AllocsPerRun(50, frame(true)), testing.AllocsPerRun(50, frame(false)); n > base {
+		t.Errorf("a frame allocates %v times with the shell's keys, %v without", n, base)
+	}
 }
 
 // A click on a card's pull request is the badge's: it opens the pull
@@ -623,9 +680,9 @@ func TestProjectMonogram(t *testing.T) {
 	ic := ProjectIcon{Text: "TN", Color: "amber"}
 	img := drawn(t, image.Pt(40, 16), 1, func(gtx C) D {
 		fill(gtx, bg, image.Rect(0, 0, 40, 16), 0)
-		th.projectIcon(gtx, ic, 16, bg, 0)
+		th.projectIcon(gtx, ic, 16, rowInk{bg: bg, k: 1}, 0)
 		op.Offset(image.Pt(20, 0)).Add(gtx.Ops)
-		return th.projectIcon(gtx, ic, 16, bg, 1)
+		return th.projectIcon(gtx, ic, 16, rowInk{bg: bg, k: 1}, 1)
 	})
 	tile := over(alpha(Tailwind["amber-600"], 0x24), bg)
 	wantPixel(t, img, image.Pt(1, 8), tile, "the tile")
@@ -640,7 +697,7 @@ func TestProjectLucideIcon(t *testing.T) {
 	icon := func(name string) *image.RGBA {
 		return drawn(t, image.Pt(16, 16), 1, func(gtx C) D {
 			fill(gtx, bg, image.Rect(0, 0, 16, 16), 0)
-			return th.projectIcon(gtx, ProjectIcon{Lucide: name, Color: "gray"}, 16, bg, 0)
+			return th.projectIcon(gtx, ProjectIcon{Lucide: name, Color: "gray"}, 16, rowInk{bg: bg, k: 1}, 0)
 		})
 	}
 	got, want := icon("not-an-icon"), icon("folder-code")
@@ -649,20 +706,94 @@ func TestProjectLucideIcon(t *testing.T) {
 	}
 }
 
-// A branch keeps its end (T3's MiddleTruncate tests).
-func TestSplitMiddle(t *testing.T) {
+// sameInk fails unless got and want are drawn the same in r, give or take
+// the glyphs' antialiasing.
+func sameInk(t *testing.T, got, want *image.RGBA, r image.Rectangle, what string) {
+	t.Helper()
+	for y := r.Min.Y; y < r.Max.Y; y++ {
+		for x := r.Min.X; x < r.Max.X; x++ {
+			if g, w := got.RGBAAt(x, y), want.RGBAAt(x, y); !nearInk(g, w) {
+				t.Errorf("%s: %v at %d,%d, want %v", what, g, x, y, w)
+				return
+			}
+		}
+	}
+}
+
+// A branch keeps its end (MiddleTruncate, 02 §8.17): where it doesn't fit,
+// its head stops after the last whole glyph that leaves room, and "…" sits
+// flush before the tail, which is never cut. The tails are T3's own (its
+// middle-truncate tests); a value that fits, or has nothing worth cutting,
+// is drawn whole.
+func TestMiddleTruncate(t *testing.T) {
+	th := NewTheme()
+	txt := Txt{Size: 12, LineH: 16.0 / 12, Color: SP.SecondaryLabel, MaxLines: 1}
+	gtx := layout.Context{Ops: new(op.Ops), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+	width := func(s string) int { return th.textWidth(gtx, txt, s) }
+	type cut struct {
+		value string
+		w     int
+		want  string
+	}
+	cases := []cut{{"feature/ui-polish", 400, "feature/ui-polish"}, {"short", 400, "short"}}
 	for value, tail := range map[string]string{
 		"feature/ui-polish":                  "ui-polish",
 		"t3/clone-repo-to-other-machine":     "machine",
 		"t3/investigate-release-build-times": "times",
 		"t3/compare-long-featurenames-ab":    "featurenames-ab",
 		"t3/abcdefghijklmnopqrstuvwxyz":      "qrstuvwxyz",
-		"short":                              "",
 	} {
-		if _, got := splitMiddle(value); got != tail {
-			t.Errorf("%q: tail %q, want %q", value, got, tail)
-		}
+		// Room for the head's first four glyphs and a pixel: they show, and
+		// then "…" and the tail.
+		head := value[:4]
+		cases = append(cases, cut{value, width(head) + width("…"+tail) + 1, head + "…" + tail})
 	}
+	at := func(w int, draw func(gtx C) D) *image.RGBA {
+		return drawn(t, image.Pt(420, 36), 1, func(gtx C) D {
+			fill(gtx, SP.Sidebar, image.Rect(0, 0, 420, 36), 0)
+			defer op.Offset(image.Pt(10, 10)).Push(gtx.Ops).Pop()
+			gtx.Constraints = layout.Exact(image.Pt(w, 16))
+			return draw(gtx)
+		})
+	}
+	for _, c := range cases {
+		got := at(c.w, func(gtx C) D { return th.middleTruncate(gtx, txt, c.value) })
+		want := at(400, func(gtx C) D { return th.Text(gtx, txt, c.want) })
+		sameInk(t, got, want, got.Bounds(), fmt.Sprintf("%q in %dpx", c.value, c.w))
+	}
+}
+
+// The hover card's branch is in the lines' muted foreground, not their 75%
+// one (T3's MiddleTruncate there has no colour of its own), and it's cut to
+// the card's 320dp as the meta line's is: the head's whole glyphs, "…" and
+// the tail.
+func TestHoverCardBranch(t *testing.T) {
+	th := NewTheme()
+	branch := strings.Repeat("investigate-", 4) + "times"
+	s := &Scene{Sidebar: Sidebar{Items: []SidebarItem{{Row: &ThreadRow{ID: "e/1", Title: "T", Branch: branch, Age: "1h", Hover: true}}}}}
+	img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, s) })
+	glass := over(alpha(P.Popover, 0xd5), P.Background)
+	txt := Txt{Size: 12, LineH: 16.0 / 12, Color: over(P.MutedForeground, glass), MaxLines: 1}
+	gtx := layout.Context{Ops: new(op.Ops), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Constraints{Max: image.Pt(400, 100)}}
+	width := func(s string) int { return th.textWidth(gtx, txt, s) }
+	// The tail starts on the last word, after its "-"
+	// (splitForMiddleTruncate's shorter word tail).
+	head, tail := strings.TrimSuffix(branch, "times"), "times"
+	n := len(head)
+	for width(head[:n])+width("…"+tail) > 272 {
+		n--
+	}
+	// The card is at 251, 102: its 13dp of padding and border, the title's
+	// line and 8dp more put the branch under it; the 2dp indent, the 12dp
+	// icon and its 8dp gap put it at 286, 272 wide.
+	y := 102 + 13 + th.Text(gtx, Txt{Size: 12, LineH: 15.0 / 12, Font: UI(font.Medium), MaxLines: 1}, "T").Size.Y + 8
+	ref := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D {
+		fill(gtx, glass, image.Rect(0, 0, 1440, 900), 0)
+		defer op.Offset(image.Pt(286, y)).Push(gtx.Ops).Pop()
+		gtx.Constraints = layout.Constraints{Max: image.Pt(400, 100)}
+		return th.Text(gtx, txt, head[:n]+"…"+tail)
+	})
+	sameInk(t, img, ref, image.Rect(286, y, 286+272, y+16), "the card's branch")
 }
 
 // sidebarFrames drives the sidebar through Gio's router, 256 by 800.
@@ -743,4 +874,300 @@ func TestSettleIsntARowClick(t *testing.T) {
 	if len(acts) != 1 || acts[0].ID != "settle:e/1" {
 		t.Fatalf("actions %+v, want just settle:e/1", acts)
 	}
+}
+
+// Moving from one row's open card to another's, up the list or down it,
+// swaps the cards in the first frame: the new one opens at once and the
+// old one goes at once, whichever row is drawn first (§3.15, the list's
+// tooltip group).
+func TestHoverCardHandoff(t *testing.T) {
+	defer SetDark(false)
+	SetDark(true) // the card's border shows against the black sidebar
+	th := NewTheme()
+	s := rowsScene()
+	s.Live = true
+	for _, it := range s.Sidebar.Items {
+		if it.Row != nil {
+			it.Row.Hover = false
+		}
+	}
+	lw := newLiveWindow(t, image.Pt(1440, 900))
+	t0 := time.Now()
+	at := func(d time.Duration) *image.RGBA {
+		return lw.frame(t, t0.Add(d), func(gtx C) D { return th.Desktop(gtx, s) })
+	}
+	move := func(y float32) {
+		lw.r.Queue(pointer.Event{Kind: pointer.Move, Position: f32.Pt(100, y), Source: pointer.Mouse})
+	}
+	glass := over(alpha(P.Popover, 0xd5), P.Background)
+	border := over(alpha(P.Foreground, 0x1a), glass)
+	// The first card's card is 102..189 at x 251, the second's from 185.
+	first, second := image.Pt(251, 140), image.Pt(251, 200)
+	at(0)
+	move(215)
+	at(10 * time.Millisecond)
+	at(160 * time.Millisecond)
+	wantPixel(t, at(400*time.Millisecond), second, border, "the second card's card")
+	move(140)
+	img := at(500 * time.Millisecond)
+	wantPixel(t, img, first, border, "up onto the first: its card, at once")
+	wantPixel(t, img, second, SP.Sidebar, "up onto the first: the second's, gone at once")
+	move(215)
+	img = at(600 * time.Millisecond)
+	wantPixel(t, img, second, border, "back down: the second's card, at once")
+	wantPixel(t, img, first, SP.Sidebar, "back down: the first's, gone at once")
+}
+
+// The list's top fade is there in the very frame a wheel scrolls it from
+// its top: the fade, like the rows, is drawn where the list is once this
+// frame's scrolling is in, not where it was (§3.3, port note 4).
+func TestListFadeFollowsScroll(t *testing.T) {
+	th := NewTheme()
+	s := &Scene{Live: true, Sidebar: Sidebar{HasProjects: true}}
+	for i := range 20 {
+		s.Sidebar.Items = append(s.Sidebar.Items, SidebarItem{Row: &ThreadRow{ID: fmt.Sprint("e/", i), Title: fmt.Sprint("Thread ", i), Age: "1h", Draft: true}})
+	}
+	lw := newLiveWindow(t, image.Pt(1440, 900))
+	frame := func() *image.RGBA { return lw.frame(t, time.Now(), func(gtx C) D { return th.Desktop(gtx, s) }) }
+	frame()
+	at := f32.Pt(100, 400)
+	lw.r.Queue(pointer.Event{Kind: pointer.Move, Position: at, Source: pointer.Mouse})
+	frame()
+	lw.r.Queue(pointer.Event{Kind: pointer.Scroll, Position: at, Scroll: f32.Pt(0, 30), Source: pointer.Mouse})
+	img := frame()
+	draft := over(alpha(SP.Warning, 0x0a), SP.Sidebar)
+	// Cards are 64 apart plus the 1dp gap: scrolled 30, the first one's
+	// surface is at 72..132 and the second's from 137.
+	wantPixel(t, img, image.Pt(20, 128), draft, "the first card, scrolled")
+	wantPixel(t, img, image.Pt(20, 134), SP.Sidebar, "the gap after it")
+	wantPixel(t, img, image.Pt(20, 100), SP.Sidebar, "the top fade over it")
+}
+
+// The keyboard's End scrolls the last row into view between frames, not
+// while the list lays its rows out: the frame that takes the key draws the
+// list as it was, whole, and the next as it's going to be, never the old
+// top rows over rows from the new place (§5.12, block nearest).
+func TestKeyboardReveal(t *testing.T) {
+	th := NewTheme()
+	s := &Scene{Live: true}
+	for i := range 20 {
+		r := &ThreadRow{ID: fmt.Sprint("e/", i), Title: fmt.Sprint("Thread ", i), Age: "1h"}
+		r.Active, r.Draft = i == 0, i > 0
+		s.Sidebar.Items = append(s.Sidebar.Items, SidebarItem{Row: r})
+	}
+	lw := newLiveWindow(t, image.Pt(256, 800))
+	frame := func() *image.RGBA {
+		return lw.frame(t, time.Now(), func(gtx C) D {
+			fill(gtx, SP.Sidebar, image.Rectangle{Max: gtx.Constraints.Max}, 0)
+			th.sidebar(gtx, s)
+			return D{Size: gtx.Constraints.Max}
+		})
+	}
+	frame()
+	lw.r.MoveFocus(key.FocusForward)
+	frame()
+	lw.r.Queue(key.Event{Name: key.NameEnd, State: key.Press})
+	took := frame()
+	next := frame()
+	active, draft := over(SP.SidebarRowActive, SP.Sidebar), over(alpha(SP.Warning, 0x0a), SP.Sidebar)
+	// The list starts at 48. As it was, the open card's surface is 50..110
+	// and the next one's from 115; scrolled to the last card (591dp), the
+	// tenth is at 44..104 and the eleventh from 109.
+	ys := []int{70, 107, 112}
+	was := []color.NRGBA{active, active, SP.Sidebar}
+	now := []color.NRGBA{draft, SP.Sidebar, draft}
+	is := func(img *image.RGBA, want []color.NRGBA) bool {
+		for i, y := range ys {
+			if !nearPixel(img.RGBAAt(20, y), want[i]) {
+				return false
+			}
+		}
+		return true
+	}
+	if !is(took, was) && !is(took, now) {
+		t.Errorf("the frame that took End has %v, %v and %v at y %v: neither where the list was nor where it went",
+			took.RGBAAt(20, ys[0]), took.RGBAAt(20, ys[1]), took.RGBAAt(20, ys[2]), ys)
+	}
+	if !is(next, now) {
+		t.Errorf("the frame after End has %v, %v and %v at y %v, not the list at its last card",
+			next.RGBAAt(20, ys[0]), next.RGBAAt(20, ys[1]), next.RGBAAt(20, ys[2]), ys)
+	}
+	wantPixel(t, next, image.Pt(20, 740), draft, "the last card, at the bottom (694..754)")
+}
+
+// A right-click on a hovered card's control opens the row's menu, as T3's
+// contextmenu bubbles up to the row (§5.11, §5.13); a click on one is
+// still the control's alone (TestSettleIsntARowClick).
+func TestRightClickOnAControl(t *testing.T) {
+	th := NewTheme()
+	s := &Scene{Live: true, Sidebar: Sidebar{Items: []SidebarItem{
+		{Row: &ThreadRow{ID: "e/1", Title: "One", Age: "5m", CanSettle: true}},
+	}}}
+	frame, r := sidebarFrames(th, s)
+	frame()
+	r.Queue(pointer.Event{Kind: pointer.Move, Position: f32.Pt(100, 68), Source: pointer.Mouse})
+	frame()
+	frame()
+	at := f32.Pt(225, 68) // Settle
+	r.Queue(pointer.Event{Kind: pointer.Move, Position: at, Source: pointer.Mouse})
+	frame()
+	r.Queue(
+		pointer.Event{Kind: pointer.Press, Position: at, Buttons: pointer.ButtonSecondary, Source: pointer.Mouse},
+		pointer.Event{Kind: pointer.Release, Position: at, Source: pointer.Mouse},
+	)
+	if acts := frame(); len(acts) != 1 || acts[0].ID != "thread:e/1" || acts[0].Kind != "context" {
+		t.Fatalf("actions %+v, want just the row's context menu", acts)
+	}
+}
+
+// A snooze menu whose card is out of sight closes: nothing would draw it,
+// and the window-wide catch under menus would swallow the next click.
+func TestSnoozeMenuGoesWithItsCard(t *testing.T) {
+	th := NewTheme()
+	s := &Scene{Live: true}
+	for i := range 20 {
+		s.Sidebar.Items = append(s.Sidebar.Items, SidebarItem{Row: &ThreadRow{ID: fmt.Sprint("e/", i), Title: fmt.Sprint("Thread ", i), Age: "1h", CanSnooze: true}})
+	}
+	s.Sidebar.Snooze = &SnoozeMenu{Row: "e/1", Choices: []MenuItem{{ID: "a", Label: "In 1 hour", Detail: "11:00 AM"}}}
+	frame, _ := sidebarFrames(th, s)
+	if acts := frame(); len(acts) != 0 {
+		t.Fatalf("with its card in sight: actions %+v, want none", acts)
+	}
+	s.Sidebar.Snooze.Row = "e/19"
+	if acts := frame(); len(acts) != 1 || acts[0].ID != "menus.close" {
+		t.Fatalf("with its card out of sight: actions %+v, want menus.close", acts)
+	}
+}
+
+// A receded working card is drawn at 70% (opacity-70 on the whole row,
+// SidebarThreadRow.tsx, §3.5), its project's icon and its jump key with
+// the rest of it.
+func TestRecededCardFades(t *testing.T) {
+	defer SetDark(false)
+	SetDark(true)
+	th := NewTheme()
+	s := &Scene{Sidebar: Sidebar{JumpHints: true, Items: []SidebarItem{{Row: &ThreadRow{ID: "e/1", Title: "Working", Project: "tern",
+		Icon: ProjectIcon{Text: "TN", Color: "amber"}, Status: StatusWorking, Label: "Working", Recede: true, Jump: 1}}}}}
+	img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, s) })
+	in := rowInk{bg: SP.Sidebar, k: 0.7}
+	// Line 1 is 110..130: the project's icon at 18..34, its tile 1dp in;
+	// the jump key at the slot's end, 237, which its padding reaches.
+	wantPixel(t, img, image.Pt(19, 120), in.of(over(alpha(projectColor("amber"), 0x24), SP.Sidebar)), "the project's tile, at 70%")
+	wantPixel(t, img, image.Pt(235, 120), in.of(alpha(P.Foreground, 0x12)), "the jump key, at 70%")
+}
+
+// A slim row's Un-settle button has its tooltip to itself: the row's hover
+// card stands aside while it shows, as one tooltip in the list's group
+// does for another (02 §8.10, 04 §3.15).
+func TestSlimRowTipStandsTheCardAside(t *testing.T) {
+	defer SetDark(false)
+	SetDark(true)
+	th := NewTheme()
+	s := &Scene{Live: true, Sidebar: Sidebar{HasProjects: true, Items: []SidebarItem{
+		{Shelf: &Shelf{ID: "settled", Label: "Settled", Count: 1, Open: true}},
+		{Row: &ThreadRow{ID: "e/1", Slim: true, Shelf: "settled", Title: "Settled", Project: "tern", Icon: ProjectIcon{Text: "TN", Color: "amber"}, Age: "3d", CanSettle: true}},
+	}}}
+	lw := newLiveWindow(t, image.Pt(1440, 900))
+	t0 := time.Now()
+	at := func(d time.Duration) *image.RGBA {
+		return lw.frame(t, t0.Add(d), func(gtx C) D { return th.Desktop(gtx, s) })
+	}
+	glass := over(alpha(P.Popover, 0xd5), P.Background)
+	border := over(alpha(P.Foreground, 0x1a), glass)
+	// The row is 812..848, its card's left border at 251.
+	edge := image.Pt(251, 830)
+	at(0)
+	lw.r.Queue(pointer.Event{Kind: pointer.Move, Position: f32.Pt(100, 830), Source: pointer.Mouse})
+	at(10 * time.Millisecond)
+	at(160 * time.Millisecond)
+	wantPixel(t, at(400*time.Millisecond), edge, border, "the row's card")
+	// Un-settle is 26 by 24 at the slot's end, 4dp into the padding:
+	// 215..241, 818..842. Its tooltip sits 4dp over it, centred.
+	lw.r.Queue(pointer.Event{Kind: pointer.Move, Position: f32.Pt(228, 830), Source: pointer.Mouse})
+	at(500 * time.Millisecond)
+	at(660 * time.Millisecond)
+	img := at(900 * time.Millisecond)
+	wantPixel(t, img, edge, SP.Sidebar, "the card, stood aside")
+	tip := th.tooltip(layout.Context{Ops: new(op.Ops), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Constraints{Max: image.Pt(320, 200)}}, "Un-settle thread").Size
+	wantPixel(t, img, image.Pt(215+(26-tip.X)/2+3, 818-4-tip.Y/2), P.Popover, "the button's tooltip")
+}
+
+// A menu opened from a row with the keyboard gives the focus back to the
+// row as it closes, so the list's keys carry on from there
+// (contextMenuFallback.ts restores the focus it took, §5.13).
+func TestMenuGivesFocusBack(t *testing.T) {
+	th := NewTheme()
+	s := &Scene{Live: true, Sidebar: Sidebar{Items: []SidebarItem{
+		{Row: &ThreadRow{ID: "e/1", Title: "One", Age: "1h"}},
+		{Row: &ThreadRow{ID: "e/2", Title: "Two", Age: "1h"}},
+		{Row: &ThreadRow{ID: "e/3", Title: "Three", Age: "1h"}},
+	}}}
+	lw := newLiveWindow(t, image.Pt(1440, 900))
+	frame := func() *image.RGBA { return lw.frame(t, time.Now(), func(gtx C) D { return th.Desktop(gtx, s) }) }
+	press := func(name key.Name, mods key.Modifiers) ([]Action, *image.RGBA) {
+		lw.r.Queue(key.Event{Name: name, Modifiers: mods, State: key.Press})
+		frame()
+		acts := th.Actions()
+		img := frame()
+		return append(acts, th.Actions()...), img
+	}
+	has := func(acts []Action, id, kind string) bool {
+		for _, a := range acts {
+			if a.ID == id && a.Kind == kind {
+				return true
+			}
+		}
+		return false
+	}
+	// The cards are 60dp at 102, 167 and 232: a focused one's 2dp ring runs
+	// down its left edge at x 8.
+	ring := func(row int) image.Point { return image.Pt(8, 132+65*row) }
+	img := frame()
+	for i := 0; i < 6 && !nearPixel(img.RGBAAt(ring(0).X, ring(0).Y), SP.Ring); i++ {
+		lw.r.MoveFocus(key.FocusForward)
+		frame()
+		img = frame()
+	}
+	wantPixel(t, img, ring(0), SP.Ring, "Tab onto the first row")
+	_, img = press(key.NameDownArrow, 0)
+	wantPixel(t, img, ring(1), SP.Ring, "Down onto the second")
+	if acts, _ := press(key.NameF10, key.ModShift); !has(acts, "thread:e/2", "context") {
+		t.Fatalf("Shift+F10: actions %+v, want the second row's menu", acts)
+	}
+	s.Menu = &ContextMenu{Keyboard: true, Items: []MenuItem{{ID: "pin", Label: "Pin thread", Icon: "pin"}}}
+	frame()
+	wantPixel(t, frame(), ring(1), SP.Sidebar, "the menu, with the focus")
+	if acts, _ := press(key.NameEscape, 0); !has(acts, "menus.close", "click") {
+		t.Fatalf("Escape: actions %+v, want the menu closed", acts)
+	}
+	s.Menu = nil
+	frame()
+	wantPixel(t, frame(), ring(1), SP.Ring, "the menu closed: the second row has the focus back")
+	_, img = press(key.NameDownArrow, 0)
+	wantPixel(t, img, ring(2), SP.Ring, "and Down goes on to the third")
+}
+
+// A row drawn again after a frame without it starts at rest, as a remounted
+// row does: what the theme kept for it went with the frame that didn't draw
+// it, so the rows a session shows don't pile up there (§6).
+func TestRowComesBackAtRest(t *testing.T) {
+	th := NewTheme()
+	row := &ThreadRow{ID: "e/1", Slim: true, Shelf: "settled", Title: "Settled", Project: "tern", Icon: ProjectIcon{Text: "TN", Color: "amber"}, Age: "3d", Hover: true}
+	list := func(rows ...*ThreadRow) *Scene {
+		s := &Scene{Sidebar: Sidebar{HasProjects: true, Items: []SidebarItem{{Shelf: &Shelf{ID: "settled", Label: "Settled", Count: 1, Open: true}}}}}
+		for _, r := range rows {
+			s.Sidebar.Items = append(s.Sidebar.Items, SidebarItem{Row: r})
+		}
+		return s
+	}
+	draw := func(s *Scene) *image.RGBA {
+		return drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, s) })
+	}
+	draw(list(row)) // hovered: its icon in colour
+	draw(list())    // gone for a frame
+	row.Hover = false
+	img := draw(list(row))
+	// The slim row is 812..848: its icon at 18..34 and 822..838.
+	tile := over(alpha(projectColor("amber"), 0x24), SP.Sidebar)
+	wantPixel(t, img, image.Pt(19, 830), over(alpha(grey(tile), 0x66), SP.Sidebar), "the icon back, grey at 40% at once")
 }

@@ -60,6 +60,12 @@ func run(w *app.Window) error {
 		switch e := ev.(type) {
 		case app.DestroyEvent:
 			return e.Err
+		case app.ConfigEvent:
+			if !e.Config.Focused {
+				// The jump hints held up by a modifier go with it.
+				th.WindowBlurred()
+				w.Invalidate()
+			}
 		case app.FrameEvent:
 			if d := dark.Load(); d != shownDark {
 				shownDark = d

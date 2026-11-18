@@ -23,7 +23,8 @@ type menuState struct {
 	open  bool
 	path  []int
 	hi    []int
-	tag   int // the menu's keyboard focus
+	tag   int    // the menu's keyboard focus
+	from  string // the row that had the focus as it opened, which gets it back
 	hover map[string]*gesture.Hover
 }
 
@@ -33,7 +34,13 @@ type menuState struct {
 func (th *Theme) contextMenu(gtx C, win image.Point, s *Scene) {
 	ms := &th.in.menu
 	if !ms.open {
-		*ms = menuState{open: true, hi: []int{-1}, hover: ms.hover}
+		from := ""
+		for nav, t := range th.in.rowTags {
+			if gtx.Focused(t) {
+				from = nav
+			}
+		}
+		*ms = menuState{open: true, hi: []int{-1}, from: from, hover: ms.hover}
 		if s.Menu.Keyboard {
 			ms.hi[0] = nextEnabled(s.Menu.Items, -1, 1)
 		}
@@ -78,6 +85,18 @@ func (th *Theme) contextMenu(gtx C, win image.Point, s *Scene) {
 		from = rows[i].Add(at)
 		items = items[i].Children
 	}
+}
+
+// menuClosed is the menu gone since the last frame. If it still had the
+// focus and nothing else is taking it, the focus goes back to the row that
+// had it as the menu opened (contextMenuFallback.ts restores the element
+// focused before), so the list's keys work on from there.
+func (th *Theme) menuClosed(gtx C) {
+	ms := &th.in.menu
+	if gtx.Focused(&ms.tag) && th.in.focus == "" {
+		th.in.focusRow = ms.from
+	}
+	ms.open = false
 }
 
 // nextEnabled is the next item from i in dir that can be picked, wrapping
