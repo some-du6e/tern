@@ -21,6 +21,32 @@ type Project struct {
 	Title                 string          `json:"title"`
 	WorkspaceRoot         string          `json:"workspaceRoot"`
 	DefaultModelSelection *ModelSelection `json:"defaultModelSelection"`
+	ProjectIcon           *ProjectIcon    `json:"projectIcon"`
+	Scripts               []ProjectScript `json:"scripts"`
+}
+
+// ProjectIcon is a project's chosen mark (project.ts): a lucide icon, an
+// emoji or a monogram, in one of T3's project colours. Older lucide icons
+// carry a monogram in MonogramText or Monogram.
+type ProjectIcon struct {
+	Kind         string `json:"kind"` // lucide, emoji, monogram
+	Name         string `json:"name"`
+	Emoji        string `json:"emoji"`
+	Text         string `json:"text"`
+	Color        string `json:"color"`
+	MonogramText string `json:"monogramText"`
+	Monogram     string `json:"monogram"`
+}
+
+// ProjectScript is one of a project's actions, run in a terminal.
+type ProjectScript struct {
+	ID                  string `json:"id"`
+	Name                string `json:"name"`
+	Command             string `json:"command"`
+	Icon                string `json:"icon"` // play, test, lint, configure, build, debug
+	RunOnWorktreeCreate bool   `json:"runOnWorktreeCreate"`
+	RunOnSettle         bool   `json:"runOnSettle"`
+	StopOnSettle        bool   `json:"stopOnSettle"`
 }
 
 type RuntimeRequest struct {
@@ -60,7 +86,14 @@ type Thread struct {
 	InteractionMode       string          `json:"interactionMode"`
 	Branch                string          `json:"branch"`
 	WorktreePath          string          `json:"worktreePath"`
+	LatestRunID           string          `json:"latestRunId"`
+	LinkOrigin            *LinkOrigin     `json:"linkOrigin"`
 	EnvironmentID         string          `json:"-"`
+}
+
+// LinkOrigin is the linked environment whose agent started a thread.
+type LinkOrigin struct {
+	Label string `json:"label"`
 }
 
 // ShellItem is one value from orchestration.subscribeShell.
@@ -191,10 +224,15 @@ type Attachment struct {
 	SizeBytes int    `json:"sizeBytes"`
 }
 
-// ServerConfig is the part of server.getConfig the composer needs.
+// ServerConfig is the part of server.getConfig the composer and the thread
+// details card need.
 type ServerConfig struct {
-	Providers []Provider `json:"providers"`
-	Settings  struct {
+	Providers            []Provider         `json:"providers"`
+	AvailableEditors     []string           `json:"availableEditors"`
+	RemoteOpenTargets    []RemoteOpenTarget `json:"remoteOpenTargets"`
+	ScratchWorkspaceRoot string             `json:"scratchWorkspaceRoot"`
+	Settings             struct {
+		EnvironmentIcon       string          `json:"environmentIcon"`
 		DefaultModelSelection *ModelSelection `json:"defaultModelSelection"`
 		DefaultRuntimeMode    string          `json:"defaultRuntimeMode"`
 		Favorites             []struct {
@@ -207,6 +245,9 @@ type ServerConfig struct {
 		} `json:"providerModelPreferences"`
 	} `json:"settings"`
 	Environment struct {
+		Platform struct {
+			Machine string `json:"machine"`
+		} `json:"platform"`
 		Capabilities struct {
 			ServerResolvedCommandContext bool `json:"serverResolvedCommandContext"`
 			InlineMessageContext         bool `json:"inlineMessageContext"`
