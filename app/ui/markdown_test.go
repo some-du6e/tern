@@ -64,13 +64,14 @@ func TestTaskTextIndent(t *testing.T) {
 }
 
 // Code in a link is --contrast-foreground on its 10% box, not the link's
-// colour (index.css .chat-markdown :not(pre) > code).
+// colour (index.css .chat-markdown :not(pre) > code); only the link's
+// favicon before it, 3.5 + 14 + 2.8dp, is.
 func TestCodeInLink(t *testing.T) {
 	img := mdDrawn(t, "[`io.Writer`](https://pkg.go.dev/io#Writer)", mdBody(), 300, 30, 2)
 	link := rgb(0x1447e6)
 	box := false
 	for y := 0; y < 2*23; y++ {
-		for x := 0; x < 2*300; x++ {
+		for x := 2 * 21; x < 2*300; x++ {
 			c := img.RGBAAt(x, y)
 			if near(c.R, link.R, 24) && near(c.G, link.G, 24) && near(c.B, link.B, 24) {
 				t.Fatalf("a pixel at %d,%d is the link's colour", x, y)
@@ -80,6 +81,42 @@ func TestCodeInLink(t *testing.T) {
 	}
 	if !box {
 		t.Error("no pixel of the code's #e5e5e5 box")
+	}
+}
+
+// An external link's favicon is 14dp, 3.5dp after the line's start and
+// 2.8dp before its words, in the link's colour: GitHub's filled mark,
+// whose middle is the cat's face, for its links, and the globe, whose
+// equator crosses its middle, for others (§3.5, MarkdownExternalLink.tsx).
+func TestLinkFavicon(t *testing.T) {
+	link := rgb(0x1447e6)
+	isLink := func(c color.RGBA) bool { return near(c.R, link.R, 40) && near(c.G, link.G, 40) && near(c.B, link.B, 40) }
+	for _, c := range []struct {
+		src    string
+		middle bool // the icon's middle is the link's colour
+	}{{"[the repo](https://github.com/acme/repo)", false}, {"[the docs](https://example.com/docs)", true}} {
+		img := mdDrawn(t, c.src, mdBody(), 300, 30, 2)
+		// The 22.75 line centres the icon: its middle is 11.4dp down, 10.5dp in.
+		if got := isLink(img.RGBAAt(21, 23)); got != c.middle {
+			t.Errorf("%s: the icon's middle is the link's colour: %v, want %v", c.src, got, c.middle)
+		}
+		ink := 0
+		for y := 0; y < 2*23; y++ {
+			for x := 0; x < 2*21; x++ {
+				px := img.RGBAAt(x, y)
+				switch {
+				case x < 2*3 || x >= 2*18 && x < 2*20:
+					if inked(px) {
+						t.Fatalf("%s: ink at %d,%d, outside the icon and before the words", c.src, x, y)
+					}
+				case isLink(px):
+					ink++
+				}
+			}
+		}
+		if ink < 40 {
+			t.Errorf("%s: %d pixels of the icon are the link's colour", c.src, ink)
+		}
 	}
 }
 

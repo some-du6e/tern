@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"image"
 	"image/color"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"gioui.org/f32"
 	"gioui.org/font"
@@ -615,12 +617,16 @@ func (b *mdBuilder) inline(t *inlineText, c ast.Node, st runStyle) {
 		b.links = append(b.links, string(c.Destination))
 		ls := st
 		ls.link, ls.color = len(b.links), over(P.InfoForeground, b.st.on)
+		from := len(t.runs)
 		b.inlines(t, c, ls)
+		markFavicon(t, from, string(c.Destination))
 	case *ast.AutoLink:
 		b.links = append(b.links, string(c.URL(b.src)))
 		ls := st
 		ls.link, ls.color = len(b.links), over(P.InfoForeground, b.st.on)
+		from := len(t.runs)
 		b.addText(t, string(c.Label(b.src)), ls)
+		markFavicon(t, from, string(c.URL(b.src)))
 	case *ast.Image:
 		// The image's words, where T3 would show the picture.
 		b.inlines(t, c, st)
@@ -641,6 +647,43 @@ func (b *mdBuilder) inline(t *inlineText, c ast.Node, st runStyle) {
 		b.inlines(t, c, st)
 	}
 }
+
+// markFavicon puts an external link's favicon before its text, the runs
+// from from on: GitHub's mark for its links, else the globe, which T3
+// draws for every host whose icon it doesn't fetch (favicon.ts,
+// MarkdownExternalLink.tsx; the s2 favicon service isn't asked here).
+// A link without words has none.
+func markFavicon(t *inlineText, from int, href string) {
+	if strings.HasPrefix(href, "//") {
+		href = "https:" + href
+	}
+	u, err := url.Parse(href)
+	if err != nil || u.Scheme != "http" && u.Scheme != "https" || u.Hostname() == "" {
+		return
+	}
+	icon := "globe"
+	if host := strings.ToLower(u.Hostname()); host == "github.com" || strings.HasSuffix(host, ".github.com") {
+		icon = "github"
+	}
+	for i := from; i < len(t.runs); i++ {
+		if strings.TrimSpace(t.runs[i].text) != "" {
+			t.runs[i].favicon = icon
+			return
+		}
+	}
+}
+
+// leadingLinkText is the start of a link's text that stays with its
+// favicon: its protocol, else its first character.
+func leadingLinkText(s string) string {
+	if p := linkProtocol.FindString(s); p != "" {
+		return p
+	}
+	_, n := utf8.DecodeRuneInString(s)
+	return s[:n]
+}
+
+var linkProtocol = regexp.MustCompile(`(?i)^https?://`)
 
 // addText adds s in style st: pictures' chips as chip runs, white space
 // collapsed as CSS does unless st.pre.

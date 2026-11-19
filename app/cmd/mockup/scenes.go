@@ -114,7 +114,8 @@ func approvalRow() ui.TimelineRow {
 // markdownReply has every kind of block T3's markdown draws.
 const markdownReply = "## Two ways in\n\n" +
 	"The uploader knows how many bytes went out, so it can **report progress** without another goroutine; " +
-	"see the [`io.Writer` docs](https://pkg.go.dev/io#Writer) for the shape, and ~~a ticker~~ isn't needed.\n\n" +
+	"see the [`io.Writer` docs](https://pkg.go.dev/io#Writer) for the shape, and ~~a ticker~~ isn't needed " +
+	"([the issue](https://github.com/acme/upload/issues/12) asks for bytes).\n\n" +
 	"1. **A callback.** `Send` takes `OnProgress func(sent, total int64)` and calls it after each chunk.\n" +
 	"2. **A channel.** `Send` returns a `<-chan Progress` that closes when the upload ends.\n" +
 	"   - simpler to cancel\n   - but the caller must drain it\n\n" +

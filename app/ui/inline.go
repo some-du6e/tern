@@ -44,6 +44,10 @@ type inlineRun struct {
 	// a lucide icon size dp square, centred on the line.
 	gap  float32
 	icon string
+	// favicon is an external link's mark before the run's text: a 14dp
+	// icon (see iconW) in margins of 0.25em and 0.2em, kept on one line
+	// with the text's protocol or first character (MarkdownExternalLink.tsx).
+	favicon string
 }
 
 // inlineText is one paragraph: its runs, and the block's own font and line
@@ -120,6 +124,7 @@ type piece struct {
 	ascent     int
 	descent    int
 	chip       string
+	icon       string // an icon's name: an icon run's, or a favicon
 }
 
 // metrics is the font's ascent and descent at px, measured once.
@@ -201,7 +206,7 @@ func (th *Theme) layoutInline(gtx C, t *inlineText, maxW int) *inlineLayout {
 			if x > start && x+w > maxW {
 				newLine()
 			}
-			line = append(line, piece{run: r, x: x, w: w})
+			line = append(line, piece{run: r, x: x, w: w, icon: r.icon})
 			x += w
 			continue
 		case r.chip > 0:
@@ -228,7 +233,19 @@ func (th *Theme) layoutInline(gtx C, t *inlineText, maxW int) *inlineLayout {
 			pad, ends = px(2), true
 		}
 		rest := r.text
-		for first := true; rest != ""; first = false {
+		glued := false // the favicon before: the text breaks anywhere rather than leave it
+		if r.favicon != "" {
+			_, _, lw := th.shapeLine(r.font, px(r.size), leadingLinkText(rest), 1<<20, false)
+			ms, s, me := px(0.25*r.size), px(14), px(0.2*r.size)
+			if x > start && x+ms+s+me+lw > maxW {
+				newLine()
+			}
+			m := th.metrics(r.font, px(r.size))
+			line = append(line, piece{run: r, x: x + ms, w: s, icon: r.favicon, ascent: int(m.ascent + 0.5), descent: int(m.descent + 0.5)})
+			x += ms + s + me
+			glued = true
+		}
+		for first := true; rest != ""; first, glued = false, false {
 			if x == start {
 				// Spaces at the start of a wrapped line collapse away.
 				rest = strings.TrimLeftFunc(rest, unicode.IsSpace)
@@ -243,7 +260,7 @@ func (th *Theme) layoutInline(gtx C, t *inlineText, maxW int) *inlineLayout {
 			avail := maxW - x - lpad - pad
 			gs, n, w := th.shapeLine(r.font, px(r.size), rest, max(1, avail), false)
 			if n == 0 {
-				if x > start {
+				if x > start && !glued {
 					newLine()
 					continue
 				}
@@ -351,10 +368,17 @@ func (th *Theme) paintInline(gtx C, t *inlineText, lines [][]piece, maxW int) (o
 		for _, p := range ln {
 			r := p.run
 			col := r.color
-			if r.icon != "" {
-				s := int(r.size*gtx.Metric.PxPerDp + 0.5)
+			if r.link > 0 && r.gap == 0 {
+				links = append(links, linkBox{r.link - 1, image.Rect(dx+p.x, base-p.ascent, dx+p.x+p.w, base+p.descent)})
+			}
+			if p.icon != "" {
+				size := r.size
+				if r.icon == "" {
+					size = 14 // a favicon
+				}
+				s := int(size*gtx.Metric.PxPerDp + 0.5)
 				off := op.Offset(image.Pt(p.x, int(top+(lineH-float32(s))/2+0.5))).Push(ops)
-				LucideW(r.icon, col, r.size)(g)
+				iconW(p.icon, col, size)(g)
 				off.Pop()
 				continue
 			}
@@ -369,9 +393,6 @@ func (th *Theme) paintInline(gtx C, t *inlineText, lines [][]piece, maxW int) (o
 				fill(g, t.codeBg, box, dp(gtx, 4))
 			case r.mark:
 				fill(g, t.markBg, image.Rect(p.x, base-p.ascent, p.x+p.w, base+p.descent), dp(gtx, 4))
-			}
-			if r.link > 0 {
-				links = append(links, linkBox{r.link - 1, image.Rect(dx+p.x, base-p.ascent, dx+p.x+p.w, base+p.descent)})
 			}
 			if p.chip != "" {
 				em := int(r.size*gtx.Metric.PxPerDp + 0.5)
