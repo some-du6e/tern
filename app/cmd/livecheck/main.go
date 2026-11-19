@@ -228,14 +228,14 @@ func main() {
 	)
 	h.frame()
 	s = h.frame()
-	if s.Context == nil {
+	if s.Menu == nil {
 		log.Fatal("right-click opened no menu")
 	}
 	h.shot("thread-menu")
-	h.c.Handle(h.th, []ui.Action{{ID: "ctx:0:4", Kind: "click"}})
+	h.c.Handle(h.th, []ui.Action{{ID: "ctx:delete", Kind: "click"}})
 	h.shot("delete-confirm")
 	// Mark unread is harmless; read-only, the server must refuse it.
-	h.c.Handle(h.th, []ui.Action{{ID: "ctx:0:2", Kind: "click"}})
+	h.c.Handle(h.th, []ui.Action{{ID: "ctx:mark-unread", Kind: "click"}})
 	s = h.wait("menu refusal", func(s *ui.Scene) bool { return s.Error != "" })
 	fmt.Printf("thread menu refused as expected: %q\n", s.Error)
 	h.c.Handle(h.th, []ui.Action{{ID: "error", Kind: "click"}})
