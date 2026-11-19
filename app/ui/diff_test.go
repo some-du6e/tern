@@ -18,7 +18,7 @@ import (
 // boundaries (docs/ui/13-diff.md §5.11, §8 note 10).
 func TestCompactCount(t *testing.T) {
 	for n, want := range map[int]string{
-		0: "0", 999: "999", 1000: "1k", 1234: "1.2k", 9950: "9.9k", 10000: "10k", 12345: "12k",
+		0: "0", 999: "999", 1000: "1k", 1234: "1.2k", 9950: "9.9k", 9999: "10k", 10000: "10k", 12345: "12k",
 		999_499: "999k", 999_500: "1m", 1_000_000: "1m", 12_500_000: "13m", 999_500_000: "1b",
 	} {
 		if got := CompactCount(n); got != want {

@@ -840,6 +840,15 @@ func (th *Theme) codeInput(gtx C, d *DiffPanel, size image.Point, w, total, top 
 		if !ok {
 			break
 		}
+		if te, ok := ev.(key.EditEvent); ok && te.Text != "" {
+			// Typing on the code view goes to the end of the composer, as
+			// T3's composerFocusRedirect sends it.
+			ed := th.Editor("composer")
+			ed.SetCaret(ed.Len(), ed.Len())
+			th.InsertText("composer", te.Text)
+			th.Focus("composer")
+			continue
+		}
 		e, ok := ev.(pointer.Event)
 		if !ok {
 			continue
