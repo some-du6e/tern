@@ -265,7 +265,7 @@ func TestFreshSession(t *testing.T) {
 	cfg.Settings.DefaultModelSelection = &t3.ModelSelection{InstanceID: "claudeAgent", Model: "opus"}
 	cfg.Environment.Capabilities.FreshContext = true
 	a.envs[0].config = cfg
-	a.openThread("swiss/t1")
+	v := openWith(t, a, nil, nil)
 	th := ui.NewTheme()
 	typed := func(s string) *ui.Scene {
 		th.SetEditorText("composer", s)
@@ -282,7 +282,7 @@ func TestFreshSession(t *testing.T) {
 	if got := menu(typed("/cl")); got != "/clear Run provider command" {
 		t.Fatalf("a thread without messages: %s, want the provider's /clear", got)
 	}
-	a.view.messages["m1"] = t3.Message{ID: "m1", Role: "user", Text: "hi"}
+	v.messages["m1"] = t3.Message{ID: "m1", Role: "user", Text: "hi"}
 	typed("")
 	if got := menu(typed("/cl")); got != "/clear Start a fresh session; earlier messages stay visible" {
 		t.Fatalf("with messages: %s, want T3's /clear alone", got)
