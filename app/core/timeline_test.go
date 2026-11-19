@@ -510,7 +510,7 @@ func TestOpenEntryFetchesItsOutput(t *testing.T) {
 	}
 	tt, _ := openRows(t, item(1))
 	e, _ := tt.a.thread("swiss/t1")
-	e.conn = new(t3.Conn)
+	e.conn = newFakeEnv(t).dial(tt.a)
 	// Fetches land from their own goroutines, so build as Scene does,
 	// under the lock.
 	locked := func(f func()) {
@@ -643,7 +643,7 @@ func TestForkFromReply(t *testing.T) {
 		t.Error("a session that hands threads over offers no fork")
 	}
 	e, th := tt.a.thread("swiss/t1")
-	e.conn, th.Title = new(t3.Conn), "Poems"
+	e.conn, th.Title = newFakeEnv(t).dial(tt.a), "Poems"
 	tt.click("fork:a1")
 	cmd := <-sent
 	point, _ := cmd["sourcePoint"].(map[string]any)
