@@ -22,6 +22,14 @@ func alpha(c color.NRGBA, a uint8) color.NRGBA {
 	return c
 }
 
+// faded is c at k of its own opacity, as Tailwind's color/NN is: a
+// translucent token keeps its own see-through, times k, rounded as
+// Chrome's channels are (border/65 is #e4e4e7a6, not a5).
+func faded(c color.NRGBA, k float32) color.NRGBA {
+	c.A = uint8(float32(c.A)*k + 0.5)
+	return c
+}
+
 // over is c composited onto the opaque bg the way browsers do, in sRGB.
 // Gio blends in linear light, so a translucent T3 token painted as is comes
 // out lighter than in T3: white at 8% on black is #141414 in Chrome but

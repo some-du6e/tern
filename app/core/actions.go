@@ -34,6 +34,11 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		a.mu.Unlock()
 		_ = a.store.Put("sidebar-width", float32(w))
 		return
+	case act.Kind == "resize" && id == "terminal.height":
+		// The drawer's strip, on release.
+		h, _ := strconv.ParseFloat(act.Text, 32)
+		a.setTerminalHeight(float32(h))
+		return
 	case act.Kind == "change" && id == "search":
 		a.mu.Lock()
 		a.search = act.Text
@@ -193,19 +198,19 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 			}
 		}
 	case "terminal.toggle":
-		a.toggleTerminal()
+		a.toggleTerminal(th)
 	case "terminal.new":
-		a.newTerminal()
-	case "terminal.tab":
-		i, _ := strconv.Atoi(arg)
-		a.mu.Lock()
-		if d := a.drawers[a.openID]; d != nil && i >= 0 && i < len(d.terms) {
-			d.active = i
-		}
-		a.mu.Unlock()
+		a.newTerminal(th, false, false)
+	case "terminal.split", "terminal.splitv":
+		a.newTerminal(th, true, verb == "terminal.splitv")
+	case "terminal.activate", "terminal.group":
+		a.activateTerminal(th, arg)
 	case "terminal.close":
-		i, _ := strconv.Atoi(arg)
-		a.closeTerminal(i)
+		a.askCloseTerminal(arg)
+	case "terminal.confirm", "terminal.cancel":
+		a.answerCloseTerminal(th, verb == "terminal.confirm")
+	case "terminal.link":
+		a.openTerminalLink(arg)
 	case "details":
 		// T3's thread details: a card in the canvas when it fits, which
 		// stays open until toggled, else a popover from the header.
@@ -455,9 +460,15 @@ func (a *App) switchTo(th *ui.Theme, do func()) {
 	do()
 	a.mu.Lock()
 	now := a.composerKey()
+	drawer := a.termView() != nil
 	a.mu.Unlock()
 	th.SetEditorText("composer", drafts[now])
-	th.Focus("composer")
+	// A thread with its drawer open gives its terminal the keyboard.
+	if drawer {
+		th.FocusTerminal()
+	} else {
+		th.Focus("composer")
+	}
 }
 
 // drafts is unsent composer text per thread ("draft" for a new thread).

@@ -468,12 +468,6 @@ func (th *Theme) threadView(gtx C, s *Scene, compact bool) D {
 				}
 				return th.composerArea(gtx, s, compact)
 			}),
-			rigid(func(gtx C) D {
-				if s.Term == nil {
-					return D{}
-				}
-				return th.terminalDrawer(gtx, s)
-			}),
 		)
 	})
 }

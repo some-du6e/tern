@@ -34,6 +34,10 @@ type envState struct {
 	projects  map[string]t3.Project
 	threads   map[string]*t3.Thread
 	shellSave time.Time // last time the shell cache was written
+	// Its terminals, every thread's, from subscribeTerminalMetadata, once
+	// the first list is in.
+	terms      []t3.TermSummary
+	termsKnown bool
 }
 
 func newEnv(e t3.Environment, paired bool) *envState {
@@ -95,13 +99,22 @@ type App struct {
 	sidebarHidden bool
 	sidebarWidth  float32
 	machinesOpen  bool                // the footer's machines menu is up
-	drawers       map[string]*drawer  // each thread's terminals, by ref
 	browsers      map[string]*browser // each thread's browser panel, by ref
 	ctxRef        string              // the thread whose right-click menu is open
 	ctxConfirm    bool                // Delete was clicked once and wants a second click
 	errText       string
 	notice        string
 	answers       map[string]map[int]bool // question id -> picked option indexes
+
+	// The terminal drawers (terminal.go): each thread's, by ref, which
+	// persist; the ids each closed, which the server's list may not bring
+	// back; the attached terminals; the mounted drawers, oldest first; and
+	// the close confirmation.
+	termStates  map[string]termState
+	termHidden  map[string][]string
+	terms       map[string]*terminal
+	termMounted []string
+	termClose   *termClosing
 
 	uiOps []func(*ui.Theme) // editor and focus changes from goroutines, run on the UI goroutine
 
@@ -170,10 +183,14 @@ func NewWithStore(store *t3.Store, redraw func()) (*App, error) {
 		images:   map[string][]pastedImage{},
 		trash:    map[string][]pastedImage{},
 		sent:     map[string]*sentThumb{},
-		drawers:  map[string]*drawer{},
 		browsers: map[string]*browser{},
 		answers:  map[string]map[int]bool{},
+
+		termStates: map[string]termState{},
+		termHidden: map[string][]string{},
+		terms:      map[string]*terminal{},
 	}
+	_, _ = store.Get("terminal-state", &a.termStates)
 	_ = store.Delete("env-filter") // from when a machine's chip filtered the inbox
 	a.detailsCard = true
 	_, _ = store.Get("details-card", &a.detailsCard)
@@ -458,6 +475,7 @@ func (a *App) connect(e *envState) {
 		a.mu.Unlock()
 		a.changed()
 		a.subscribeShell(e, conn, gen, started)
+		a.subscribeTerminals(e, conn, gen)
 		go a.loadConfig(e, conn, gen)
 		if openID != "" {
 			a.subscribeThread(e, conn, gen, openID)
@@ -776,6 +794,7 @@ func (a *App) openThread(id string) {
 	}
 	a.closeThreadLocked()
 	a.openID = id
+	a.remountTerminalsLocked()
 	found := false
 	for _, t := range a.tabs {
 		found = found || t == id

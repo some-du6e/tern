@@ -28,12 +28,11 @@ import (
 // back from Actions after layout. Scenes without IDs (the mockups) draw
 // exactly as before and register nothing.
 type input struct {
-	// The terminal drawer's height and the browser panel's width, in dp,
-	// once dragged; and their edges.
-	termH, webW       float32
-	termEdge, webEdge handle
-	// The browser panel: its focus tag, the address shown, the last press
-	// (for double clicks) and move.
+	// The browser panel: its width in dp once dragged and its edge, its
+	// focus tag, the address shown, the last press (for double clicks)
+	// and move.
+	webW          float32
+	webEdge       handle
 	browser       int
 	browserURL    string
 	browserPress  time.Time
@@ -43,14 +42,12 @@ type input struct {
 	browserMoved  time.Time
 	clipOut       *string // text to put on the clipboard at the next frame
 	blur          bool    // drop the keyboard focus at the next frame
-	// The terminal drawer: its focus tag, how many lines it has scrolled
-	// back, and wheel movement short of a line.
-	term       int
-	termScroll int
-	termWheel  float32
-	termSel    termSel
-	popAt      map[string]time.Time // when each open popover opened, for popIn
-	tipSince   map[string]time.Time // when the pointer came to rest on each tooltip's target
+	// The terminal drawer: the keyboard focus of its active terminal, and
+	// the rest of its state (terminal.go).
+	term     int
+	terms    termUI
+	popAt    map[string]time.Time // when each open popover opened, for popIn
+	tipSince map[string]time.Time // when the pointer came to rest on each tooltip's target
 	// The shell: whether the details card fits inline (from the last
 	// layout), and the sidebar rail's drag.
 	cardFits    bool

@@ -91,6 +91,9 @@ func (th *Theme) Desktop(gtx C, s *Scene) D {
 	if s.Context != nil {
 		th.contextMenu(gtx, size, s)
 	}
+	if s.Term != nil && s.Term.Confirm != nil {
+		th.termConfirm(gtx, s.Term.Confirm, size)
+	}
 	if s.Live && (s.Picker != nil || s.Traits != nil || s.Access != nil || s.Account != nil || s.Machines != nil || s.Projects != nil || s.Context != nil || s.Details) {
 		// A click anywhere outside an open menu closes it. The menus are
 		// deferred, so they sit above this.
@@ -391,7 +394,7 @@ func (th *Theme) chatColumn(gtx C, s *Scene, collapsed, panelOpen bool) {
 	top := dp(gtx, topBarH)
 	drawer := 0
 	if s.Term != nil {
-		drawer = th.drawerPx(gtx, size.Y)
+		drawer = th.drawerPx(gtx, s.Term, size.Y)
 	}
 	// The canvas first, so the header draws over the timeline's top.
 	func() {
@@ -432,6 +435,7 @@ func (th *Theme) chatColumn(gtx C, s *Scene, collapsed, panelOpen bool) {
 		}
 	}()
 	if drawer > 0 {
+		th.drawerTop(size.Y - drawer)
 		defer op.Offset(image.Pt(0, size.Y-drawer)).Push(gtx.Ops).Pop()
 		g := gtx
 		g.Constraints = layout.Exact(image.Pt(size.X, drawer))
@@ -439,15 +443,22 @@ func (th *Theme) chatColumn(gtx C, s *Scene, collapsed, panelOpen bool) {
 	}
 }
 
-// drawerPx is the terminal drawer's height in px: 280 until dragged,
-// between 180 and three quarters of the window.
-func (th *Theme) drawerPx(gtx C, colH int) int {
-	if th.in.termH == 0 {
-		th.in.termH = termH
+// drawerPx is the terminal drawer's height in px (docs/ui/09-terminal.md
+// §3.2): the thread's stored height, or the strip's while it's dragged,
+// at least 180 but no taller than three quarters of the window, nor than
+// the column has between its header and the composer the canvas measured.
+func (th *Theme) drawerPx(gtx C, v *TermView, colH int) int {
+	tu := &th.in.terms
+	k := gtx.Metric.PxPerDp
+	h := float32(colH) / k
+	tu.most = termMaxHeight(h, h, topBarH, float32(tu.composer)/k)
+	stored := v.Height
+	if tu.strip.held {
+		tu.strip.h = termHeight(tu.strip.h, tu.most)
+		stored = tu.strip.h
 	}
-	most := max(180, float32(int(0.75*float32(colH)/gtx.Metric.PxPerDp)))
-	th.in.termH = max(180, min(th.in.termH, most))
-	return dp(gtx, th.in.termH)
+	tu.shown = termHeight(stored, tu.most)
+	return dp(gtx, tu.shown)
 }
 
 // lane is where the timeline's rows and the composer go in a canvas
@@ -496,6 +507,7 @@ func (th *Theme) canvas(gtx C, s *Scene) {
 		cd := in(0, size.Y, func(gtx C) D { return th.composerArea(gtx, s, false) })
 		composer := m.Stop()
 		ch := cd.Size.Y + dp(gtx, 20)
+		th.in.terms.composer = ch
 		in(0, size.Y-ch, func(gtx C) D {
 			gtx.Constraints.Min.Y = gtx.Constraints.Max.Y
 			return th.messages(gtx, s, false)
