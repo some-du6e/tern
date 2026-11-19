@@ -654,12 +654,48 @@ func (a *App) launchTerminalLocked(ref string, place func(termState, string) ter
 	a.putTermState(ref, place(a.termState(ref), id))
 	conn := e.conn
 	o := t3.TermOpen{ThreadID: t.ID, TerminalID: id, Cwd: cwd, WorktreePath: worktree, Env: env}
-	go func() {
+	a.termLife(ref, func() {
 		if err := conn.TerminalOpen(o); err != nil {
 			a.mu.Lock()
 			a.fail(err)
 			a.mu.Unlock()
 			a.changed()
+		}
+	})
+}
+
+// termQueue is a thread's terminal opens and closes waiting their turn.
+type termQueue struct {
+	jobs    []func()
+	running bool
+}
+
+// termLife runs ref's terminal opens and closes one after another, in the
+// order they were asked for, as T3's lifecycle scheduler does: a close
+// never overtakes the open before it. Call with the lock held.
+func (a *App) termLife(ref string, f func()) {
+	q := a.termOps[ref]
+	if q == nil {
+		q = &termQueue{}
+		a.termOps[ref] = q
+	}
+	q.jobs = append(q.jobs, f)
+	if q.running {
+		return
+	}
+	q.running = true
+	go func() {
+		for {
+			a.mu.Lock()
+			if len(q.jobs) == 0 {
+				q.running = false
+				a.mu.Unlock()
+				return
+			}
+			f := q.jobs[0]
+			q.jobs = q.jobs[1:]
+			a.mu.Unlock()
+			f()
 		}
 	}()
 }
@@ -735,11 +771,11 @@ func (a *App) answerCloseTerminal(th *ui.Theme, yes bool) {
 func (a *App) closeTerminalLocked(ref, id string) {
 	if e, t := a.thread(ref); t != nil && e.conn != nil {
 		conn, threadID := e.conn, t.ID
-		go func() {
+		a.termLife(ref, func() {
 			if conn.TerminalClose(threadID, id) != nil {
 				_ = conn.TerminalWrite(threadID, id, "exit\n")
 			}
-		}()
+		})
 	}
 	a.unhide(ref, id)
 	a.termHidden[ref] = append(a.termHidden[ref], id)

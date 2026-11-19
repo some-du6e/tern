@@ -108,13 +108,14 @@ type App struct {
 
 	// The terminal drawers (terminal.go): each thread's, by ref, which
 	// persist; the ids each closed, which the server's list may not bring
-	// back; the attached terminals; the mounted drawers, oldest first; and
-	// the close confirmation.
+	// back; the attached terminals; the mounted drawers, oldest first; the
+	// close confirmation; and each thread's opens and closes in order.
 	termStates  map[string]termState
 	termHidden  map[string][]string
 	terms       map[string]*terminal
 	termMounted []string
 	termClose   *termClosing
+	termOps     map[string]*termQueue
 
 	uiOps []func(*ui.Theme) // editor and focus changes from goroutines, run on the UI goroutine
 
@@ -189,6 +190,7 @@ func NewWithStore(store *t3.Store, redraw func()) (*App, error) {
 		termStates: map[string]termState{},
 		termHidden: map[string][]string{},
 		terms:      map[string]*terminal{},
+		termOps:    map[string]*termQueue{},
 	}
 	_, _ = store.Get("terminal-state", &a.termStates)
 	_ = store.Delete("env-filter") // from when a machine's chip filtered the inbox
