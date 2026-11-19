@@ -242,7 +242,8 @@ func (th *Theme) diffCompareRow(gtx C, s *Scene, c *DiffCompare) {
 	} else {
 		func() {
 			defer op.Offset(image.Pt(0, (size.Y-dp(gtx, 16))/2)).Push(gtx.Ops).Pop()
-			x = th.Text(gtx, muted, "vs").Size.X + dp(gtx, 8)
+			th.Text(gtx, muted, "vs")
+			x = th.lineWidth(gtx, muted, "vs") + dp(gtx, 8)
 		}()
 	}
 	th.menuTrigger(gtx, "diff.base", baseLabel, BtnGhostMuted, c.Picker != nil, min(size.X-x, dp(gtx, 192)), image.Pt(x, (size.Y-dp(gtx, 24))/2))

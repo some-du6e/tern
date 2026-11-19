@@ -63,6 +63,8 @@ func (f *ChangedFiles) open(path string) bool {
 // rows, and a button for the files it doesn't list.
 func (th *Theme) changedFilesCard(gtx C, f *ChangedFiles) D {
 	w := gtx.Constraints.Max.X
+	// Its parts size themselves: a minimum would stretch the title's label.
+	gtx.Constraints.Min = image.Point{}
 	bg := over(P.Secondary, P.Background)
 	if dark {
 		bg = over(twAlpha(P.Input, 20), P.Background)

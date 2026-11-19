@@ -237,6 +237,31 @@ func TestChangedFilesCard(t *testing.T) {
 	}
 }
 
+// The card's totals follow its title, 12dp after it, even laid out at the
+// lane's exact width as the timeline lays it.
+func TestChangedFilesCardTotals(t *testing.T) {
+	th := NewTheme()
+	c := &ChangedFiles{Run: "r", Count: 5, Additions: 19, Deletions: 7, Nodes: diff.CardTree([]diff.FileStat{{Path: "b.go", Additions: 19, Deletions: 7}})}
+	img := drawn(t, image.Pt(600, 200), 1, func(gtx C) D {
+		fill(gtx, P.Background, image.Rect(0, 0, 600, 200), 0)
+		gtx.Constraints = layout.Exact(image.Pt(600, 200))
+		return th.changedFilesCard(gtx, c)
+	})
+	// The "+19" in --diff-addition-foreground, a green, within the title's
+	// first 200dp: "5 changed files" is about 90 wide.
+	found := false
+	for x := 60; x < 200 && !found; x++ {
+		for y := 16 + 12; y < 16+28; y++ {
+			if px := img.RGBAAt(x, y); int(px.G) > int(px.R)+40 && px.G < 200 {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Error("no additions count after the card's title")
+	}
+}
+
 // In dark mode the card is input at 20% over the black background.
 func TestChangedFilesCardDark(t *testing.T) {
 	defer SetDark(false)
