@@ -451,8 +451,8 @@ func (th *Theme) termSurface(gtx C, v *TermView, tp *TermPane, active bool, at i
 			th.termKeys(gtx, v, tp, p)
 		}
 		p.g = th.termLayout(gtx, scr, p, cells, size)
-		th.termFollow(scr, tp, p)
-		th.termBlink(gtx, scr, tp, p)
+		output := th.termFollow(scr, tp, p)
+		th.termBlink(gtx, scr, p, output)
 		th.termPaint(gtx, scr, tp, p, cells)
 	}
 	// The surface takes the pointer: a text cursor, a hand on a link, an
@@ -505,26 +505,27 @@ func (th *Theme) termLayout(gtx C, scr TermScreen, p *termPane, cells termCells,
 	return g
 }
 
-// termFollow clears a selection that output changed under it, as T3 does
-// after each write; one over 3,000 cells is cleared without comparing.
-func (th *Theme) termFollow(scr TermScreen, tp *TermPane, p *termPane) {
+// termFollow reports whether output came since the last frame, and clears
+// a selection it changed, as T3 does after each write; one over 3,000
+// cells is cleared without comparing.
+func (th *Theme) termFollow(scr TermScreen, tp *TermPane, p *termPane) bool {
 	if p.ver == tp.Ver {
-		return
+		return false
 	}
 	p.ver = tp.Ver
-	if !p.sel.on {
-		return
+	if p.sel.on {
+		a, b := p.sel.span()
+		if (b.row-a.row+1)*p.g.cols > termCompared || termSelText(scr, p.g, p.sel) != p.selText {
+			p.sel = termSel{}
+		}
 	}
-	a, b := p.sel.span()
-	if (b.row-a.row+1)*p.g.cols > termCompared || termSelText(scr, p.g, p.sel) != p.selText {
-		p.sel = termSel{}
-	}
+	return true
 }
 
 // termBlink runs the cursor's 500ms blink while the terminal has the
-// keyboard, the cursor shows and the app wants it blinking. Like T3's, the
-// next turn waits 500ms from the last repaint.
-func (th *Theme) termBlink(gtx C, scr TermScreen, tp *TermPane, p *termPane) {
+// keyboard, the cursor shows and the app wants it blinking. Like T3's, a
+// repaint for output holds the phase another 500ms.
+func (th *Theme) termBlink(gtx C, scr TermScreen, p *termPane, output bool) {
 	focused := gtx.Focused(&th.in.term)
 	_, blink := scr.CursorStyle()
 	enabled := focused && blink && !scr.CursorHidden()
@@ -535,10 +536,10 @@ func (th *Theme) termBlink(gtx C, scr TermScreen, tp *TermPane, p *termPane) {
 		p.on = true
 		return
 	}
-	if p.blinkAt.IsZero() {
+	switch {
+	case p.blinkAt.IsZero() || output:
 		p.blinkAt = gtx.Now.Add(termBlink)
-	}
-	if !gtx.Now.Before(p.blinkAt) {
+	case !gtx.Now.Before(p.blinkAt):
 		p.on, p.blinkAt = !p.on, gtx.Now.Add(termBlink)
 	}
 	gtx.Execute(op.InvalidateCmd{At: p.blinkAt})
