@@ -52,7 +52,9 @@ const (
 
 // termFamily is T3's terminal stack (surface.ts:27–35): SF Mono on a Mac,
 // Consolas on Windows, Liberation Mono on Linux, then the Nerd Font
-// symbols; JetBrains Mono, tern's own, stands in for CSS's monospace.
+// symbols T3 bundles (fonts/SymbolsNerdFontMono-Regular.ttf, converted
+// from its woff2) for prompts' icons; JetBrains Mono, tern's own, stands
+// in for CSS's monospace.
 const termFamily = "SF Mono, Menlo, Consolas, Liberation Mono, Symbols Nerd Font Mono, JetBrains Mono"
 
 func termFont(bold, italic bool) font.Font {
