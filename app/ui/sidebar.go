@@ -1877,7 +1877,13 @@ func (th *Theme) resultRow(gtx C, s *Scene, r *ThreadRow, i, top int) D {
 		g.Constraints = layout.Exact(image.Pt(w-2*dp(gtx, 10), size.Y))
 		line := func(gtx C) D {
 			gtx.Constraints = layout.Exact(image.Pt(gtx.Constraints.Max.X, dp(gtx, 20)))
-			kids := []layout.FlexChild{flexed(func(gtx C) D { return th.Text(gtx, title, r.Title) })}
+			// The title holds the line at its 20dp box, as CSS's line box
+			// does whatever the font's own height, so what follows it
+			// centres on the line, not on the title's glyphs.
+			kids := []layout.FlexChild{flexed(func(gtx C) D {
+				gtx.Constraints.Min.Y = dp(gtx, 20)
+				return RowGap(gtx, 0, rigid(func(gtx C) D { return th.Text(gtx, title, r.Title) }))
+			})}
 			if r.PR != nil {
 				kids = append(kids, rigid(func(gtx C) D { return th.resultPR(gtx, r.PR, settled, hovered, bg) }))
 			}
