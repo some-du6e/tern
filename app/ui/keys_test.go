@@ -144,9 +144,10 @@ func TestComposerMenuKeys(t *testing.T) {
 	}
 }
 
-// In a recalled prompt taller than the editor, scrolled to its end, Up
-// moves the caret until it reaches the first line; only there does it walk
-// the history (composerCommandKey.ts).
+// In a recalled prompt taller than the editor, scrolled to its end, Down
+// on the last line walks the history forward, and Up moves the caret
+// until it reaches the first line; only there does it walk the history
+// back (composerCommandKey.ts).
 func TestHistoryInALongPrompt(t *testing.T) {
 	th := NewTheme()
 	scene := &Scene{Live: true, Model: "Opus 5.5"}
@@ -164,11 +165,11 @@ func TestHistoryInALongPrompt(t *testing.T) {
 	th.RecallPrompt(long + "last")
 	frame()
 	frame()
-	if acts := press(key.NameUpArrow); keyed(acts, "composer", "history", "back") {
-		t.Fatalf("Up on the last line of a long recalled prompt walked the history: %+v", acts)
-	}
 	if acts := press(key.NameDownArrow); !keyed(acts, "composer", "history", "forward") {
 		t.Fatalf("Down on its last line: %+v", acts)
+	}
+	if acts := press(key.NameUpArrow); keyed(acts, "composer", "history", "back") {
+		t.Fatalf("Up on the last line of a long recalled prompt walked the history: %+v", acts)
 	}
 	ed := th.Editor("composer")
 	ed.SetCaret(0, 0)

@@ -378,10 +378,10 @@ func (th *Theme) stashRow(gtx C, s *Scene, i int, e Stashed, g color.NRGBA) D {
 	sd.call.Add(gtx.Ops)
 	so.Pop()
 	if id != "" {
+		th.hit(gtx, id, image.Pt(x, rh))
 		if th.pointerMoved(gtx, id, image.Pt(w, rh)) && i != s.StashSel {
 			th.push(Action{ID: "stash", Kind: "hover", Text: strconv.Itoa(i)})
 		}
-		th.hit(gtx, id, image.Pt(x, rh))
 	}
 	return D{Size: image.Pt(w, rh)}
 }
@@ -389,7 +389,9 @@ func (th *Theme) stashRow(gtx C, s *Scene, i int, e Stashed, g color.NRGBA) D {
 // pointerMoved watches a size-sized area for the pointer moving over it,
 // without taking its clicks, and reports whether it did since the last
 // frame: a list's highlight follows the mouse's moves, not a mouse at
-// rest (onMouseMove), so the arrow keys aren't undone.
+// rest (onMouseMove), so the arrow keys aren't undone. It goes over the
+// row's own target: Gio hands a pointer event down only through areas
+// that pass it on, so under the target it would never see one.
 func (th *Theme) pointerMoved(gtx C, id string, size image.Point) bool {
 	if th.in.movers == nil {
 		th.in.movers = map[string]*int{}
@@ -1071,9 +1073,8 @@ type composerUI struct {
 	// takes and Escape dismisses; queue is how many messages are queued.
 	suggestion bool
 	queue      int
-	focused    bool        // the prompt had the focus last frame
-	size       image.Point // and was this big
-	held       bool        // ⌘ or Ctrl is down: the send button queues
+	focused    bool // the prompt had the focus last frame
+	held       bool // ⌘ or Ctrl is down: the send button queues
 	// previewMode is the permissions segment under the pointer, plus one.
 	previewMode  int
 	approvalMenu string // the approval whose More menu is open
@@ -1296,10 +1297,10 @@ func (th *Theme) commandItem(gtx C, s *Scene, i int, it Suggestion) D {
 	dd.call.Add(gtx.Ops)
 	do.Pop()
 	if id != "" {
+		th.hit(gtx, id, image.Pt(w, h))
 		if th.pointerMoved(gtx, id, image.Pt(w, h)) && i != s.SuggestSel {
 			th.push(Action{ID: "suggest", Kind: "hover", Text: strconv.Itoa(i)})
 		}
-		th.hit(gtx, id, image.Pt(w, h))
 	}
 	return D{Size: image.Pt(w, h)}
 }

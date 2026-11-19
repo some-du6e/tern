@@ -165,7 +165,10 @@ func TestComposerTriggers(t *testing.T) {
 	}
 	s.Access = &Permissions{Modes: RuntimeModes}
 	img = drawComposer(t, th, s, 200, 0)
-	wantPixel(t, img, image.Pt(685, 97), accent, "open chip")
+	// The chip is 73..101 tall and ends at 687: 5dp in from its end, clear
+	// of its rounded corners and of the open menu's shadow, which reaches
+	// row 86.
+	wantPixel(t, img, image.Pt(682, 90), accent, "open chip")
 	// Along a row under its label, the chip's fill runs back to its start.
 	left := 682
 	for left > 45 && near(img.RGBAAt(left-1, 97), accent) {
@@ -429,8 +432,9 @@ func TestStashThumbs(t *testing.T) {
 	red, blue := color.RGBA{0xff, 0, 0, 0xff}, color.RGBA{0, 0, 0xff, 0xff}
 	s := &Scene{Model: "Opus 5.5", StashOpen: true, Stash: []Stashed{{Snippet: "two pictures", Thumbs: []Thumb{tile(red), tile(blue)}, Age: "4m ago"}}}
 	img := drawComposer(t, th, s, 320, 200)
-	// Find the red tile's right end; past it, under blue's left 6dp, blue wins.
-	for y := 150; y < 200; y++ {
+	// The tab puts the card 34dp lower, at 234, and the list rises 56dp
+	// over it: its one row is 206..230, above the footer's send.
+	for y := 150; y < 260; y++ {
 		for x := 400; x < 714; x++ {
 			if c := img.RGBAAt(x, y); c.R > 0xe0 && c.B < 0x20 {
 				// Red is the first; 10dp on from its start the blue one begins on top.
@@ -523,11 +527,14 @@ func TestHeroStash(t *testing.T) {
 	s := &Scene{Hero: "tern", CanScratch: true, Model: "Opus 5.5", Title: "New thread", Stash: []Stashed{{Snippet: "an idea"}}}
 	img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, s) })
 	outline := over(composerOutline(), glass())
-	tab := firstRow(img, 1190, 200, 600, outline)
+	// The tab ends 22dp in from the lane's end (1194) and is about 93dp
+	// wide: its top edge is straight at 1146, past its rounded corners.
+	tab := firstRow(img, 1146, 200, 600, outline)
 	if tab < 0 {
 		t.Fatal("no stash tab on the new thread")
 	}
-	if _, sub := inkRows(img, tab-60, tab, 500, 1200); tab-sub < 2 || tab-sub > 10 {
+	// The subline's ink, left of the tab and its label.
+	if _, sub := inkRows(img, tab-60, tab, 500, 1090); tab-sub < 2 || tab-sub > 10 {
 		t.Errorf("the subline ends at %d and the tab starts at %d, want them flush", sub, tab)
 	}
 }
@@ -543,16 +550,30 @@ func TestCompactAnswers(t *testing.T) {
 	}}
 	img := drawComposer(t, th, s, 400, 0)
 	g := glass()
-	pill := P.MessageAction
-	stop := over(alpha(P.Destructive, 0xe6), g)
-	var y int
-	for y = 150; y < 400 && count(img, y, 600, 736, pill) == 0; y++ {
+	// Each one's widest row, end to end: its label or square, drawn over
+	// its middle, doesn't shorten that.
+	widest := func(c color.NRGBA) int {
+		most := 0
+		for y := 0; y < 400; y++ {
+			l, r := -1, -1
+			for x := 400; x < 736; x++ {
+				if near(img.RGBAAt(x, y), c) {
+					if l < 0 {
+						l = x
+					}
+					r = x
+				}
+			}
+			if l >= 0 {
+				most = max(most, r-l+1)
+			}
+		}
+		return most
 	}
-	y += 14 // the pill's middle row
-	if n := count(img, y, 400, 736, pill); n < 60 || n > 85 {
+	if n := widest(P.MessageAction); n < 60 || n > 85 {
 		t.Errorf("the Submit pill is %d wide, want T3's compact 70.86", n)
 	}
-	if n := count(img, y, 400, 736, stop); n < 24 || n > 29 {
+	if n := widest(over(alpha(P.Destructive, 0xe6), g)); n < 26 || n > 29 {
 		t.Errorf("Stop is %d wide in the row, want 28", n)
 	}
 }
@@ -581,8 +602,10 @@ func TestChipWidth(t *testing.T) {
 	s := &Scene{Model: "Opus 5.5", Composer: "see " + th.ImageChip(1, "shot.png", 2048) + " now", Thumbs: []Thumb{thumb}}
 	img := drawComposer(t, th, s, 200, 0)
 	chip := P.ContextChipImage
+	// The picture is a tile too (useComposerImageGroups.ts), so the prompt's
+	// first line is under the tile row: 17 + 64 + 12 = 93.
 	end, start := -1, -1
-	for y := 17; y < 45; y++ {
+	for y := 88; y < 124; y++ {
 		for x := 17; x < 720; x++ {
 			if near(img.RGBAAt(x, y), chip) || (img.RGBAAt(x, y).B > img.RGBAAt(x, y).R+40 && img.RGBAAt(x, y).R < 0xb0) {
 				end = max(end, x)
@@ -592,7 +615,7 @@ func TestChipWidth(t *testing.T) {
 	if end < 0 {
 		t.Fatal("no chip drawn")
 	}
-	for y := 17; y < 45; y++ {
+	for y := 88; y < 124; y++ {
 		for x := end + 1; x < 720; x++ {
 			if c := img.RGBAAt(x, y); c.R < 0x90 && c.G < 0x90 && c.B < 0x90 && (start < 0 || x < start) {
 				start = x

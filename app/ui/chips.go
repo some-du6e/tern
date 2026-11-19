@@ -241,10 +241,11 @@ func mix(a, b color.NRGBA, t float32) color.NRGBA {
 // 1em, rounded 4, then 0.2em on its name in medium and 0.33em on, its size
 // at 10, all in --context-chip-image, on the text's baseline. chip gives
 // chip n's picture, its name and size; one still loading shows lucide's
-// image. bg is what the text sits on, to hide the run the chip holds;
-// scroll is how far the text has scrolled. Live, a chip is a button: its
-// tooltip is the name over the size, and a click opens the picture.
-func (th *Theme) drawChips(gtx C, t textRegions, size image.Point, scroll image.Point, bg color.NRGBA, sizeSp float32, chip func(n int) Thumb, live bool) {
+// image. bg is what the text sits on, to hide the run the chip holds. The
+// regions are in the view's frame, scroll taken off, so the chips follow
+// a scrolled editor. Live, a chip is a button: its tooltip is the name
+// over the size, and a click opens the picture.
+func (th *Theme) drawChips(gtx C, t textRegions, size image.Point, bg color.NRGBA, sizeSp float32, chip func(n int) Thumb, live bool) {
 	spans := chipSpans(t.Text())
 	if len(spans) == 0 {
 		return
@@ -260,10 +261,10 @@ func (th *Theme) drawChips(gtx C, t textRegions, size image.Point, scroll image.
 		if len(regs) == 0 {
 			continue
 		}
-		b := regs[0].Bounds.Sub(scroll)
+		b := regs[0].Bounds
 		for _, r := range regs[1:] {
 			if r.Bounds.Min.Y == regs[0].Bounds.Min.Y {
-				b = b.Union(r.Bounds.Sub(scroll))
+				b = b.Union(r.Bounds)
 			}
 		}
 		base := b.Max.Y - regs[0].Baseline
@@ -416,40 +417,11 @@ func chipPictures(thumbs []Thumb) func(n int) Thumb {
 	}
 }
 
-// editorScroll is how far the editor has scrolled. Regions are in document
-// coordinates and the caret's are on screen, so the difference is the scroll.
-func editorScroll(ed *widget.Editor, size image.Point) image.Point {
-	c, _ := ed.Selection()
-	n := ed.Len()
-	if n == 0 {
-		return image.Point{}
-	}
-	if all := ed.Regions(n-1, n, nil); len(all) > 0 && all[len(all)-1].Bounds.Max.Y <= size.Y {
-		return image.Point{} // it all fits, so nothing scrolled
-	}
-	start, end, atEnd := c, c+1, false
-	if c >= n {
-		start, end, atEnd = n-1, n, true
-	}
-	regs := ed.Regions(start, end, nil)
-	if len(regs) == 0 {
-		return image.Point{}
-	}
-	rg := regs[0]
-	x := rg.Bounds.Min.X
-	if atEnd {
-		rg = regs[len(regs)-1]
-		x = rg.Bounds.Max.X
-	}
-	cc := ed.CaretCoords()
-	return image.Pt(x-int(cc.X+0.5), rg.Bounds.Min.Y+rg.Baseline-int(cc.Y+0.5))
-}
-
 // chipText lays out a sent message's text with its pictures as chips. It's
 // selectable, which the chips need for their positions.
 func (th *Theme) chipText(gtx C, id, s string, labels []string) D {
 	d, sel := th.selectableSel(gtx, id, s, UI(font.Normal), SizeBody, ColText, 1.42)
-	th.drawChips(gtx, sel, d.Size, image.Point{}, ColFrameHover, float32(SizeBody), func(n int) Thumb {
+	th.drawChips(gtx, sel, d.Size, ColFrameHover, float32(SizeBody), func(n int) Thumb {
 		if n <= len(labels) {
 			return Thumb{Name: labels[n-1]}
 		}

@@ -222,6 +222,8 @@ func TestCommandMenu(t *testing.T) {
 		t.Fatalf("one row: highlight %d, want it to wrap to 0", s.SuggestSel)
 	}
 	a.handle(th, ui.Action{ID: "suggest", Kind: "key", Text: "⏎"})
+	// The prompt's change goes back to the app the way a frame's actions do.
+	a.Handle(th, th.Actions())
 	if th.EditorText("composer") != "" || a.picker == nil {
 		t.Fatalf("after Enter: %q, picker %v", th.EditorText("composer"), a.picker != nil)
 	}

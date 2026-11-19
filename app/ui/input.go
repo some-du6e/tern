@@ -481,7 +481,7 @@ func (th *Theme) editor(gtx C, id string, t Txt, placeholder string) D {
 	}
 	d := ed.Layout(gtx, th.Shaper, t.Font, unit.Sp(t.Size), col(t.Color), sel)
 	if id == "composer" {
-		th.drawChips(gtx, ed, d.Size, editorScroll(ed, d.Size), glass(), float32(t.Size), chipPictures(th.in.composer.thumbs), true)
+		th.drawChips(gtx, ed, d.Size, glass(), float32(t.Size), chipPictures(th.in.composer.thumbs), true)
 	}
 	return d
 }

@@ -347,14 +347,13 @@ func (th *Theme) prompt(gtx C, s *Scene, w int) D {
 			th.push(Action{ID: "composer", Kind: map[bool]string{true: "focus", false: "blur"}[f]})
 		}
 		d = th.editor(g, "composer", t, "")
-		ui.size = d.Size
 		empty = ed.Len() == 0
 	} else {
 		empty = s.Composer == ""
 		if !empty {
 			var sel *widget.Selectable
 			d, sel = th.selectableSel(g, "composer", s.Composer, t.Font, t.Size, t.Color, t.LineH)
-			th.drawChips(g, sel, d.Size, image.Point{}, glass(), float32(t.Size), chipPictures(s.Thumbs), false)
+			th.drawChips(g, sel, d.Size, glass(), float32(t.Size), chipPictures(s.Thumbs), false)
 		}
 	}
 	if empty && s.Placeholder != "" {
@@ -424,7 +423,7 @@ func (th *Theme) composerKeys(gtx C, ed *widget.Editor) {
 	}
 	if ui.history && !ui.menu && !ui.stash {
 		browsing := ui.recalled != "" && ed.Text() == ui.recalled
-		first, last := caretLines(ed, ui.size)
+		first, last := caretLines(ed)
 		if first && (ed.Len() == 0 || browsing) {
 			filters = append(filters, key.Filter{Focus: ed, Name: key.NameUpArrow})
 		}
@@ -470,11 +469,10 @@ func (th *Theme) composerKeys(gtx C, ed *widget.Editor) {
 }
 
 // caretLines reports whether the caret is on the prompt's first visual
-// line and on its last. Regions are in document space and cover only the
-// lines in view, while the caret's coordinates are the view's, so the
-// caret's baseline goes into document space first; a last line out of
-// view isn't the caret's. size is the editor's from the last frame.
-func caretLines(ed *widget.Editor, size image.Point) (first, last bool) {
+// line and on its last. The caret's coordinates and the regions are both
+// in the view's frame, scroll taken off, and regions cover only the lines
+// in view, so a last line out of view isn't the caret's.
+func caretLines(ed *widget.Editor) (first, last bool) {
 	n := ed.Len()
 	if n == 0 {
 		return true, true
@@ -485,8 +483,7 @@ func caretLines(ed *widget.Editor, size image.Point) (first, last bool) {
 		return line == 0, false
 	}
 	t := tail[len(tail)-1]
-	y := int(ed.CaretCoords().Y+0.5) + editorScroll(ed, size).Y
-	return line == 0, y >= t.Bounds.Max.Y-t.Baseline
+	return line == 0, int(ed.CaretCoords().Y+0.5) >= t.Bounds.Max.Y-t.Baseline
 }
 
 // composerChords are the composer's shortcuts from anywhere
