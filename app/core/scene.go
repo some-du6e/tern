@@ -258,13 +258,23 @@ func (a *App) Scene() *ui.Scene {
 
 func (a *App) build(now time.Time) *ui.Scene {
 	s := &ui.Scene{Live: true}
-	if !a.booted {
-		s.Booting = true
+	switch s.Gate = a.gateLocked(); s.Gate {
+	case ui.GateBooting:
 		return s
-	}
-	if !a.signedIn {
+	case ui.GateSessionError:
+		s.Failure = a.failure
+		return s
+	case ui.GateSignIn:
 		l := a.login
+		if l.Step == ui.SignInEmailCode {
+			// Clerk lets the code go again after 30s.
+			l.ResendIn = max(0, 30-int(now.Sub(a.codeSent).Seconds()))
+		}
 		s.Login = &l
+		return s
+	case ui.GatePairing:
+		p := a.pair
+		s.Pair = &p
 		return s
 	}
 	a.sidebar(s)

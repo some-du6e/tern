@@ -78,6 +78,9 @@ type Button struct {
 	// On is the surface under the button, for its translucent colours;
 	// zero means the window background.
 	On color.NRGBA
+	// IconColor is the icon's colour where the call site sets one, like a
+	// copy button's success check; zero means the variant's.
+	IconColor color.NRGBA
 }
 
 // buttonColors is a variant's fill, text, border and icon at rest and on
@@ -157,6 +160,9 @@ func (th *Theme) T3Button(id string, b Button) W {
 			if cl.borderHover.A != 0 {
 				border = cl.borderHover
 			}
+		}
+		if b.IconColor.A != 0 {
+			icon = b.IconColor
 		}
 
 		// Lay the content out first: the box is as wide as it needs.

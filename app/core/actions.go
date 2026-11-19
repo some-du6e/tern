@@ -26,6 +26,9 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 	case strings.HasPrefix(id, "signin."):
 		a.handleSignIn(th, act)
 		return
+	case strings.HasPrefix(id, "pair."):
+		a.handlePairing(th, act)
+		return
 	case act.Kind == "resize" && id == "sidebar.width":
 		// The rail's drag, on release; an empty width resets it.
 		w, _ := strconv.ParseFloat(act.Text, 32)
@@ -155,6 +158,8 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		a.mu.Lock()
 		a.errText = ""
 		a.mu.Unlock()
+	case "session.retry", "session.reload":
+		a.retryBoot()
 	case "menus.close":
 		a.closeMenus()
 	case "browser.toggle":
@@ -1019,118 +1024,160 @@ func (a *App) deliver(e *envState, conn *t3.Conn, draft string, t *t3.Thread, se
 
 // ---------- sign-in ----------
 
+// handleSignIn is Clerk's sign-in (docs/ui/11-empty-auth.md §2.6): each
+// step's Continue, the pen back to the start, the code step's other
+// method and its resend, and the way to the pairing page.
 func (a *App) handleSignIn(th *ui.Theme, act ui.Action) {
-	if act.Kind == "change" || act.Kind == "key" {
+	switch {
+	case act.Kind == "change" && act.ID == "signin.code":
+		// Clerk goes on by itself once the six digits are in.
+		if len([]rune(strings.TrimSpace(act.Text))) == 6 {
+			a.signInNext(th)
+		}
 		return
-	}
-	if act.Kind == "submit" || act.ID == "signin.next" {
+	case act.Kind == "submit" || act.Kind == "click" && act.ID == "signin.next":
 		a.signInNext(th)
+		return
+	case act.Kind != "click":
 		return
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	switch act.ID {
 	case "signin.change":
-		a.login = ui.SignIn{Email: a.login.Email}
-		a.signIn = nil
+		a.login, a.signIn = ui.SignIn{}, nil
 		th.Focus("signin.email")
-	case "signin.password":
-		a.login.Password = !a.login.Password
-		th.SetEditorText("signin.code", "")
-		th.Focus("signin.code")
-	case "signin.pairmode":
-		a.login = ui.SignIn{Step: ui.SignInPair}
-		th.Focus("signin.pair")
-	case "signin.connectmode":
-		a.login = ui.SignIn{}
-		th.Focus("signin.email")
+	case "signin.method":
+		if !a.login.Other {
+			return
+		}
+		step, field := ui.SignInPassword, "signin.password"
+		if a.login.Step == ui.SignInPassword {
+			step, field = ui.SignInEmailCode, "signin.code"
+		}
+		a.login.Step, a.login.FieldError = step, ""
+		th.SetEditorText(field, "")
+		th.Focus(field)
+	case "signin.resend":
+		if a.login.Step == ui.SignInEmailCode && time.Since(a.codeSent) >= 30*time.Second {
+			a.codeSent = time.Now()
+			go a.resendCode(a.signIn)
+		}
+	case "signin.pair":
+		a.pairing, a.pair = true, ui.Pairing{}
+		th.Focus("pair.link")
 	}
 }
 
+// signInNext is Continue: the email starts the sign-in, the code or the
+// password finishes it, and the app comes up behind the spinner. What
+// Clerk finds wrong goes under the field.
 func (a *App) signInNext(th *ui.Theme) {
 	a.mu.Lock()
-	if a.login.Sending {
-		a.mu.Unlock()
-		return
-	}
-	step, si, password := a.login.Step, a.signIn, a.login.Password
-	a.login.Sending, a.login.Error = true, ""
-	a.mu.Unlock()
+	l, si := a.login, a.signIn
 	email := strings.TrimSpace(th.EditorText("signin.email"))
-	code := strings.TrimSpace(th.EditorText("signin.code"))
-	pairURL := strings.TrimSpace(th.EditorText("signin.pair"))
-	if step == ui.SignInEmail && email != "" {
-		// Clerk answers only once it has sent the email, so show the code
-		// field now and send behind it.
-		a.mu.Lock()
-		a.login = ui.SignIn{Email: email, Step: ui.SignInCode, Sending: true, SendingCode: true}
+	if l.Sending || l.Step == ui.SignInStart && email == "" {
 		a.mu.Unlock()
-		th.SetEditorText("signin.code", "")
-		th.Focus("signin.code")
-		a.changed()
-		go a.sendCode(email)
 		return
 	}
+	a.login.Sending, a.login.FieldError = true, ""
+	a.mu.Unlock()
 	a.changed()
+	code := strings.TrimSpace(th.EditorText("signin.code"))
+	password := th.EditorText("signin.password")
 	go func() {
-		var err error
-		done := false
-		switch step {
-		case ui.SignInEmail:
-			err = errors.New("enter your T3 Connect email")
-		case ui.SignInCode:
-			if password {
-				err = a.clerk.FinishWithPassword(si, code)
-			} else {
-				err = a.clerk.FinishWithCode(si, code)
-			}
-			done = err == nil
-		case ui.SignInPair:
-			_, err = t3.Pair(a.store, pairURL)
-			done = err == nil
+		if l.Step == ui.SignInStart {
+			a.startSignIn(email)
+			return
 		}
-		if done {
-			// The button keeps spinning until the inbox is there to show.
-			a.onUI(func(th *ui.Theme) {
-				th.SetEditorText("signin.pair", "")
-				th.Focus("composer")
-			})
+		var err error
+		if l.Step == ui.SignInPassword {
+			err = a.clerk.FinishWithPassword(si, password)
+		} else {
+			err = a.clerk.FinishWithCode(si, code)
+		}
+		if err == nil {
+			a.onUI(func(th *ui.Theme) { th.Focus("composer") })
 			a.boot()
 		}
 		a.mu.Lock()
 		a.login.Sending = false
 		if err != nil {
-			a.login.Error = sentence(err.Error())
+			a.login.FieldError = clerkMessage(err)
 		}
 		a.mu.Unlock()
 		a.changed()
 	}()
 }
 
-// sendCode starts the sign-in and has Clerk email the code, while the code
-// step is already up. A failure goes back to the email step with the error.
-func (a *App) sendCode(email string) {
+// startSignIn is the start step's Continue: Clerk starts the sign-in and
+// emails the code, and the code step comes up; an account without email
+// codes gets the password step instead.
+func (a *App) startSignIn(email string) {
 	si, err := a.clerk.StartSignIn(email)
 	if err == nil && si.EmailAddressID != "" {
 		err = a.clerk.SendEmailCode(si)
 	}
+	if err == nil && si.EmailAddressID == "" && !si.HasPassword {
+		err = errors.New("this account signs in neither with an email code nor a password")
+	}
 	a.mu.Lock()
-	if a.login.Step != ui.SignInCode || a.login.Email != email || !a.login.SendingCode {
-		a.mu.Unlock() // they went back meanwhile
+	if a.login.Step != ui.SignInStart || !a.login.Sending {
+		a.mu.Unlock() // they went elsewhere meanwhile
 		return
 	}
+	step, field := ui.SignInEmailCode, "signin.code"
 	if err != nil {
-		a.login = ui.SignIn{Email: email, Step: ui.SignInEmail, Error: sentence(err.Error())}
+		a.login.Sending, a.login.FieldError = false, clerkMessage(err)
 	} else {
-		a.signIn = si
-		a.login.Sending, a.login.SendingCode = false, false
-		a.login.HasPassword, a.login.Password = si.HasPassword, si.EmailAddressID == ""
+		if si.EmailAddressID == "" {
+			step, field = ui.SignInPassword, "signin.password"
+		}
+		a.signIn, a.codeSent = si, time.Now()
+		a.login = ui.SignIn{Step: step, Email: email, Other: si.HasPassword && si.EmailAddressID != ""}
 	}
 	a.mu.Unlock()
-	if err != nil {
-		a.onUI(func(th *ui.Theme) { th.Focus("signin.email") })
+	if err == nil {
+		a.onUI(func(th *ui.Theme) {
+			th.SetEditorText(field, "")
+			th.Focus(field)
+		})
 	}
 	a.changed()
+}
+
+// resendCode is the code step's Resend: Clerk emails another code.
+func (a *App) resendCode(si *t3.SignIn) {
+	if err := a.clerk.SendEmailCode(si); err != nil {
+		a.mu.Lock()
+		a.login.FieldError = clerkMessage(err)
+		a.mu.Unlock()
+	}
+	a.changed()
+}
+
+// clerkMessage is what Clerk's form says about err: the words Clerk's API
+// sent with it, or else the error.
+func clerkMessage(err error) string {
+	var te *t3.Error
+	if errors.As(err, &te) && strings.HasPrefix(te.What, "Clerk") && te.Reason != "" {
+		return te.Reason
+	}
+	return sentence(err.Error())
+}
+
+// handlePairing is the pairing page: Continue, or Enter in the field, and
+// the way back to T3 Connect's sign-in.
+func (a *App) handlePairing(th *ui.Theme, act ui.Action) {
+	switch {
+	case act.Kind == "submit" && act.ID == "pair.link", act.Kind == "click" && act.ID == "pair.next":
+		a.pairNext(th)
+	case act.Kind == "click" && act.ID == "pair.connect":
+		a.mu.Lock()
+		a.pairing = false
+		a.mu.Unlock()
+		th.Focus("signin.email")
+	}
 }
 
 func sentence(s string) string {

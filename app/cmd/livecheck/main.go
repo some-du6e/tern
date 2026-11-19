@@ -52,8 +52,8 @@ func (h *harness) frame() *ui.Scene {
 		Now:         time.Now(),
 		Source:      h.router.Source(),
 	}
-	if s.Login != nil {
-		h.th.LiveSignIn(gtx, s)
+	if s.Gate != ui.GateApp {
+		h.th.Gate(gtx, s)
 	} else {
 		h.th.Desktop(gtx, s)
 	}
@@ -135,7 +135,7 @@ func main() {
 	}
 	h.c.Start()
 	start := time.Now()
-	s := h.wait("threads", func(s *ui.Scene) bool { return s.Login == nil && len(s.Active)+len(s.Pinned) > 0 })
+	s := h.wait("threads", func(s *ui.Scene) bool { return s.Gate == ui.GateApp && len(s.Active)+len(s.Pinned) > 0 })
 	fmt.Printf("inbox: %d pinned, %d active, %d snoozed, %d settled after %s\n", len(s.Pinned), len(s.Active), len(s.Snoozed), s.Settled, time.Since(start).Round(time.Millisecond))
 	h.wait("config", func(s *ui.Scene) bool { return true })
 	h.shot("inbox")
@@ -246,12 +246,8 @@ func main() {
 	empty, _ := t3.OpenStoreAt(filepath.Join(os.TempDir(), "tern-empty"))
 	h.c, _ = core.NewWithStore(empty, func() {})
 	h.c.Start()
-	h.wait("sign-in", func(s *ui.Scene) bool { return s.Login != nil })
+	h.wait("sign-in", func(s *ui.Scene) bool { return s.Gate == ui.GateSignIn })
 	h.th.Focus("signin.email")
-	// The entrance, part way and settled.
-	time.Sleep(150 * time.Millisecond)
-	h.shot("sign-in-entering")
-	time.Sleep(700 * time.Millisecond)
 	h.shot("sign-in")
 	fmt.Println("ok")
 	os.Exit(0)

@@ -178,22 +178,59 @@ type Suggestion struct {
 	Name, Hint, Desc string
 }
 
-type SignIn struct {
-	Email       string
-	Step        int // 0 email, 1 code, 2 pairing URL
-	Code        string
-	Sending     bool
-	SendingCode bool // the code step is up while Clerk sends the email
-	Error       string
-	Password    bool // typing a password instead of the code
-	HasPassword bool
-}
+// Gate is what fills the window before the app does, or instead of it
+// (docs/ui/11-empty-auth.md §2.1): the splash while the saved session is
+// read, the boot failure page when tern can't start, the root error view
+// when the first request for the account's computers fails, T3 Connect's
+// sign-in, and the page that pairs with a link from `t3 pair`.
+type Gate int
 
 const (
-	SignInEmail = iota
-	SignInCode
-	SignInPair
+	GateApp Gate = iota
+	GateBooting
+	GateBootFailed
+	GateSessionError
+	GateSignIn
+	GatePairing
 )
+
+// Failure is what stopped the app: the root error view's description,
+// and the report the boot failure page and the root error view copy.
+type Failure struct {
+	Message string
+	Report  string
+	Open    bool // the boot failure page's "More options", open on a repeat failure
+}
+
+// SignIn is T3 Connect's sign-in, Clerk's flow (§2.6, §3.6): the start
+// step's email, then the code Clerk emailed or the account's password.
+// The step's field is the editor "signin.email", "signin.code" or
+// "signin.password"; Continue is "signin.next".
+type SignIn struct {
+	Step       SignInStep
+	Email      string // where the code went
+	Sending    bool   // Continue is on its way
+	FieldError string // under the step's field: Clerk's words for what's wrong
+	ResendIn   int    // seconds before the code can go again ("signin.resend")
+	Other      bool   // the account has both the code and a password: "Use another method" ("signin.method")
+}
+
+// SignInStep is a step of Clerk's sign-in.
+type SignInStep int
+
+const (
+	SignInStart SignInStep = iota
+	SignInEmailCode
+	SignInPassword
+)
+
+// Pairing is the page that pairs tern with a computer by the link `t3
+// pair` prints there, T3's /pair form (§2.3). The link is the editor
+// "pair.link"; Continue is "pair.next".
+type Pairing struct {
+	Submitting bool
+	Error      string // the error Alert under the field
+}
 
 // Browser is the preview surface. An empty URL is the new-tab page.
 type Browser struct {
@@ -231,7 +268,6 @@ type Scene struct {
 	// Live marks a scene from the real client: fields become editors and
 	// rows become click targets. Mockups leave it off.
 	Live                     bool
-	Booting                  bool         // live: still reading the saved session; draw a blank window
 	Error                    string       // shown as a dismissable banner
 	Notice                   string       // a quiet status line over the composer, like "Sending…"
 	Empty                    string       // shown instead of messages when no thread is open
@@ -281,7 +317,13 @@ type Scene struct {
 	Picker *ModelPicker
 	Traits *Traits
 	Diff   *DiffView
-	Login  *SignIn
+
+	// Gate is what the window shows; at GateApp, the app. Failure, Login
+	// and Pair belong to their gates.
+	Gate    Gate
+	Failure *Failure
+	Login   *SignIn
+	Pair    *Pairing
 
 	Phase float64 // spinner angle, so a frame can show motion
 

@@ -61,8 +61,12 @@ type App struct {
 	mu       sync.Mutex
 	booted   bool // boot has decided between sign-in and the inbox
 	signedIn bool
+	failure  *ui.Failure // the first request for the account's computers failed
 	login    ui.SignIn
 	signIn   *t3.SignIn
+	codeSent time.Time // when Clerk last sent the code, for its resend countdown
+	pairing  bool      // the pairing page is up instead of the sign-in
+	pair     ui.Pairing
 
 	envs []*envState
 	net  string
@@ -202,6 +206,10 @@ func (a *App) Start() {
 	go a.boot()
 }
 
+// boot reads the saved session and decides what the window shows: the app
+// on the account's computers and the paired ones, T3 Connect's sign-in
+// when there are neither, or the root error view when the first request
+// for the account's computers fails.
 func (a *App) boot() {
 	defer func() {
 		a.mu.Lock()
@@ -224,17 +232,13 @@ func (a *App) boot() {
 	} else if a.clerk.HasClient() {
 		a.setNet("loading environments…")
 		list, err := a.relay.ListEnvironments()
-		if err == nil {
+		switch {
+		case err == nil:
 			_ = a.store.Put("envs.json", list)
-		}
-		if err != nil && len(paired) == 0 {
+		case !errors.Is(err, t3.ErrSignedOut) && len(paired) == 0:
 			a.mu.Lock()
-			a.signedIn = false
-			if !errors.Is(err, t3.ErrSignedOut) {
-				a.login.Error = err.Error()
-			}
+			a.signedIn, a.failure = false, &ui.Failure{Message: sentence(err.Error()), Report: sessionReport(err, time.Now())}
 			a.mu.Unlock()
-			a.changed()
 			return
 		}
 		for _, e := range list {
@@ -245,10 +249,10 @@ func (a *App) boot() {
 		envs = append(envs, newEnv(e, true))
 	}
 	a.mu.Lock()
+	a.failure = nil
 	if len(envs) == 0 {
 		a.signedIn = false
 		a.mu.Unlock()
-		a.changed()
 		return
 	}
 	a.signedIn = true
@@ -260,6 +264,16 @@ func (a *App) boot() {
 		a.loadShellCache(e)
 		a.connect(e)
 	}
+}
+
+// retryBoot is the root error view's Try again and Reload app: tern has
+// no page to reload, so both start over from the splash.
+func (a *App) retryBoot() {
+	a.mu.Lock()
+	a.booted, a.failure = false, nil
+	a.mu.Unlock()
+	a.changed()
+	go a.boot()
 }
 
 // refreshEnvs reloads the Connect environment list. A signed-out Clerk

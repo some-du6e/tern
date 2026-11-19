@@ -2,16 +2,14 @@
 package main
 
 import (
-	"image"
 	"log"
+	"net/url"
 	"os"
 	"sync/atomic"
 	"time"
 
 	"gioui.org/app"
 	"gioui.org/op"
-	"gioui.org/op/clip"
-	"gioui.org/op/paint"
 	"gioui.org/unit"
 
 	"github.com/some-du6e/tern/app/core"
@@ -31,8 +29,8 @@ func main() {
 	app.Main()
 }
 
-// fadeIn is how long the inbox takes to appear after sign-in or boot.
-const fadeIn = 280 * time.Millisecond
+// issueURL is where the boot failure page files a bug report.
+var issueURL = "https://github.com/some-du6e/tern/issues/new?" + url.Values{"title": {"tern failed to start"}}.Encode()
 
 func run(w *app.Window) error {
 	th := ui.NewTheme()
@@ -45,14 +43,25 @@ func run(w *app.Window) error {
 		w.Invalidate()
 	}))
 	shownDark := !dark.Load()
-	c, err := core.New(w.Invalidate)
-	if err != nil {
-		return err
+	// A client that can't start (its store or key unreadable) is T3's boot
+	// failure page, and Reload tries again; failing twice in 5 minutes
+	// opens its "More options".
+	var c *core.App
+	var failure *ui.Failure
+	var failedAt time.Time
+	start := func() {
+		var err error
+		if c, err = core.New(w.Invalidate); err != nil {
+			now := time.Now()
+			failure = core.BootFailure(err, !failedAt.IsZero() && now.Sub(failedAt) < 5*time.Minute, now)
+			failedAt = now
+			return
+		}
+		c.Start()
 	}
-	c.Start()
+	start()
 	th.Focus("signin.email")
 	var ops op.Ops
-	var shown time.Time // when the desktop first drew after boot or sign-in
 	for {
 		ev := w.Event()
 		platformEvent(ev)
@@ -66,27 +75,28 @@ func run(w *app.Window) error {
 				titleDark(d)
 			}
 			gtx := app.NewContext(&ops, e)
-			c.RunUI(th)
-			s := c.Scene()
-			switch {
-			case s.Booting:
-				paint.Fill(gtx.Ops, ui.ColWindow)
-				shown = time.Time{}
-			case s.Login != nil:
-				th.LiveSignIn(gtx, s)
-				shown = time.Time{}
-			default:
-				if shown.IsZero() {
-					shown = gtx.Now
-				}
-				th.Desktop(gtx, s)
-				if t := gtx.Now.Sub(shown); t < fadeIn {
-					k := 1 - float32(t)/float32(fadeIn)
-					col := ui.ColWindow
-					col.A = uint8(255 * k * k)
-					paint.FillShape(gtx.Ops, col, clip.Rect(image.Rectangle{Max: e.Size}).Op())
+			if c == nil {
+				th.Gate(gtx, &ui.Scene{Gate: ui.GateBootFailed, Failure: failure})
+				for _, act := range th.Actions() {
+					switch act.ID {
+					case "boot.reload":
+						start()
+					case "boot.more":
+						failure.Open = !failure.Open
+					case "boot.issue":
+						go func() { _ = shell.Open(issueURL) }()
+					}
 					gtx.Execute(op.InvalidateCmd{})
 				}
+				e.Frame(gtx.Ops)
+				continue
+			}
+			c.RunUI(th)
+			s := c.Scene()
+			if s.Gate == ui.GateApp {
+				th.Desktop(gtx, s)
+			} else {
+				th.Gate(gtx, s)
 			}
 			if acts := th.Actions(); len(acts) > 0 {
 				c.Handle(th, acts)
@@ -100,8 +110,8 @@ func run(w *app.Window) error {
 	}
 }
 
-// moving reports whether anything on screen animates. The sign-in screen
-// schedules its own frames.
+// moving reports whether anything on screen animates. The gates and the
+// toasts schedule their own frames.
 func moving(s *ui.Scene) bool {
 	if s.State == ui.ThreadRunning {
 		return true

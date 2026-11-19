@@ -44,7 +44,19 @@ func main() {
 		{"3-diff", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, diffScene()) }},
 		{"4-question", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, questionScene()) }},
 		{"5-new-thread-commands", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, draftScene()) }},
-		{"6-sign-in", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.SignInScreen(gtx, signInScene()) }},
+		{"6-sign-in", 1440, 900, gateShot(signInScene, "signin.email", "")},
+		{"6b-sign-in-error", 1440, 900, gateShot(signInErrorScene, "signin.email", "someone@example.com")},
+		{"6c-sign-in-code", 1440, 900, gateShot(codeScene, "signin.code", "4821")},
+		{"6d-sign-in-password", 1440, 900, gateShot(passwordScene, "signin.password", "correct horse")},
+		{"6e-pair", 1440, 900, gateShot(pairScene, "pair.link", "")},
+		{"6f-pair-error", 1440, 900, gateShot(pairErrorScene, "pair.link", "https://studio.example.com/pair#token=spent")},
+		{"6g-boot", 1440, 900, gateShot(bootScene)},
+		{"6h-boot-failed", 1440, 900, gateShot(bootFailedScene)},
+		{"6i-session-error", 1440, 900, gateShot(sessionErrorScene)},
+		{"6q-sign-in-dark", 1440, 900, inDark(gateShot(signInScene, "signin.email", "you@example.com"))},
+		{"6r-pair-error-dark", 1440, 900, inDark(gateShot(pairErrorScene, "pair.link", "https://studio.example.com/pair#token=spent"))},
+		{"6s-session-error-dark", 1440, 900, inDark(gateShot(sessionErrorScene))},
+		{"6t-boot-failed-dark", 1440, 900, inDark(gateShot(bootFailedScene))},
 		{"7-phone", 390, 844, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Phone(gtx, phoneScene()) }},
 	}
 	if *anim != "" {
@@ -59,6 +71,26 @@ func main() {
 			log.Fatalf("%s: %v", s.name, err)
 		}
 		fmt.Printf("%-28s %s\n", path, time.Since(start).Round(time.Millisecond))
+	}
+}
+
+// gateShot draws scene's gate with its fields typed in: field, text, and
+// so on.
+func gateShot(scene func() *ui.Scene, fields ...string) func(th *ui.Theme, gtx layout.Context) layout.Dimensions {
+	return func(th *ui.Theme, gtx layout.Context) layout.Dimensions {
+		for i := 0; i+1 < len(fields); i += 2 {
+			th.SetEditorText(fields[i], fields[i+1])
+		}
+		return th.Gate(gtx, scene())
+	}
+}
+
+// inDark draws draw in the dark theme.
+func inDark(draw func(th *ui.Theme, gtx layout.Context) layout.Dimensions) func(th *ui.Theme, gtx layout.Context) layout.Dimensions {
+	return func(th *ui.Theme, gtx layout.Context) layout.Dimensions {
+		ui.SetDark(true)
+		defer ui.SetDark(false)
+		return draw(th, gtx)
 	}
 }
 

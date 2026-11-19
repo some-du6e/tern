@@ -274,8 +274,42 @@ func draftScene() *ui.Scene {
 	return s
 }
 
+// The gates (docs/ui/11-empty-auth.md). Their fields are editors, so
+// their shots type into them first.
+
 func signInScene() *ui.Scene {
-	return &ui.Scene{Login: &ui.SignIn{Email: "karim@example.com", Step: 1, Code: "4821"}}
+	return &ui.Scene{Gate: ui.GateSignIn, Login: &ui.SignIn{}}
+}
+
+func signInErrorScene() *ui.Scene {
+	return &ui.Scene{Gate: ui.GateSignIn, Login: &ui.SignIn{FieldError: "Couldn't find your account."}}
+}
+
+func codeScene() *ui.Scene {
+	return &ui.Scene{Gate: ui.GateSignIn, Login: &ui.SignIn{Step: ui.SignInEmailCode, Email: "you@example.com", ResendIn: 24, Other: true}}
+}
+
+func passwordScene() *ui.Scene {
+	return &ui.Scene{Gate: ui.GateSignIn, Login: &ui.SignIn{Step: ui.SignInPassword, Email: "you@example.com", Other: true, FieldError: "Password is incorrect. Try again, or use another method."}}
+}
+
+func pairScene() *ui.Scene { return &ui.Scene{Gate: ui.GatePairing, Pair: &ui.Pairing{}} }
+
+func pairErrorScene() *ui.Scene {
+	return &ui.Scene{Gate: ui.GatePairing, Pair: &ui.Pairing{Error: "Invalid pairing token. Check the token and try again."}}
+}
+
+func bootScene() *ui.Scene { return &ui.Scene{Gate: ui.GateBooting} }
+
+func bootFailedScene() *ui.Scene {
+	return &ui.Scene{Gate: ui.GateBootFailed, Failure: &ui.Failure{Open: true, Report: "open store: permission denied\n\nVersion: 0.1.0\nPlatform: linux amd64\nTime: 2026-11-18T17:28:53.152Z"}}
+}
+
+func sessionErrorScene() *ui.Scene {
+	return &ui.Scene{Gate: ui.GateSessionError, Failure: &ui.Failure{
+		Message: "List environments failed (500) RelayInternalError.",
+		Report:  "tern 0.1.0\nTime: 2026-11-18T17:27:22.221Z\n\nList environments failed (500) RelayInternalError",
+	}}
 }
 
 func phoneScene() *ui.Scene {

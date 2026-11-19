@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -77,29 +78,53 @@ func OpenSession(r *Relay, s *Store, env Environment) (*Session, error) {
 	return sess, s.Put(sessionName(env.EnvironmentID), sess)
 }
 
+// ErrPairingLink is a pairing URL without a host or a #token=.
+var ErrPairingLink = errors.New("the pairing link is missing its backend host or token")
+
 // Pair trades a pairing URL from `t3 pair` (https://host/pair#token=…) for
-// a 30-day bearer session. No Clerk, relay or DPoP involved.
+// a 30-day bearer session. No Clerk, relay or DPoP involved. Like T3's
+// registerPairing, it reads the server's descriptor and checks that the
+// two speak the same protocol first, so a wrong or incompatible host never
+// spends the one-time token.
 func Pair(s *Store, pairURL string) (*Session, error) {
 	u, err := url.Parse(strings.TrimSpace(pairURL))
-	if err != nil || u.Host == "" {
-		return nil, errors.New("that isn't a pairing URL")
+	frag := url.Values{}
+	if err == nil {
+		frag, _ = url.ParseQuery(u.Fragment)
 	}
-	frag, _ := url.ParseQuery(u.Fragment)
 	token := frag.Get("token")
-	if token == "" {
-		return nil, errors.New("the pairing URL has no #token=")
+	if err != nil || u.Host == "" || token == "" {
+		return nil, ErrPairingLink
 	}
 	base := u.Scheme + "://" + u.Host
 	var desc struct {
 		EnvironmentID string `json:"environmentId"`
 		Label         string `json:"label"`
+		Protocol      *int   `json:"orchestrationProtocolVersion"`
 	}
-	resp, err := httpClient.Get(base + "/.well-known/t3/environment")
+	endpoint := base + "/.well-known/t3/environment"
+	resp, err := httpClient.Get(endpoint)
 	if err != nil {
-		return nil, err
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err
+		}
+		return nil, fmt.Errorf("failed to fetch remote environment endpoint %s (%v)", endpoint, err)
 	}
 	if err := readJSON(resp, "Environment descriptor", &desc); err != nil {
 		return nil, err
+	}
+	// Servers from before the negotiation speak the first protocol
+	// (orchestrationProtocolCompatibilityError).
+	server := 1
+	if desc.Protocol != nil {
+		server = *desc.Protocol
+	}
+	switch client, _ := strconv.Atoi(protocol); {
+	case server > client:
+		return nil, fmt.Errorf("this client is not supported by this server. Update your app or use a compatible release to connect to %s", desc.Label)
+	case server < client:
+		return nil, fmt.Errorf("this client requires a newer server. Update T3 Code on %s to connect", desc.Label)
 	}
 	resp, err = postForm(base+"/oauth/token", url.Values{
 		"grant_type":           {"urn:ietf:params:oauth:grant-type:token-exchange"},
