@@ -851,13 +851,20 @@ func (a *App) subscribeTerminals(e *envState, conn *t3.Conn, gen int) {
 	}, func(error) {})
 }
 
+// drawerShown reports whether the open thread's drawer is up. Call with
+// the lock held.
+func (a *App) drawerShown() bool {
+	ref := a.openDrawerRef()
+	return ref != "" && slices.Contains(a.termMounted, ref)
+}
+
 // termView is the open thread's drawer for the scene, with the controls
 // its panes call back on. Call with the lock held.
 func (a *App) termView() *ui.TermView {
-	ref := a.openDrawerRef()
-	if ref == "" || !slices.Contains(a.termMounted, ref) {
+	if !a.drawerShown() {
 		return nil
 	}
+	ref := a.openID
 	s := a.termState(ref)
 	labels := map[string]string{}
 	for _, k := range a.knownTerms(ref) {

@@ -460,7 +460,7 @@ func (a *App) switchTo(th *ui.Theme, do func()) {
 	do()
 	a.mu.Lock()
 	now := a.composerKey()
-	drawer := a.termView() != nil
+	drawer := a.drawerShown()
 	a.mu.Unlock()
 	th.SetEditorText("composer", drafts[now])
 	// A thread with its drawer open gives its terminal the keyboard.
