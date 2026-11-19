@@ -225,7 +225,9 @@ func (th *Theme) drawToast(gtx C, l *toastLife, w int, p toastPlace, x, fade flo
 	if fade <= 0 {
 		return
 	}
-	defer paint.PushOpacity(gtx.Ops, fade).Pop()
+	if fade < 1 {
+		defer paint.PushOpacity(gtx.Ops, fade).Pop()
+	}
 	h := int(p.h + 0.5)
 	tr := f32.Affine2D{}.Scale(f32.Pt(float32(w)/2, 0), f32.Pt(p.scale, p.scale)).Offset(f32.Pt(x, p.y))
 	defer op.Affine(tr).Push(gtx.Ops).Pop()
@@ -253,7 +255,9 @@ func (th *Theme) drawToast(gtx C, l *toastLife, w int, p toastPlace, x, fade flo
 	if p.content > 0 {
 		func() {
 			defer clip.UniformRRect(r, rad).Push(gtx.Ops).Pop()
-			defer paint.PushOpacity(gtx.Ops, p.content).Pop()
+			if p.content < 1 {
+				defer paint.PushOpacity(gtx.Ops, p.content).Pop()
+			}
 			content.Add(gtx.Ops)
 		}()
 	}

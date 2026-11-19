@@ -34,7 +34,9 @@ func (th *Theme) withBanner(gtx C, s *Scene, card W) D {
 	}
 	w := gtx.Constraints.Max.X
 	banner := func(detached bool) D {
-		defer paint.PushOpacity(gtx.Ops, fade).Pop()
+		if fade < 1 {
+			defer paint.PushOpacity(gtx.Ops, fade).Pop()
+		}
 		return th.machineBanner(gtx, s.Banner, w, detached)
 	}
 	if s.Hero != "" && len(s.Items) == 0 {
