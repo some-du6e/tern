@@ -180,6 +180,11 @@ func (th *Theme) Text(gtx C, t Txt, s string) D {
 	if t.MaxLines > 0 {
 		l.Truncator = "…"
 	}
+	if t.MaxLines == 1 {
+		// One line is CSS's truncate: the "…" cuts into the word that
+		// doesn't fit, where Gio would drop the whole word.
+		l.WrapPolicy = text.WrapGraphemes
+	}
 	return l.Layout(gtx, th.Shaper, t.Font, t.Size, s, mat)
 }
 
