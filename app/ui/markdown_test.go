@@ -90,7 +90,9 @@ func TestCodeInLink(t *testing.T) {
 // equator crosses its middle, for others (§3.5, MarkdownExternalLink.tsx).
 func TestLinkFavicon(t *testing.T) {
 	link := rgb(0x1447e6)
-	isLink := func(c color.RGBA) bool { return near(c.R, link.R, 40) && near(c.G, link.G, 40) && near(c.B, link.B, 40) }
+	isLink := func(c color.RGBA) bool {
+		return near(c.R, link.R, 40) && near(c.G, link.G, 40) && near(c.B, link.B, 40)
+	}
 	for _, c := range []struct {
 		src    string
 		middle bool // the icon's middle is the link's colour
