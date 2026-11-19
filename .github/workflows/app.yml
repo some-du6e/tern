@@ -1,0 +1,93 @@
+name: app
+
+on:
+  push:
+    paths: ["app/**", ".github/workflows/app.yml"]
+  pull_request:
+    paths: ["app/**", ".github/workflows/app.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: app-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: app
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.x"
+          cache-dependency-path: app/go.sum
+      - name: Gio's system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libwayland-dev libx11-dev libx11-xcb-dev \
+            libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev libxcursor-dev libvulkan-dev \
+            libegl-mesa0 libgl1-mesa-dri
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then echo "$unformatted"; exit 1; fi
+      - run: go vet -tags novulkan ./...
+      - run: go test -race -tags novulkan ./...
+        env:
+          EGL_PLATFORM: surfaceless
+      - name: Render the mockups
+        env:
+          EGL_PLATFORM: surfaceless
+        run: go run -tags novulkan ./cmd/mockup -out "$RUNNER_TEMP/mockups"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mockups
+          path: ${{ runner.temp }}/mockups
+
+  # Port branches iterate on the Linux job's tests and mockups; the
+  # platform builds run for the integration branch and pull requests.
+  windows:
+    if: ${{ !startsWith(github.ref, 'refs/heads/port/') }}
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.x"
+          cache-dependency-path: app/go.sum
+      - run: go vet ./...
+      - run: go test ./t3 ./clip ./core ./ui ./shell
+      - run: go build -trimpath -ldflags="-s -w -H=windowsgui" -o dist/tern.exe ./cmd/tern
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tern-windows
+          path: app/dist/tern.exe
+
+  macos:
+    if: ${{ !startsWith(github.ref, 'refs/heads/port/') }}
+    runs-on: macos-15
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "12.0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.x"
+          cache-dependency-path: app/go.sum
+      - run: go vet ./...
+      - run: go test ./t3 ./clip ./core ./ui ./shell
+      - name: Universal binary
+        run: |
+          mkdir -p dist
+          CGO_ENABLED=1 GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o "$RUNNER_TEMP/tern-arm64" ./cmd/tern
+          CGO_ENABLED=1 GOARCH=amd64 CC="clang -arch x86_64" go build -trimpath -ldflags="-s -w" -o "$RUNNER_TEMP/tern-amd64" ./cmd/tern
+          lipo -create -output dist/tern-mac "$RUNNER_TEMP/tern-arm64" "$RUNNER_TEMP/tern-amd64"
+          codesign --force --sign - dist/tern-mac
+          lipo -info dist/tern-mac
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tern-mac
+          path: app/dist/tern-mac
