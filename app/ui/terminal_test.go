@@ -510,6 +510,11 @@ func TestTermPointerSelection(t *testing.T) {
 	if m := th.in.terms.menu; m == nil || len(m.items) != 1 || m.items[0].label != "Copy" {
 		t.Fatalf("selection menu %+v, want Copy", m)
 	}
+	frame()
+	frame()
+	if th.in.terms.menu == nil {
+		t.Fatal("the selection menu should stay up once it has the keyboard")
+	}
 	frame(pointer.Event{Kind: pointer.Press, Position: at(8), Buttons: pointer.ButtonPrimary, Source: pointer.Mouse},
 		pointer.Event{Kind: pointer.Release, Position: at(8), Source: pointer.Mouse})
 	if p.sel.on || th.in.terms.menu != nil {

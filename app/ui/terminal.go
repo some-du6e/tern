@@ -702,9 +702,10 @@ type termMenu struct {
 	at      image.Point // where it opened, px in the drawer
 	items   []termMenuItem
 	rows    []gesture.Click
-	hot     int // the row the keyboard is on, -1 for none
-	tag     int // its keyboard focus
-	focused bool
+	hot     int  // the row the keyboard is on, -1 for none
+	tag     int  // its keyboard focus
+	focused bool // asked for it
+	held    bool // and has had it
 	r       image.Rectangle
 	wait    time.Time // the selection menu waits out a double click
 }
@@ -783,7 +784,11 @@ func (th *Theme) termMenuLayout(gtx C, v *TermView, size image.Point, right int)
 		}
 		switch e := ev.(type) {
 		case key.FocusEvent:
-			if !e.Focus {
+			// A new handler hears it hasn't the keyboard before it gets
+			// it; only losing the keyboard it had closes the menu.
+			if e.Focus {
+				mn.held = true
+			} else if mn.held {
 				th.in.terms.menu = nil
 				return
 			}
