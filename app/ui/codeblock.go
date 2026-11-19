@@ -10,6 +10,7 @@ import (
 
 	"gioui.org/gesture"
 	"gioui.org/io/pointer"
+	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
 	"gioui.org/text"
@@ -20,8 +21,9 @@ import (
 )
 
 // T3's code block (MarkdownCodeBlock.tsx; docs/ui/06-timeline.md §2.6,
-// §3.6): a frame with a 30dp header, the language or the fence's title on
-// the left and the wrap, run and copy buttons on the right, over the code
+// §3.6): a frame with a 30dp header, the language's icon or word or the
+// fence's title on the left and the wrap, run and copy buttons on the
+// right, over the code
 // in mono 13/17.875. T3 highlights with @pierre/diffs's lexers in its
 // t3-light and pierre-dark themes; tern lexes with chroma and colours
 // chroma's tokens with those themes' scopes, so token edges can differ but
@@ -284,14 +286,29 @@ func (th *Theme) codeBlock(gtx C, n *mdNode, st mdStyle) int {
 	// everything inside sits 1dp in.
 	bw := max(1, dp(gtx, 1))
 	m := op.Record(gtx.Ops)
-	// The header: 6dp in at the top and right, 12dp at the left.
+	// The header: 6dp in at the top and right, 12dp at the left. It names
+	// the code: a fence title after its file's icon, 6dp apart; else the
+	// language's icon, its name in a tooltip; else the language, mono 11
+	// at 72% (MarkdownCodeBlockTitleContent).
 	header := dp(gtx, 30)
-	title := n.lang
-	if n.title != "" {
-		title = n.title
-	}
+	tg := within(gtx, w-2*bw-dp(gtx, 12+6+3*24+8))
+	titleText := Txt{Size: 11, Font: Mono(), Color: over(faded(P.ContrastForeground, 0xb8), frame)}
 	to := op.Offset(image.Pt(bw+dp(gtx, 12), bw+dp(gtx, 6))).Push(gtx.Ops)
-	th.textLine(within(gtx, w-2*bw-dp(gtx, 12+6+3*24+8)), Txt{Size: 11, Font: Mono(), Color: over(faded(P.ContrastForeground, 0xb8), frame)}, 24, title)
+	switch file := languageFile(n.lang); {
+	case n.title != "":
+		layout.Flex{Alignment: layout.Middle}.Layout(tg,
+			layout.Rigid(fileIconW(n.title, 14, frame)),
+			layout.Rigid(Spacer(6, 0)),
+			layout.Flexed(1, func(gtx C) D { return th.textLine(gtx, titleText, 24, n.title) }),
+		)
+	case specificIcon(file):
+		io := op.Offset(image.Pt(0, dp(gtx, 5))).Push(gtx.Ops)
+		d := fileIconW(file, 14, frame)(tg)
+		th.tipArea(tg, id+":lang", n.lang, d.Size)
+		io.Pop()
+	default:
+		th.textLine(tg, titleText, 24, n.lang)
+	}
 	to.Pop()
 	// The toolbar: wrap (pressed while wrapped), run, copy; 24dp, 2dp apart.
 	type tool struct {

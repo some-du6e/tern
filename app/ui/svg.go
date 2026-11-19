@@ -71,6 +71,138 @@ func iconW(name string, col color.NRGBA, sizeDp float32) W {
 	}
 }
 
+var evenOddSegs sync.Map // name → []seg
+
+// cachedEvenOdd is evenOdd(segs), made once under name.
+func cachedEvenOdd(name string, segs []seg) []seg {
+	v, ok := evenOddSegs.Load(name)
+	if !ok {
+		v, _ = evenOddSegs.LoadOrStore(name, evenOdd(segs))
+	}
+	return v.([]seg)
+}
+
+// evenOdd rewinds segs' subpaths so that the nonzero rule Gio fills by
+// gives SVG's evenodd: a subpath inside an even number of the others runs
+// one way, one inside an odd number the other, so it cuts a hole.
+func evenOdd(segs []seg) []seg {
+	var subs [][]seg
+	for i, s := range segs {
+		switch {
+		case s.op == 'M' || len(subs) == 0:
+			subs = append(subs, []seg{s})
+			continue
+		case segs[i-1].op == 'Z':
+			// Drawing on after a close starts again from the subpath's start.
+			subs = append(subs, []seg{{op: 'M', p: [3]f32.Point{subs[len(subs)-1][0].p[0]}}})
+		}
+		subs[len(subs)-1] = append(subs[len(subs)-1], s)
+	}
+	polys := make([][]f32.Point, len(subs))
+	for i, sub := range subs {
+		polys[i] = flatten(sub)
+	}
+	var out []seg
+	for i, sub := range subs {
+		depth := 0
+		for j := range subs {
+			if j != i && inside(polys[i][0], polys[j]) {
+				depth++
+			}
+		}
+		if (signedArea(polys[i]) > 0) != (depth%2 == 0) {
+			sub = reversed(sub)
+		}
+		out = append(out, sub...)
+	}
+	return out
+}
+
+// segEnd is where a segment ends.
+func segEnd(s seg) f32.Point {
+	switch s.op {
+	case 'Q':
+		return s.p[1]
+	case 'C':
+		return s.p[2]
+	}
+	return s.p[0]
+}
+
+// flatten is a subpath as a polygon: its curves cut into eight lines each.
+func flatten(sub []seg) []f32.Point {
+	pts := []f32.Point{sub[0].p[0]}
+	for _, s := range sub[1:] {
+		from := pts[len(pts)-1]
+		switch s.op {
+		case 'L':
+			pts = append(pts, s.p[0])
+		case 'Q', 'C':
+			for k := 1; k <= 8; k++ {
+				t := float32(k) / 8
+				u := 1 - t
+				if s.op == 'Q' {
+					pts = append(pts, from.Mul(u*u).Add(s.p[0].Mul(2*u*t)).Add(s.p[1].Mul(t*t)))
+				} else {
+					pts = append(pts, from.Mul(u*u*u).Add(s.p[0].Mul(3*u*u*t)).Add(s.p[1].Mul(3*u*t*t)).Add(s.p[2].Mul(t*t*t)))
+				}
+			}
+		}
+	}
+	return pts
+}
+
+// signedArea is a polygon's area, positive one way round.
+func signedArea(poly []f32.Point) float32 {
+	var a float32
+	for i := range poly {
+		p, q := poly[i], poly[(i+1)%len(poly)]
+		a += p.X*q.Y - q.X*p.Y
+	}
+	return a / 2
+}
+
+// inside reports whether p is inside poly, by the crossings of a ray.
+func inside(p f32.Point, poly []f32.Point) bool {
+	in := false
+	for i := range poly {
+		a, b := poly[i], poly[(i+1)%len(poly)]
+		if (a.Y > p.Y) != (b.Y > p.Y) && p.X < a.X+(p.Y-a.Y)*(b.X-a.X)/(b.Y-a.Y) {
+			in = !in
+		}
+	}
+	return in
+}
+
+// reversed is a subpath drawn the other way round.
+func reversed(sub []seg) []seg {
+	body := sub[1:]
+	closed := len(body) > 0 && body[len(body)-1].op == 'Z'
+	if closed {
+		body = body[:len(body)-1]
+	}
+	pts := []f32.Point{sub[0].p[0]}
+	for _, s := range body {
+		pts = append(pts, segEnd(s))
+	}
+	out := []seg{{op: 'M', p: [3]f32.Point{pts[len(pts)-1]}}}
+	for k := len(body) - 1; k >= 0; k-- {
+		s, to := body[k], pts[k]
+		switch s.op {
+		case 'L':
+			out = append(out, seg{op: 'L', p: [3]f32.Point{to}})
+		case 'Q':
+			out = append(out, seg{op: 'Q', p: [3]f32.Point{s.p[0], to}})
+		case 'C':
+			out = append(out, seg{op: 'C', p: [3]f32.Point{s.p[1], s.p[0], to}})
+		}
+	}
+	if closed {
+		out = append(out, seg{op: 'Z'})
+	}
+	return out
+}
+
 // cachedPath is path data d parsed once, under name.
 func cachedPath(name, d string) []seg {
 	v, ok := lucideSegs.Load(name)
