@@ -2,6 +2,7 @@ package ui
 
 import (
 	"image"
+	"image/color"
 	"testing"
 )
 
@@ -87,26 +88,35 @@ func TestFileLabel(t *testing.T) {
 // --context-chip-mention (#006d80 on the light canvas), after its file's
 // icon, without the code's #e5e5e5 box (§3.5).
 func TestFileChip(t *testing.T) {
-	st := mdBody()
-	st.cwd = "/w"
-	img := mdDrawn(t, "See `src/send.go:12` now", st, 400, 30, 2)
 	mention, code := rgb(0x006d80), rgb(0xe5e5e5)
-	chip, box := false, false
-	for y := 0; y < 2*23; y++ {
-		run := 0 // a box fills its line; text's edges only touch its grey
-		for x := 0; x < 2*400; x++ {
-			c := img.RGBAAt(x, y)
-			chip = chip || near(c.R, mention.R, 8) && near(c.G, mention.G, 8) && near(c.B, mention.B, 8)
-			if near(c.R, code.R, 2) && near(c.G, code.G, 2) && near(c.B, code.B, 2) {
-				run++
-			} else {
-				run = 0
-			}
-			box = box || run >= 10
-		}
+	is := func(c color.RGBA, w color.NRGBA, d uint8) bool {
+		return near(c.R, w.R, d) && near(c.G, w.G, d) && near(c.B, w.B, d)
 	}
-	if !chip || box {
-		t.Errorf("a chip's colour drawn %v, a code box drawn %v", chip, box)
+	drawnWith := func(cwd string) (chip, box bool) {
+		st := mdBody()
+		st.cwd = cwd
+		img := mdDrawn(t, "See `src/send.go:12` now", st, 400, 30, 2)
+		for y := 0; y < 2*23; y++ {
+			for x := 0; x < 2*400; x++ {
+				chip = chip || is(img.RGBAAt(x, y), mention, 8)
+				// A box is a patch of its fill; text's edges only cross it.
+				patch := true
+				for dy := 0; dy < 6 && patch; dy++ {
+					for dx := 0; dx < 6 && patch; dx++ {
+						patch = is(img.RGBAAt(x+dx, y+dy), code, 2)
+					}
+				}
+				box = box || patch
+			}
+		}
+		return chip, box
+	}
+	if chip, box := drawnWith("/w"); !chip || box {
+		t.Errorf("in a workspace: a chip's colour drawn %v, a code box drawn %v", chip, box)
+	}
+	// Without one, the relative path is just code.
+	if chip, box := drawnWith(""); chip || !box {
+		t.Errorf("without a workspace: a chip's colour drawn %v, a code box drawn %v", chip, box)
 	}
 }
 
