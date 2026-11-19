@@ -497,9 +497,10 @@ func TestTermPointerSelection(t *testing.T) {
 	}
 	frame()
 	cells := th.termMetrics(layout.Context{Ops: new(op.Ops), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}})
-	at := func(col int) f32.Point {
-		return f32.Pt(termPad+(float32(col)+0.5)*cells.w, 1+termPad+float32(cells.h)/2)
+	cell := func(col, row int) f32.Point {
+		return f32.Pt(termPad+(float32(col)+0.5)*cells.w, 1+termPad+(float32(row)+0.5)*float32(cells.h))
 	}
+	at := func(col int) f32.Point { return cell(col, 0) }
 	frame(pointer.Event{Kind: pointer.Press, Position: at(0), Buttons: pointer.ButtonPrimary, Source: pointer.Mouse},
 		pointer.Event{Kind: pointer.Move, Position: at(4), Buttons: pointer.ButtonPrimary, Source: pointer.Mouse},
 		pointer.Event{Kind: pointer.Release, Position: at(4), Source: pointer.Mouse})
@@ -515,8 +516,10 @@ func TestTermPointerSelection(t *testing.T) {
 	if th.in.terms.menu == nil {
 		t.Fatal("the selection menu should stay up once it has the keyboard")
 	}
-	frame(pointer.Event{Kind: pointer.Press, Position: at(8), Buttons: pointer.ButtonPrimary, Source: pointer.Mouse},
-		pointer.Event{Kind: pointer.Release, Position: at(8), Source: pointer.Mouse})
+	// The menu opened at the release, over row 0 from column 4; a click
+	// clear of it, at the start of row 2, closes it and the selection.
+	frame(pointer.Event{Kind: pointer.Press, Position: cell(0, 2), Buttons: pointer.ButtonPrimary, Source: pointer.Mouse},
+		pointer.Event{Kind: pointer.Release, Position: cell(0, 2), Source: pointer.Mouse})
 	if p.sel.on || th.in.terms.menu != nil {
 		t.Error("a click should clear the selection and its menu")
 	}
