@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"image"
 	"image/color"
+	"math"
 	"regexp"
 	"strings"
 	"time"
@@ -31,6 +32,9 @@ type Picture struct {
 	size image.Point
 	ok   bool
 }
+
+// Bytes is how much memory the decoded picture takes.
+func (p Picture) Bytes() int { return 4 * p.size.X * p.size.Y }
 
 // NewPicture decodes an image file's bytes for the timeline. A picture it
 // can't decode shows as its name.
@@ -71,6 +75,11 @@ func (p Picture) cover(gtx C, r image.Rectangle) {
 // set and out when it isn't (transition-opacity duration-200). Like a CSS
 // transition, it starts where it should be the first time it's drawn.
 func (th *Theme) reveal(gtx C, id string, on bool) float32 {
+	return th.transition(gtx, id, on, 200*time.Millisecond)
+}
+
+// transition is reveal over d: a transition's progress, 0 to 1.
+func (th *Theme) transition(gtx C, id string, on bool, d time.Duration) float32 {
 	if th.tl.reveals == nil {
 		th.tl.reveals = map[string]revealState{}
 	}
@@ -82,7 +91,7 @@ func (th *Theme) reveal(gtx C, id string, on bool) float32 {
 		} else if on {
 			from = 1
 		}
-		s = revealState{on: on, since: gtx.Now, from: from}
+		s = revealState{on: on, since: gtx.Now, from: from, d: d}
 		th.tl.reveals[id] = s
 	}
 	a := s.at(gtx.Now)
@@ -92,15 +101,16 @@ func (th *Theme) reveal(gtx C, id string, on bool) float32 {
 	return a
 }
 
-// revealState is a fade in flight.
+// revealState is a transition in flight, d long.
 type revealState struct {
 	on    bool
 	since time.Time
 	from  float32
+	d     time.Duration
 }
 
 func (s revealState) at(now time.Time) float32 {
-	t := easeStandard(clamp01(float32(now.Sub(s.since)) / float32(200*time.Millisecond)))
+	t := easeStandard(clamp01(float32(now.Sub(s.since)) / float32(s.d)))
 	if s.on {
 		return s.from + (1-s.from)*t
 	}
@@ -147,6 +157,11 @@ func (th *Theme) userRow(gtx C, r *TimelineRow, hot bool, cwd string) int {
 			return th.textLine(gtx, Txt{Size: 11, Color: over(faded(P.MutedForeground, 0xb3), P.Background)}, 16, "Sent by T3 Code")
 		}), dp(gtx, 4))
 	}
+	if m.Guest != "" {
+		place(th.recorded(gtx, func(gtx C) D {
+			return th.textLine(gtx, Txt{Size: 11, Color: P.GuestForeground}, 16, m.Guest)
+		}), dp(gtx, 4))
+	}
 	if m.Steer != SteerNone {
 		label := "Steer"
 		if m.SteerUnread {
@@ -166,6 +181,8 @@ func (th *Theme) userRow(gtx C, r *TimelineRow, hot bool, cwd string) int {
 		body = place(th.recorded(within(gtx, maxW), func(gtx C) D { return th.media(gtx, m, words) }), 0)
 	}
 	switch {
+	case m.Fold != "":
+		body = place(th.recorded(within(gtx, maxW), func(gtx C) D { return th.foldedBubble(gtx, r, cwd) }), 0)
 	case !words && len(m.Pictures) == 0 && len(m.Files) > 0:
 		// Files sent without words are cards, not a bubble.
 		cards := th.recorded(within(gtx, maxW), func(gtx C) D {
@@ -187,21 +204,30 @@ func (th *Theme) userRow(gtx C, r *TimelineRow, hot bool, cwd string) int {
 	if m.Status != "" {
 		place(th.recorded(gtx, func(gtx C) D { return th.statusPill(gtx, m.Status) }), dp(gtx, 4))
 	}
+	if m.Fold != "" && !th.tl.opened[r.ID+":fold"] {
+		// A folded message shows its actions only once opened.
+		return y - gap
+	}
 	// The actions: the time, then copy and the prompt's link, 2dp apart;
 	// they fade in with the row's hover. A message another of yours
 	// follows floats them 8dp left of the bubble, so the two sit 4dp
 	// apart; a lane under 37rem keeps them on their own line
-	// (TimelineUserMessageRow.tsx:788-840, 1038-1056).
+	// (TimelineUserMessageRow.tsx:788-840, 1038-1056). An agent's message
+	// starts them with "Open thread", to the thread that sent it.
 	float := m.GroupedNext && w >= dp(gtx, 592)
 	a := th.reveal(gtx, r.ID+":actions", hot)
 	actions := th.recorded(gtx, func(gtx C) D {
 		cid := "copy:" + r.ID
 		th.copyTarget(cid, StripChips(m.Text))
-		kids := []layout.FlexChild{
+		var kids []layout.FlexChild
+		if m.Sender != "" {
+			kids = append(kids, layout.Rigid(th.inlineButton("thread:"+m.Sender, "Open thread", true, false)), layout.Rigid(Spacer(8, 0)))
+		}
+		kids = append(kids,
 			layout.Rigid(th.stampText(r.ID, m.At, 16)),
 			layout.Rigid(Spacer(8, 0)),
 			layout.Rigid(th.messageCopy(cid, "Copy message", "copy", P.Background)),
-		}
+		)
 		if m.PromptLink != "" {
 			lid := "copy.link:" + r.ID
 			th.copyTarget(lid, m.PromptLink)
@@ -411,6 +437,9 @@ func (th *Theme) bubble(gtx C, r *TimelineRow, mediaAbove bool, cwd string) D {
 	m := r.Message
 	maxW := gtx.Constraints.Max.X
 	surface := P.MessageSurface
+	if m.Guest != "" {
+		surface = P.GuestSurface
+	}
 	p := dp(gtx, 12)
 	st := mdStyle{color: P.Foreground, on: surface, user: true, owner: r.ID, cwd: cwd}
 	doc := th.parsed(m.Text, st, m.Chips)
@@ -484,6 +513,78 @@ func (th *Theme) bubble(gtx C, r *TimelineRow, mediaAbove bool, cwd string) D {
 		off.Pop()
 	}
 	return D{Size: image.Pt(w, h)}
+}
+
+// foldedBubble is a folded message (TimelineUserMessageRow.tsx:383-410,
+// 876-920): on --message-surface, radius 16, a 36dp header padded 12 by
+// 8, its 16dp icon at stroke 2 and its muted label, at most half the
+// header, then the message's first line and a 14dp chevron, 6dp apart;
+// clicking it opens the bubble to the whole 80%, the message under the
+// header padded 12 at the sides and below, scrolling past 384dp.
+func (th *Theme) foldedBubble(gtx C, r *TimelineRow, cwd string) D {
+	m := r.Message
+	maxW := gtx.Constraints.Max.X
+	id := r.ID + ":fold"
+	if th.tl.opened == nil {
+		th.tl.opened = map[string]bool{}
+	}
+	th.events(gtx, id)
+	if th.clicked(id) {
+		th.tl.opened[id] = !th.tl.opened[id]
+	}
+	open := th.tl.opened[id]
+	surface := P.MessageSurface
+	px, gap, head := dp(gtx, 12), dp(gtx, 6), dp(gtx, 36)
+	summary := ""
+	for _, l := range strings.Split(StripChips(m.Text), "\n") {
+		if summary = strings.TrimSpace(l); summary != "" {
+			break
+		}
+	}
+	text := func(s string, col color.NRGBA) W {
+		return func(gtx C) D { return th.textLine(gtx, Txt{Size: 14, Color: col}, 20, s) }
+	}
+	labelW := th.recorded(gtx, text(m.Fold, P.MutedForeground)).Size.X
+	summaryW := th.recorded(gtx, text(summary, P.MessageForeground)).Size.X
+	w := maxW
+	if !open {
+		w = min(maxW, px+dp(gtx, 16)+gap+labelW+gap+summaryW+gap+dp(gtx, 14)+px)
+	}
+	inner := w - 2*px
+	var body recording
+	bodyH := 0
+	if open {
+		st := mdStyle{color: P.MessageForeground, on: surface, user: true, owner: r.ID, cwd: cwd}
+		body = th.recorded(within(gtx, inner), func(gtx C) D { return th.markdown(gtx, m.Text, st, m.Chips) })
+		bodyH = min(body.Size.Y, dp(gtx, 384)) + px
+	}
+	rad := dp(gtx, 16)
+	fill(gtx, surface, image.Rect(0, 0, w, head+bodyH), rad)
+	ho := op.Offset(image.Pt(px, (head-dp(gtx, 20))/2)).Push(gtx.Ops)
+	layout.Flex{Alignment: layout.Middle}.Layout(within(gtx, inner),
+		layout.Rigid(lucideStroke(m.FoldIcon, P.MutedForeground, 16, 2)),
+		layout.Rigid(Spacer(6, 0)),
+		layout.Rigid(func(gtx C) D { return text(m.Fold, P.MutedForeground)(within(gtx, min(labelW, inner/2))) }),
+		layout.Rigid(Spacer(6, 0)),
+		layout.Flexed(1, text(summary, P.MessageForeground)),
+		layout.Rigid(Spacer(6, 0)),
+		layout.Rigid(func(gtx C) D {
+			s := float32(dp(gtx, 14))
+			// The chevron turns over while the message is open.
+			if open {
+				defer op.Affine(f32.Affine2D{}.Rotate(f32.Pt(s/2, s/2), math.Pi)).Push(gtx.Ops).Pop()
+			}
+			return LucideW("chevron-down", P.MutedForeground, 14)(gtx)
+		}),
+	)
+	ho.Pop()
+	th.hit(gtx, id, image.Pt(w, head))
+	if open {
+		bo := op.Offset(image.Pt(px, head)).Push(gtx.Ops)
+		th.vscroll(gtx, id+":body", image.Pt(inner, bodyH-px), body.Size.Y, 0, body.call)
+		bo.Pop()
+	}
+	return D{Size: image.Pt(w, head+bodyH)}
 }
 
 // fadeDown paints col over r from transparent at the top to opaque at the

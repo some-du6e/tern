@@ -55,8 +55,48 @@ func (m *chatMessage) steer() bool {
 	return m.intent == "steer" || m.intent == "promoted_queued_to_steer"
 }
 
-// own is a message the user sent, not an agent or T3 (resolveUserMessagePresentation).
-func (m *chatMessage) own() bool { return m.role == "user" && m.createdBy != "agent" }
+// own is a message the user sent, not a guest, an automation, an agent or
+// T3 (resolveUserMessageGrouping).
+func (m *chatMessage) own() bool {
+	who, _ := m.attribution()
+	return m.role == "user" && who == ""
+}
+
+// attribution is T3's resolveUserMessagePresentation: who a user message
+// is from as people see it, "" for your own, "guest", "automation",
+// "agent" or "t3code", and its words as they see them: a guest's own, an
+// old automation's without their prefix, none for the attachment-only
+// prompt.
+func (m *chatMessage) attribution() (who, text string) {
+	it := m.item
+	switch {
+	case m.role != "user":
+		return "", m.text
+	case it.Context != nil && it.Context.Guest != nil:
+		return "guest", it.Context.Guest.Text
+	case it.ScheduledTaskID != "":
+		return "automation", m.text
+	}
+	if p := legacyAutomation.FindString(m.text); p != "" && (legacyAutomationID.MatchString(m.id) || m.createdBy == "agent") {
+		return "automation", m.text[len(p):]
+	}
+	text = m.text
+	if attachmentOnly(text) {
+		text = ""
+	}
+	switch {
+	case m.createdBy != "agent":
+		return "", text
+	case m.source == "server":
+		return "t3code", text
+	}
+	return "agent", text
+}
+
+var (
+	legacyAutomation   = regexp.MustCompile(`^\[Triggered by schedule task: [^\r\n]+\]\r?\n\r?\n`)
+	legacyAutomationID = regexp.MustCompile(`^scheduled-task-message:(.+):\d+:(?:scheduled|manual)$`)
+)
 
 // standalone item types are events, not work (session-logic.ts:232-240).
 var standalone = map[string]bool{"fork": true, "handoff": true, "run_interrupt_request": true, "run_interrupt_result": true,

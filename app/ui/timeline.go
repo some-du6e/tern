@@ -549,16 +549,14 @@ func (th *Theme) tipArea(gtx C, id, tip string, size image.Point) {
 }
 
 // turnFold is "Worked for 2m 14s": a muted 22.75dp button that brightens
-// on hover with its chevron, over a rule at border/60
+// over 150ms on hover with its chevron, over a rule at border/60
 // (MessagesTimeline.tsx:1805-1840).
 func (th *Theme) turnFold(gtx C, r *TimelineRow, hot bool) int {
 	w := gtx.Constraints.Max.X
 	id := "fold:" + r.Group
 	c, _ := th.events(gtx, id)
-	col := P.MutedForeground
-	if c.Hovered() {
-		col = P.Foreground
-	}
+	// transition-colors: muted, brightening to the foreground over 150ms.
+	col := mix(P.Foreground, P.MutedForeground, th.transition(gtx, id+":hover", c.Hovered(), 150*time.Millisecond))
 	top, line := dp(gtx, 4), dp(gtx, 22.75)
 	icon := "chevron-right"
 	if r.Open {

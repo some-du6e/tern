@@ -85,6 +85,10 @@ type App struct {
 	images  map[string][]pastedImage // pasted and not sent yet, same keys
 	trash   map[string][]pastedImage // their chips were deleted; undo brings them back
 	sent    map[string]*sentThumb    // sent pictures' thumbnails, by env/attachment id
+	// sentOrder is sent's keys, shown longest ago first; scenes counts the
+	// scenes built, for which one showed a picture last.
+	sentOrder []string
+	scenes    uint64
 
 	search       string
 	showSnoozed  bool

@@ -586,7 +586,7 @@ func (a *App) signOut() {
 	a.choices = map[string]*choice{}
 	a.images = map[string][]pastedImage{}
 	a.trash = map[string][]pastedImage{}
-	a.sent = map[string]*sentThumb{}
+	a.sent, a.sentOrder = map[string]*sentThumb{}, nil
 	a.login = ui.SignIn{}
 	envs := t3.Paired(a.store)
 	a.mu.Unlock()

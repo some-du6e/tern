@@ -295,12 +295,9 @@ func eventRow(out ui.TimelineRow, it *t3.TurnItem, env string) (ui.TimelineRow, 
 // userMessage is a user's bubble: its text with pictures as chips.
 func (a *App) userMessage(r *row, v *threadView) *ui.Message {
 	m := r.entry.msg
-	text := m.text
-	if attachmentOnly(text) {
-		text = ""
-	}
+	who, said := m.attribution()
 	var chips []string
-	text = ui.TrimText(t3.ReplaceImages(text, func(label string) string {
+	text := ui.TrimText(t3.ReplaceImages(said, func(label string) string {
 		if len(chips) == 9 {
 			return "[" + label + "]"
 		}
@@ -313,7 +310,34 @@ func (a *App) userMessage(r *row, v *threadView) *ui.Message {
 		return nil
 	}
 	out := &ui.Message{ID: m.id, Text: text, At: m.at, Chips: chips, Pictures: pics, Files: files,
-		GroupedNext: r.next, GroupedPrev: r.prev, SentByT3: m.createdBy == "agent" && m.source == "server", PromptLink: promptLink(m.text)}
+		GroupedNext: r.next, GroupedPrev: r.prev, SentByT3: who == "t3code", PromptLink: promptLink(said)}
+	switch it := m.item; who {
+	case "guest":
+		out.Guest = it.Context.Guest.Name
+	case "automation":
+		out.Fold, out.FoldIcon = "Automation", "calendar-clock"
+	case "agent":
+		// Another thread's agent sent it: that thread's title, the one it
+		// had where tern can't see it, or "Agent".
+		out.Fold, out.FoldIcon = "Agent", "messages-square"
+		sender := ""
+		switch {
+		case it.LinkedSender != nil:
+			sender = ref(it.LinkedSender.EnvironmentID, it.LinkedSender.ThreadID)
+			if t := strings.TrimSpace(it.LinkedSender.Title); t != "" {
+				out.Fold = t
+			}
+		case it.SenderThreadID != "":
+			sender = ref(v.env.id(), it.SenderThreadID)
+		}
+		if e, t := a.thread(sender); sender != "" && e != nil {
+			// Its environment is one tern reaches: "Open thread" goes there.
+			out.Sender = sender
+			if t != nil && strings.TrimSpace(t.Title) != "" {
+				out.Fold = strings.TrimSpace(t.Title)
+			}
+		}
+	}
 	if !r.steerCont {
 		switch m.intent {
 		case "steer":

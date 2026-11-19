@@ -130,3 +130,26 @@ func TestChipAtTheEnd(t *testing.T) {
 		t.Fatalf("sent %q", got)
 	}
 }
+
+// Sent pictures stay decoded up to sentBudget: past it, the ones shown
+// longest ago go, but never one the last scene showed.
+func TestSentPicturesBudget(t *testing.T) {
+	defer func(b int) { sentBudget = b }(sentBudget)
+	a := testApp(t)
+	p := ui.NewPicture(pngBytes(t))
+	for i, k := range []string{"e/a", "e/b", "e/c"} {
+		a.sent[k] = &sentThumb{picture: p, shown: uint64(i)}
+		a.sentOrder = append(a.sentOrder, k)
+	}
+	a.scenes = 2 // the last scene showed e/c
+	sentBudget = 2 * p.Bytes()
+	a.trimSent()
+	if a.sent["e/a"] != nil || a.sent["e/b"] == nil || a.sent["e/c"] == nil {
+		t.Fatalf("over the budget by one, kept %v", a.sentOrder)
+	}
+	sentBudget = 0
+	a.trimSent()
+	if len(a.sent) != 1 || a.sent["e/c"] == nil {
+		t.Errorf("with no budget, kept %v", a.sentOrder)
+	}
+}

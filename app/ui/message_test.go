@@ -3,6 +3,11 @@ package ui
 import (
 	"image"
 	"testing"
+	"time"
+
+	"gioui.org/layout"
+	"gioui.org/op"
+	"gioui.org/unit"
 )
 
 // Your message's actions end 4dp in from the lane's right: the time, 8dp,
@@ -33,6 +38,53 @@ func TestUserMessageActions(t *testing.T) {
 	click(image.Pt(right-12, y))
 	if _, data, ok := r.WriteClipboard(); !ok || string(data) != "Hello" {
 		t.Errorf("without a link, the row's last button copied %q %v", data, ok)
+	}
+}
+
+// An automation's or another agent's message folds to a 36dp header, its
+// icon, label and first line; clicking the header opens the message under
+// it, padded 12 below, and brings its actions (TimelineUserMessageRow.tsx:
+// 283-410).
+func TestFoldedMessage(t *testing.T) {
+	th := NewTheme()
+	s := &Scene{Timeline: Timeline{ID: "fold", Rows: []TimelineRow{{ID: "au", Kind: RowUser,
+		Message: &Message{ID: "au", Text: "Nightly check\n\nEvery night.", Fold: "Automation", FoldIcon: "calendar-clock"}}}}}
+	height := func() int {
+		var ops op.Ops
+		gtx := layout.Context{Ops: &ops, Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Constraints{Max: image.Pt(800, 2000)}, Now: time.Now()}
+		return th.timelineRow(gtx, s, &s.Timeline.Rows[0], 0, 736).Size.Y
+	}
+	if h := height(); h != 36+16 {
+		t.Fatalf("folded: %ddp tall, want 52", h)
+	}
+	timelineClicks(th, s)(image.Pt(32+736-20, 24+18))
+	// Two paragraphs of 23, 10 apart; 12 under them; the actions' 4 and 24.
+	if h, want := height(), 36+56+12+4+24+16; h != want {
+		t.Errorf("open: %ddp tall, want %d", h, want)
+	}
+}
+
+// A fold's label brightens over T3's 150ms transition-colors, eased
+// cubic-bezier(0.4, 0, 0.2, 1), and dims back the same way.
+func TestTransition(t *testing.T) {
+	th := NewTheme()
+	now := time.Now()
+	at := func(ms int, on bool) float32 {
+		var ops op.Ops
+		gtx := layout.Context{Ops: &ops, Now: now.Add(time.Duration(ms) * time.Millisecond)}
+		return th.transition(gtx, "fold:x:hover", on, 150*time.Millisecond)
+	}
+	if v := at(0, false); v != 0 {
+		t.Fatalf("at rest %v", v)
+	}
+	for _, c := range []struct {
+		ms     int
+		on     bool
+		lo, hi float32
+	}{{0, true, 0, 0.01}, {75, true, 0.75, 0.85}, {150, true, 1, 1}, {200, false, 1, 1}, {275, false, 0.15, 0.25}, {350, false, 0, 0}} {
+		if v := at(c.ms, c.on); v < c.lo || v > c.hi {
+			t.Errorf("%dms, hovered %v: %.3f, want %.2f to %.2f", c.ms, c.on, v, c.lo, c.hi)
+		}
 	}
 }
 

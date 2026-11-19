@@ -134,10 +134,24 @@ type TurnItem struct {
 	ProviderTurnID   string `json:"providerTurnId"`
 	ProviderThreadID string `json:"providerThreadId"`
 	// A user message: turn_start, queued_turn, steer or
-	// promoted_queued_to_steer; who sent it.
-	InputIntent    string `json:"inputIntent"`
-	CreatedBy      string `json:"createdBy"`
-	CreationSource string `json:"creationSource"`
+	// promoted_queued_to_steer; who sent it: an automation, another
+	// thread's agent (here or in a linked environment), or a guest.
+	InputIntent     string `json:"inputIntent"`
+	CreatedBy       string `json:"createdBy"`
+	CreationSource  string `json:"creationSource"`
+	ScheduledTaskID string `json:"scheduledTaskId"`
+	SenderThreadID  string `json:"senderThreadId"`
+	LinkedSender    *struct {
+		EnvironmentID string `json:"environmentId"`
+		ThreadID      string `json:"threadId"`
+		Title         string `json:"title"`
+	} `json:"linkedSender"`
+	Context *struct {
+		Guest *struct {
+			Name string `json:"name"`
+			Text string `json:"text"`
+		} `json:"guest"`
+	} `json:"context"`
 	// A /compact T3 sent on its own: beforeCacheExpires or onReturn.
 	IdleCompaction string `json:"idleCompaction"`
 	// An assistant message: commentary, partial_answer, final_answer.

@@ -257,6 +257,7 @@ func (a *App) Scene() *ui.Scene {
 }
 
 func (a *App) build(now time.Time) *ui.Scene {
+	a.scenes++
 	s := &ui.Scene{Live: true}
 	if !a.booted {
 		s.Booting = true

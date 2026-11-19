@@ -93,10 +93,16 @@ func TestFileChip(t *testing.T) {
 	mention, code := rgb(0x006d80), rgb(0xe5e5e5)
 	chip, box := false, false
 	for y := 0; y < 2*23; y++ {
+		run := 0 // a box fills its line; text's edges only touch its grey
 		for x := 0; x < 2*400; x++ {
 			c := img.RGBAAt(x, y)
 			chip = chip || near(c.R, mention.R, 8) && near(c.G, mention.G, 8) && near(c.B, mention.B, 8)
-			box = box || near(c.R, code.R, 2) && near(c.G, code.G, 2) && near(c.B, code.B, 2)
+			if near(c.R, code.R, 2) && near(c.G, code.G, 2) && near(c.B, code.B, 2) {
+				run++
+			} else {
+				run = 0
+			}
+			box = box || run >= 10
 		}
 	}
 	if !chip || box {

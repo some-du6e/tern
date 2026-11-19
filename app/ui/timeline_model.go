@@ -135,6 +135,13 @@ type Message struct {
 	// PromptLink opens the prompt in a new thread on T3's hosted app, for
 	// "Copy prompt link"; empty for a prompt too long for one.
 	PromptLink string
+	// Fold folds an automation's or another agent's message under one line
+	// (FoldedMessageHeader): its label, "Automation" or the sending
+	// thread's title or "Agent", and FoldIcon its icon. Sender is the
+	// sending thread's ref, which "Open thread" opens.
+	Fold, FoldIcon, Sender string
+	// Guest is a guest's name, over their message on --guest-surface.
+	Guest string
 
 	// An assistant's message.
 	Meta  bool   // the copy and time row under it

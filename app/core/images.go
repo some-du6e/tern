@@ -235,11 +235,37 @@ func attachmentFiles(raws []json.RawMessage) []ui.File {
 	return out
 }
 
-// sentThumb is a sent picture, loaded once per attachment.
+// sentThumb is a sent picture, loaded once per attachment, and the scene
+// that last showed it.
 type sentThumb struct {
 	picture ui.Picture
 	loading bool
 	failed  bool
+	shown   uint64
+}
+
+// sentBudget is how many bytes of decoded sent pictures tern keeps: past
+// it, those shown longest ago go, to load again if they're shown again.
+var sentBudget = 48 << 20
+
+// trimSent drops sent pictures, those shown longest ago first, until the
+// rest fit sentBudget. The ones the last scene showed stay. Call with the
+// lock held.
+func (a *App) trimSent() {
+	total := 0
+	for _, st := range a.sent {
+		total += st.picture.Bytes()
+	}
+	for i := 0; total > sentBudget && i < len(a.sentOrder); {
+		st := a.sent[a.sentOrder[i]]
+		if st.loading || st.shown == a.scenes {
+			i++
+			continue
+		}
+		total -= st.picture.Bytes()
+		delete(a.sent, a.sentOrder[i])
+		a.sentOrder = append(a.sentOrder[:i], a.sentOrder[i+1:]...)
+	}
 }
 
 // fetchSlots caps how many sent pictures download at once.
@@ -263,7 +289,14 @@ func (a *App) attachmentPictures(e *envState, raws []json.RawMessage) []ui.Pictu
 		}
 		var p ui.Picture
 		if st != nil {
-			p = st.picture
+			p, st.shown = st.picture, a.scenes
+			for i, k := range a.sentOrder {
+				if k == key {
+					a.sentOrder = append(a.sentOrder[:i], a.sentOrder[i+1:]...)
+					break
+				}
+			}
+			a.sentOrder = append(a.sentOrder, key)
 		}
 		p.Name = at.Name
 		out = append(out, p)
@@ -281,6 +314,7 @@ func (a *App) fetchPicture(conn *t3.Conn, id string, st *sentThumb) {
 	}
 	a.mu.Lock()
 	st.picture, st.loading, st.failed = p, false, err != nil
+	a.trimSent()
 	a.mu.Unlock()
 	a.changed()
 }

@@ -584,6 +584,48 @@ func TestFileOnlyMessage(t *testing.T) {
 	}
 }
 
+// Messages people didn't send themselves are T3's: another thread's
+// agent's fold under that thread's title, with the thread to open; an
+// automation's under "Automation", an old one's prefix gone; a guest's
+// show the guest's own words under their name. None group with yours
+// (userMessage.ts resolveUserMessagePresentation).
+func TestMessageAttribution(t *testing.T) {
+	tt := newTimelineTest(t, nil,
+		turnItem("u1", "user_message", 1, 0, "text", "Mine", "inputIntent", "turn_start"),
+		turnItem("ag", "user_message", 2, 1, "text", "Run the suite", "inputIntent", "turn_start", "createdBy", "agent",
+			"creationSource", "agent", "senderThreadId", "same"),
+		turnItem("ln", "user_message", 3, 2, "text", "From afar", "inputIntent", "turn_start", "createdBy", "agent",
+			"linkedSender", map[string]any{"environmentId": "elsewhere", "threadId": "x", "title": "A far thread"}),
+		turnItem("au", "user_message", 4, 3, "text", "Nightly check", "inputIntent", "turn_start", "scheduledTaskId", "task-1"),
+		turnItem("lg", "user_message", 5, 4, "text", "[Triggered by schedule task: Nightly]\n\nCheck the backups", "inputIntent", "turn_start",
+			"createdBy", "agent"),
+		turnItem("gu", "user_message", 6, 5, "text", "Guest Ada says: hi", "inputIntent", "turn_start",
+			"context", map[string]any{"version": 1, "records": []any{}, "guest": map[string]any{"guestMessageId": "g1", "name": "Ada", "text": "hi"}}),
+		turnItem("u2", "user_message", 7, 6, "text", "Mine again", "inputIntent", "turn_start"),
+	)
+	rows := tt.rows()
+	wantShape(t, "rows", rows, "user:u1, user:ag, user:ln, user:au, user:lg, user:gu, user:u2")
+	for _, c := range []struct {
+		row                       int
+		fold, icon, sender, guest string
+		text                      string
+	}{
+		{1, "Same id on swiss", "messages-square", "swiss/same", "", "Run the suite"},
+		{2, "A far thread", "messages-square", "", "", "From afar"},
+		{3, "Automation", "calendar-clock", "", "", "Nightly check"},
+		{4, "Automation", "calendar-clock", "", "", "Check the backups"},
+		{5, "", "", "", "Ada", "hi"},
+	} {
+		m := rows[c.row].Message
+		if m.Fold != c.fold || m.FoldIcon != c.icon || m.Sender != c.sender || m.Guest != c.guest || m.Text != c.text {
+			t.Errorf("row %d: fold %q %q, sender %q, guest %q, text %q", c.row, m.Fold, m.FoldIcon, m.Sender, m.Guest, m.Text)
+		}
+	}
+	if rows[0].Message.GroupedNext || rows[6].Message.GroupedPrev {
+		t.Error("your messages group across others'")
+	}
+}
+
 // "Copy prompt link" copies a new-thread link on T3's hosted app, the
 // prompt form-encoded as URLSearchParams does, its pictures as their
 // labels; empty prompts, the attachment-only prompt and prompts over 8000
