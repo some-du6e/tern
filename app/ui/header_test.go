@@ -272,7 +272,8 @@ func TestHeaderGuestShare(t *testing.T) {
 		t.Errorf("ink in the 12dp gap before the link (%#x): the title should stop short of it", ink)
 	}
 	if ink := darkest(img, image.Rect(x0-12-30, 14, x0-12, 38)); ink > 0x60 {
-		t.Errorf("the long title should run up to the gap (darkest red there %#x)", ink)
+		_, end, _ := inkCols(img, image.Rect(20, 14, x0-12, 38), P.Background)
+		t.Errorf("the long title should run up to the gap at %d (darkest red there %#x; its ink ends at %d)", x0-12, ink, end)
 	}
 	wantPixel(t, img, image.Pt(bx+3, 26), P.Background, "Stop sharing at rest, no fill")
 

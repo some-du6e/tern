@@ -793,7 +793,8 @@ func TestHoverCardBranch(t *testing.T) {
 		gtx.Constraints = layout.Constraints{Max: image.Pt(400, 100)}
 		return th.Text(gtx, txt, head[:n]+"…"+tail)
 	})
-	sameInk(t, img, ref, image.Rect(286, y, 286+272, y+16), "the card's branch")
+	sameInk(t, img, ref, image.Rect(286, y, 286+272, y+16), fmt.Sprintf("the card's branch, cut after %d (%d and %d wide, %d whole), at y %d",
+		n, width(head[:n]), width("…"+tail), width(head[:n]+"…"+tail), y))
 }
 
 // sidebarFrames drives the sidebar through Gio's router, 256 by 800.
