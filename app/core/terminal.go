@@ -250,7 +250,9 @@ func (a *App) reconcileTermsLocked(ref string) {
 	}
 	hidden := a.termHidden[ref]
 	server = slices.DeleteFunc(server, func(id string) bool { return slices.Contains(hidden, id) })
-	a.putTermState(ref, s.reconcile(server))
+	if !slices.Equal(server, s.IDs) {
+		a.putTermState(ref, s.reconcile(server))
+	}
 }
 
 func sameIDs(a, b []string) bool {
