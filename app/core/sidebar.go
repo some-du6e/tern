@@ -624,7 +624,10 @@ func (a *App) shelve(now time.Time, scope map[string]bool) sidebarList {
 			}
 			st := sideThread{Thread: t, e: e, ref: ref(e.id(), t.ID), child: children[t.ID]}
 			present[st.ref] = true
-			if wake := parseTime(t.SnoozedUntil); wake.After(now) {
+			// Snoozing and settling are the server's settings at work: until
+			// its config has loaded, a thread is pinned or active.
+			loaded := e.config != nil
+			if wake := parseTime(t.SnoozedUntil); loaded && wake.After(now) {
 				// A snooze ends when it's due, not on the minute's tick
 				// after (useSnoozeWakeClock).
 				a.redrawAt(wake)
@@ -632,9 +635,9 @@ func (a *App) shelve(now time.Time, scope map[string]bool) sidebarList {
 			// Every thread is watched, so one filed elsewhere loses its hold.
 			w := a.onWorkingShelf(st.ref, t, st.child, now)
 			switch {
-			case snoozed(t, st.child, now):
+			case loaded && snoozed(t, st.child, now):
 				l.snoozed = append(l.snoozed, st)
-			case t.SettledOverride == "settled":
+			case loaded && t.SettledOverride == "settled":
 				l.settled = append(l.settled, st)
 			case t.PinnedAt != "":
 				l.pinned = append(l.pinned, st)
@@ -660,13 +663,26 @@ func (a *App) shelve(now time.Time, scope map[string]bool) sidebarList {
 		return k
 	})
 	newestFirst(l.working, func(t sideThread) int64 {
-		sent := t.LatestUserAuthoredMessageAt
-		if sent == "" {
+		// A thread the user never wrote in goes by when it began; only an
+		// older server, which doesn't send the field, by its run's request.
+		sent := t.LatestUserAuthoredMessageAt.At
+		if !t.LatestUserAuthoredMessageAt.Sent {
 			sent = t.LatestRunRequestedAt
 		}
 		return max(ms(t.CreatedAt), ms(sent))
 	})
-	sort.SliceStable(l.snoozed, func(i, j int) bool { return ms(l.snoozed[i].SnoozedUntil) < ms(l.snoozed[j].SnoozedUntil) })
+	// Soonest to wake first; ties keep one order, as T3's do over its
+	// stable shell list, not the map's, which changes with every build.
+	sort.SliceStable(l.snoozed, func(i, j int) bool {
+		a, b := l.snoozed[i], l.snoozed[j]
+		if wa, wb := ms(a.SnoozedUntil), ms(b.SnoozedUntil); wa != wb {
+			return wa < wb
+		}
+		if a.ID != b.ID {
+			return a.ID < b.ID
+		}
+		return a.e.id() < b.e.id()
+	})
 	sort.SliceStable(l.settled, func(i, j int) bool {
 		si, sj := settledTime(l.settled[i].Thread), settledTime(l.settled[j].Thread)
 		if !si.Equal(sj) {
@@ -738,6 +754,9 @@ func (a *App) sidebar(s *ui.Scene, now time.Time) {
 		a.searchScene(sb, l, q, now)
 		return
 	}
+	// The results go with their query, so Enter in an emptied field opens
+	// nothing.
+	a.results = a.results[:0]
 	draft := a.draftRow(scope)
 	if draft != nil {
 		sb.Items = append(sb.Items, ui.SidebarItem{Draft: draft}, ui.SidebarItem{Divider: true})
@@ -871,7 +890,7 @@ func (a *App) row(st sideThread, shelf string, now time.Time) ui.ThreadRow {
 		Draft:        !active && drafts[st.ref] != "",
 		Regenerating: t.TitleRegeneration != nil,
 		Branch:       t.Branch,
-		Worktree:     t.WorktreePath != "",
+		Worktree:     strings.TrimSpace(t.WorktreePath),
 		Machine:      e.env.Label,
 		MachineIcon:  machineIcon(e.config),
 		Terminals:    a.busyTerminals(st.ref),
@@ -884,17 +903,20 @@ func (a *App) row(st sideThread, shelf string, now time.Time) ui.ThreadRow {
 	st2 := status(t, st.child)
 	// The open thread's watermark moves as it's read, so it's never unread.
 	r.Unread = !active && unseen(t)
-	woken := woke(t, st.child, now)
-	r.Recede = recede(st2, r.Unread, woken, active, r.Selected)
-	r.Status, r.Label = rowStatus(t, st2, woken, r.Unread)
+	r.Woke = woke(t, st.child, now)
+	r.Recede = recede(st2, r.Unread, r.Woke, active, r.Selected)
+	r.Status, r.Label = rowStatus(t, st2, r.Woke, r.Unread)
+	// Timers count to the whole second (useNowSecond): a scene rebuilt
+	// mid-second shows the second it's in, not the next.
+	sec := now.Truncate(time.Second)
 	switch st2 {
 	case stPreparing, stWorking:
 		if s := workStart(t); !s.IsZero() {
-			r.Timer = runTimer(now.Sub(s))
+			r.Timer = runTimer(sec.Sub(s))
 		}
 	case stWaiting:
 		if d := latestRunDone(t); !d.IsZero() {
-			r.Timer = runTimer(now.Sub(d))
+			r.Timer = runTimer(sec.Sub(d))
 		}
 	}
 	switch shelf {

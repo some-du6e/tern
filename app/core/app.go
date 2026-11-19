@@ -72,6 +72,7 @@ type App struct {
 	net  string
 
 	openID   string // ref of the open thread
+	visit    visits // its read marker
 	tabs     []string
 	view     *threadView
 	draft    string // project id while composing a new thread
@@ -94,6 +95,8 @@ type App struct {
 	searchHi    string
 	results     []string
 	scope       []string
+	scopeDirty  bool       // changed since it was last saved
+	scopeSave   sync.Mutex // held while saving it, outside mu
 	filterOpen  bool
 	filterQuery string
 	filterKeys  []string
@@ -944,10 +947,88 @@ func (a *App) subscribeThread(e *envState, conn *t3.Conn, gen int, r string) {
 			a.changed()
 		}
 	})
-	// Moves T3's read marker, so the thread stops showing as unread.
-	go func() {
-		_ = conn.Dispatch(map[string]any{"type": "thread.visit", "threadId": id, "visitedAt": time.Now().UTC().Format(time.RFC3339Nano), "opened": true})
-	}()
+}
+
+// ---------- visits ----------
+
+// visitThrottle is how often the open thread's visit goes out while a run
+// streams (VISIT_DISPATCH_THROTTLE_MS): each of its updates moves the
+// thread's updatedAt.
+const visitThrottle = 10 * time.Second
+
+// visits is the open thread's read marker as T3's tracker keeps it while
+// the thread is shown (createThreadVisitTracker): the thread, whether its
+// open is yet to go with the first visit, the marker last sent (or found
+// already there) and when the last visit was sent.
+type visits struct {
+	ref  string
+	open bool
+	sent time.Time
+	at   time.Time
+}
+
+// next is the visit to send for t, v's thread, as of now: the marker, ""
+// for none, and whether the open goes with it. Each update the user is
+// looking at moves the marker to the thread's updatedAt, at most every 10s
+// while a run streams, but at once for a run that ended unseen, so a run
+// that finished as they watched isn't left saying Done once they leave.
+// retry is when a visit the throttle held back is due.
+func (v *visits) next(t *t3.Thread, now time.Time) (at string, opened bool, retry time.Time) {
+	updated := parseTime(t.UpdatedAt)
+	if updated.IsZero() {
+		return "", false, time.Time{}
+	}
+	send := func(opened bool) (string, bool, time.Time) {
+		v.sent, v.at = updated, now
+		return t.UpdatedAt, opened, time.Time{}
+	}
+	if v.open {
+		v.open = false
+		return send(true)
+	}
+	seen := parseTime(t.LastVisitedAt)
+	if !seen.IsZero() && !seen.Before(updated) {
+		// Seen already, so a mark-unread after it stays put.
+		if v.sent.Before(updated) {
+			v.sent = updated
+		}
+		return "", false, time.Time{}
+	}
+	if !v.sent.Before(updated) {
+		return "", false, time.Time{}
+	}
+	done := latestRunDone(t)
+	if !done.IsZero() && (seen.IsZero() || done.After(seen)) || now.Sub(v.at) >= visitThrottle {
+		return send(false)
+	}
+	return "", false, v.at.Add(visitThrottle)
+}
+
+// trackVisit sends the open thread's visits (ThreadVisitWatermark), which
+// move T3's read marker so it stops showing as unread. Call with the lock
+// held.
+func (a *App) trackVisit(now time.Time) {
+	if a.visit.ref != a.openID {
+		a.visit = visits{ref: a.openID, open: true}
+	}
+	e, t := a.thread(a.openID)
+	if e == nil || t == nil || e.conn == nil {
+		// The open waits for the thread and its machine.
+		return
+	}
+	at, opened, retry := a.visit.next(t, now)
+	if !retry.IsZero() {
+		a.redrawAt(retry)
+	}
+	if at == "" {
+		return
+	}
+	cmd := visit(t.ID, at)
+	if opened {
+		cmd["opened"] = true
+	}
+	conn := e.conn
+	go func() { _ = conn.Dispatch(cmd) }()
 }
 
 func mergeRun(dst *t3.Run, src t3.Run) {

@@ -167,6 +167,7 @@ func (a *App) build(now time.Time) *ui.Scene {
 	case a.draft != "":
 		a.draftScene(s)
 	case a.openID != "":
+		a.trackVisit(now)
 		a.threadScene(s)
 	default:
 		s.Title = ""

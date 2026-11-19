@@ -93,7 +93,7 @@ type Thread struct {
 	CreatedAt                   string             `json:"createdAt"`
 	UpdatedAt                   string             `json:"updatedAt"`
 	LatestUserMessageAt         string             `json:"latestUserMessageAt"`
-	LatestUserAuthoredMessageAt string             `json:"latestUserAuthoredMessageAt"`
+	LatestUserAuthoredMessageAt Sent               `json:"latestUserAuthoredMessageAt,omitzero"`
 	LatestRunID                 string             `json:"latestRunId"`
 	LatestRunRequestedAt        string             `json:"latestRunRequestedAt"`
 	LatestRunStartedAt          string             `json:"latestRunStartedAt"`
@@ -137,6 +137,29 @@ type Thread struct {
 	LinkedPullRequest           *LinkedPullRequest `json:"linkedPullRequest"`
 	BranchPullRequest           *LinkedPullRequest `json:"branchPullRequest"`
 	EnvironmentID               string             `json:"-"`
+}
+
+// Sent is a timestamp a server can send as null, which isn't the same as
+// not sending it: current servers send null for a thread the user never
+// wrote in, and older ones leave the field out.
+type Sent struct {
+	At   string
+	Sent bool // the server sent the field, null or not
+}
+
+func (s *Sent) UnmarshalJSON(b []byte) error {
+	s.Sent, s.At = true, ""
+	if string(b) == "null" {
+		return nil
+	}
+	return json.Unmarshal(b, &s.At)
+}
+
+func (s Sent) MarshalJSON() ([]byte, error) {
+	if s.At == "" {
+		return []byte("null"), nil
+	}
+	return json.Marshal(s.At)
 }
 
 // Goal is the goal a provider's run works toward.

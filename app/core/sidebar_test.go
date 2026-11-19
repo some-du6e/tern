@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -276,12 +277,19 @@ func TestFullThreadMenu(t *testing.T) {
 	if got := strings.Join(copyItems, ", "); got != "Path, Branch, Thread, Thread ID" {
 		t.Fatalf("copy = %s", got)
 	}
-	// A read-only session can still copy and mark unread, nothing else.
+	// A read-only session can still copy and mark unread, nothing else:
+	// the items §5.13 marks † are off, Filter by among them.
 	a.envs[0].operate = false
 	s = a.build(now)
+	open := map[string]bool{"Mark unread": true, "Copy": true}
 	for _, it := range s.Menu.Items {
-		if it.Off != needsOperate(it.ID) {
-			t.Errorf("%s read-only: off %v", it.ID, it.Off)
+		if it.Off == open[it.Label] {
+			t.Errorf("%s read-only: off %v", it.Label, it.Off)
+		}
+		for _, c := range it.Children {
+			if c.Off == open[it.Label] {
+				t.Errorf("%s › %s read-only: off %v", it.Label, c.Label, c.Off)
+			}
 		}
 	}
 }
@@ -1124,4 +1132,182 @@ func TestUndoNoticeLasts(t *testing.T) {
 	if got := a.build(time.Now()).Sidebar.Undo; got != "" {
 		t.Fatalf("notice %q after the last park's timer, want none", got)
 	}
+}
+
+// Enter in a search field that Escape emptied, or that opening a result
+// emptied, opens nothing: the results were the last query's, and with
+// nothing typed there are none (Sidebar.tsx, §5.9).
+func TestEnterInAnEmptySearch(t *testing.T) {
+	now := time.Now()
+	a := sideApp(t,
+		t3.Thread{ID: "1", Title: "Fix the sidebar", CreatedAt: ago(now, time.Minute)},
+		t3.Thread{ID: "2", Title: "Docs", CreatedAt: ago(now, 2*time.Minute)},
+	)
+	th := ui.NewTheme()
+	open := func() string {
+		for _, r := range rows(sceneAt(a, now)) {
+			if r.Active {
+				return r.Title
+			}
+		}
+		return ""
+	}
+	a.handle(th, ui.Action{ID: "search", Kind: "change", Text: "sidebar"})
+	sceneAt(a, now)
+	// Escape and Enter in one frame, before a scene is built…
+	a.handle(th, ui.Action{ID: "search", Kind: "key", Text: "⎋"})
+	a.handle(th, ui.Action{ID: "search", Kind: "submit"})
+	if got := open(); got != "" {
+		t.Fatalf("Enter after Escape opened %q", got)
+	}
+	// …and in frames of their own.
+	a.handle(th, ui.Action{ID: "search", Kind: "change", Text: "sidebar"})
+	sceneAt(a, now)
+	a.handle(th, ui.Action{ID: "search", Kind: "key", Text: "⎋"})
+	sceneAt(a, now)
+	a.handle(th, ui.Action{ID: "search", Kind: "submit"})
+	if got := open(); got != "" {
+		t.Fatalf("Enter in the emptied field opened %q", got)
+	}
+}
+
+// Snoozed threads that wake at the same moment, as a bulk snooze leaves
+// them, keep one order from build to build (§5.3), and so do the keys and
+// jump numbers that go by it.
+func TestSnoozedTiesKeepTheirOrder(t *testing.T) {
+	now := time.Now()
+	wake := now.Add(time.Hour).UTC().Format(time.RFC3339Nano)
+	var threads []t3.Thread
+	for _, id := range []string{"c", "a", "e", "b", "d"} {
+		threads = append(threads, t3.Thread{ID: id, Title: id, SnoozedUntil: wake, CreatedAt: ago(now, time.Hour)})
+	}
+	a := sideApp(t, threads...)
+	a.shelfOpen["snoozed"] = true
+	for range 20 {
+		if got, want := listing(a.build(now)), "[Snoozed 5 true], a, b, c, d, e, [Settled 0 false]"; got != want {
+			t.Fatalf("snoozed:\n got %s\nwant %s", got, want)
+		}
+	}
+}
+
+// Until a machine's server config has loaded, its threads aren't snoozed
+// or settled in the list: they're pinned or active, as T3 files them
+// (Sidebar.tsx, §5.2 step 2).
+func TestShelvesWaitForConfig(t *testing.T) {
+	now := time.Now()
+	a := sideApp(t,
+		t3.Thread{ID: "z", Title: "snoozed", SnoozedUntil: now.Add(time.Hour).UTC().Format(time.RFC3339Nano), CreatedAt: ago(now, time.Hour)},
+		t3.Thread{ID: "s", Title: "settled", SettledOverride: "settled", SettledAt: ago(now, time.Minute), CreatedAt: ago(now, 2*time.Hour)},
+	)
+	a.envs[0].config = nil
+	s := a.build(now)
+	if got, want := listing(s), "snoozed, settled, [Settled 0 false]"; got != want {
+		t.Fatalf("before the config: %s, want %s", got, want)
+	}
+	for _, r := range rows(s) {
+		if r.Slim {
+			t.Errorf("%s is a slim row before the config loaded", r.Title)
+		}
+	}
+	a.envs[0].config = &t3.ServerConfig{}
+	if got, want := listing(a.build(now)), "[Snoozed 1 false], [Settled 1 false]"; got != want {
+		t.Fatalf("with the config: %s, want %s", got, want)
+	}
+}
+
+// The Working shelf orders by the user's last message, else by when the
+// thread began: a thread the user never wrote in, which current servers
+// send as null, goes by its creation, and only one from an older server,
+// which leaves the field out, by its run's request
+// (sortWorkingThreadsBySend).
+func TestWorkingOrderNeverWritten(t *testing.T) {
+	now := time.Now()
+	decode := func(id string, created, requested time.Duration, authored string) t3.Thread {
+		raw := fmt.Sprintf(`{"id":%q,"title":%q,"createdAt":%q,"latestRunId":"r","status":"running","activeRunId":"r",`+
+			`"activityRunStatus":"running","latestRunRequestedAt":%q%s}`, id, id, ago(now, created), ago(now, requested), authored)
+		var th t3.Thread
+		if err := json.Unmarshal([]byte(raw), &th); err != nil {
+			t.Fatal(err)
+		}
+		return th
+	}
+	a := sideApp(t,
+		decode("never wrote", 2*time.Hour, time.Minute, `,"latestUserAuthoredMessageAt":null`),
+		decode("wrote", time.Hour, time.Hour, fmt.Sprintf(`,"latestUserAuthoredMessageAt":%q`, ago(now, 30*time.Minute))),
+		decode("older server", 3*time.Hour, 5*time.Minute, ""),
+	)
+	a.shelfOpen["working"] = true
+	if got, want := listing(a.build(now)), "[Working 3 true], older server, wrote, never wrote, [Settled 0 false]"; got != want {
+		t.Fatalf("working:\n got %s\nwant %s", got, want)
+	}
+}
+
+// A snooze preset tern can't read, as a newer server's kind or day would
+// be, is left out of the menu, and the rest still show
+// (resolveSnoozePresets).
+func TestSnoozePresetsTernCantRead(t *testing.T) {
+	now := time.Date(2026, 11, 18, 10, 0, 0, 0, time.UTC) // a Wednesday
+	e := &envState{config: &t3.ServerConfig{}}
+	e.config.Settings.SnoozePresets = []t3.SnoozePreset{
+		{Kind: "until-idle"}, {Kind: "at", Time: "09:00"}, {Kind: "at", Day: "someday", Time: "09:00"},
+		{Kind: "at", Day: "friday", Time: "late"}, {Kind: "after", Minutes: -5}, {Kind: "at", Day: "friday", Time: "09:00"},
+	}
+	var got []string
+	for _, c := range snoozeChoices(e, now) {
+		got = append(got, c.label+" "+c.when)
+	}
+	if want := "Friday 9:00 AM"; strings.Join(got, "; ") != want {
+		t.Fatalf("menu %q, want %q", strings.Join(got, "; "), want)
+	}
+}
+
+// A run timer counts to the whole second, as T3's second tick does: a
+// scene built late in a second shows that second, not the next (§5.5).
+func TestRunTimerCountsWholeSeconds(t *testing.T) {
+	now := time.Date(2026, 11, 17, 12, 0, 0, int(900*time.Millisecond), time.UTC)
+	start := time.Date(2026, 11, 17, 11, 59, 0, int(500*time.Millisecond), time.UTC)
+	a := sideApp(t, t3.Thread{ID: "w", Title: "w", CreatedAt: ago(now, time.Hour), LatestRunID: "r", Status: "running", ActiveRunID: "r",
+		ActivityRunStatus: "running", ActivityRunStartedAt: start.Format(time.RFC3339Nano)})
+	a.shelfOpen["working"] = true
+	if r := rows(a.build(now)); len(r) != 1 || r[0].Timer != "59s" {
+		t.Fatalf("rows %+v, want one timing 59s", r)
+	}
+}
+
+// The open thread's read marker moves as T3's tracker moves it while the
+// thread is shown: the open goes with the first visit; each update after
+// moves it to the thread's updatedAt, at most every 10s while a run
+// streams; and a run that ends unseen moves it at once, so leaving right
+// after doesn't leave the row saying Done (threadVisits.ts).
+func TestVisits(t *testing.T) {
+	t0 := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	at := func(d time.Duration) string { return t0.Add(d).Format(time.RFC3339Nano) }
+	th := &t3.Thread{ID: "t", UpdatedAt: at(0), LatestRunID: "r", Status: "running", LastVisitedAt: at(-time.Hour)}
+	v := visits{ref: "m/t", open: true}
+	step := func(now time.Duration, want string, wantOpen bool, wantRetry time.Duration) {
+		t.Helper()
+		got, opened, retry := v.next(th, t0.Add(now))
+		var r time.Duration
+		if !retry.IsZero() {
+			r = retry.Sub(t0)
+		}
+		if got != want || opened != wantOpen || r != wantRetry {
+			t.Fatalf("at %v: visit %q open %v retry %v, want %q %v %v", now, got, opened, r, want, wantOpen, wantRetry)
+		}
+	}
+	step(0, at(0), true, 0)
+	step(time.Second, "", false, 0) // nothing new
+	th.LastVisitedAt = at(0)        // the server's echo
+	th.UpdatedAt = at(2 * time.Second)
+	step(2*time.Second, "", false, 10*time.Second) // streaming: held back
+	th.UpdatedAt = at(5 * time.Second)
+	step(5*time.Second, "", false, 10*time.Second)
+	step(10*time.Second, at(5*time.Second), false, 0)
+	th.LastVisitedAt = at(5 * time.Second)
+	// The run ends 2s on: that goes at once.
+	th.Status, th.LatestRunCompletedAt, th.UpdatedAt = "completed", at(12*time.Second), at(12*time.Second)
+	step(12*time.Second, at(12*time.Second), false, 0)
+	// Marked unread while it's open: the marker stays where the user put it.
+	th.LastVisitedAt = at(-time.Hour)
+	step(20*time.Second, "", false, 0)
 }

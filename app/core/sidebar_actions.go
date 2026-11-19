@@ -453,7 +453,7 @@ func rankMessages(ms []refMatch, listed map[string]sideThread, now time.Time) []
 // weeks; a thread the user never wrote in counts from its creation. tern
 // keeps no record of opens, which T3 also counts.
 func usageBoost(t *t3.Thread, now time.Time) float64 {
-	at := parseTime(cmp.Or(t.LatestUserAuthoredMessageAt, t.CreatedAt))
+	at := parseTime(cmp.Or(t.LatestUserAuthoredMessageAt.At, t.CreatedAt))
 	if at.IsZero() {
 		return 1
 	}
@@ -721,14 +721,30 @@ func (a *App) filterKey(act ui.Action) {
 	a.mu.Unlock()
 }
 
-// setScope narrows the list to keys and saves it. A new scope starts the
-// list afresh: the selection clears and the Settled shelf folds back to its
-// first page. Call with the lock held.
+// setScope narrows the list to keys. A new scope starts the list afresh:
+// the selection clears and the Settled shelf folds back to its first page.
+// It's saved off the lock, as the store encrypts and writes a file. Call
+// with the lock held.
 func (a *App) setScope(keys []string) {
 	a.scope = keys
 	a.selected, a.anchor = map[string]bool{}, ""
 	a.settledMore = 0
-	_ = a.store.Put("sidebar-scope", keys)
+	a.scopeDirty = true
+	go a.saveScope()
+}
+
+// saveScope saves the scope as it is by then, one save at a time, so an
+// older scope never lands after a newer one.
+func (a *App) saveScope() {
+	a.scopeSave.Lock()
+	defer a.scopeSave.Unlock()
+	a.mu.Lock()
+	keys, dirty := a.scope, a.scopeDirty
+	a.scopeDirty = false
+	a.mu.Unlock()
+	if dirty {
+		_ = a.store.Put("sidebar-scope", keys)
+	}
 }
 
 // pickProject is a click on one of the filter's projects: it scopes the
@@ -796,11 +812,16 @@ func plural(n int, unit string) string {
 func clock(t time.Time) string { return t.Format("3:04 PM") }
 
 // resolvePreset is one preset as of now (resolveSnoozePreset): its label and
-// wake time. A time today that has passed is left out.
+// wake time. A time today that has passed is left out, and so is a preset
+// tern can't read, as a newer server's kind or day would be.
 func resolvePreset(p t3.SnoozePreset, now time.Time) (snoozeChoice, bool) {
 	c := snoozeChoice{id: presetID(p), preset: p}
 	ahead := 0
-	if p.Kind == "after" {
+	switch p.Kind {
+	case "after":
+		if p.Minutes <= 0 {
+			return c, false
+		}
 		c.until = now.Add(time.Duration(p.Minutes) * time.Minute)
 		switch {
 		case p.Minutes%(24*60) == 0:
@@ -810,19 +831,24 @@ func resolvePreset(p t3.SnoozePreset, now time.Time) (snoozeChoice, bool) {
 		default:
 			c.label = "In " + plural(p.Minutes, "minute")
 		}
-	} else {
-		switch p.Day {
-		case "today":
-		case "tomorrow":
+	case "at":
+		switch wd, ok := weekdays[p.Day]; {
+		case p.Day == "today":
+		case p.Day == "tomorrow":
 			ahead = 1
+		case !ok:
+			return c, false
 		default:
-			if ahead = (int(weekdays[p.Day]) - int(now.Weekday()) + 7) % 7; ahead == 0 {
+			if ahead = (int(wd) - int(now.Weekday()) + 7) % 7; ahead == 0 {
 				ahead = 7
 			}
 		}
 		hh, mm, _ := strings.Cut(p.Time, ":")
-		h, _ := strconv.Atoi(hh)
-		m, _ := strconv.Atoi(mm)
+		h, errH := strconv.Atoi(hh)
+		m, errM := strconv.Atoi(mm)
+		if errH != nil || errM != nil || h < 0 || h > 23 || m < 0 || m > 59 {
+			return c, false
+		}
 		y, mo, d := now.Date()
 		c.until = time.Date(y, mo, d+ahead, h, m, 0, 0, now.Location())
 		if !c.until.After(now) {
@@ -844,6 +870,8 @@ func resolvePreset(p t3.SnoozePreset, now time.Time) (snoozeChoice, bool) {
 		default:
 			c.label = strings.ToUpper(p.Day[:1]) + p.Day[1:]
 		}
+	default:
+		return c, false
 	}
 	// Durations and "Next week" don't name the day, so a wake on another
 	// day says which.
@@ -1998,7 +2026,9 @@ func (a *App) searchInput(th *ui.Theme, act ui.Action) {
 			step = -1
 		}
 		a.searchHi = a.results[(max(0, slices.Index(a.results, a.searchHi))+step+n)%n]
-	case act.Kind == "submit":
+	case act.Kind == "submit" && n > 0 && strings.TrimSpace(a.search) != "":
+		// Enter opens the highlighted result of what's typed; with nothing
+		// typed there are none (Sidebar.tsx), whatever the last search found.
 		i := max(0, slices.Index(a.results, a.searchHi))
 		a.mu.Unlock()
 		a.openResult(th, i)
