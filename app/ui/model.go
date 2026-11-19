@@ -336,6 +336,7 @@ type Scene struct {
 	Runtime      string          // the runtime mode: "full-access", "approval-required", …
 	RuntimeChip  bool            // the footer shows the permissions chip: the mode isn't the default
 	Sending      bool            // a send is on its way: the send button spins
+	Fresh        bool            // /clear is armed: the next message starts a fresh session
 	Stop         StopPhase       // where a click on Stop has got to
 	Queue        []QueuedMessage // the messages waiting behind the run, at the foot of the timeline
 	// EditingQueued: the composer holds a queued message, and a send updates it.

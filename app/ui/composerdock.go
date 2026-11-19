@@ -79,8 +79,9 @@ func composerShadow() []boxShadow {
 }
 
 // composerDock is what sits on the card's top edge (ComposerBanner.Dock):
-// a column of the status notice (not while a question is open, which
-// keeps only the machine's own banners), then the agent's question, and
+// a column of the armed /clear's banner and the status notice (not while
+// a question is open, which keeps only the machine's own banners), then
+// the agent's question, and
 // at its end the stash's tab, their bottoms lined up. A new thread's
 // notices go under its composer (heroNotices); its tab still shows here.
 func (th *Theme) composerDock(gtx C, s *Scene) D {
@@ -110,8 +111,13 @@ func (th *Theme) composerDock(gtx C, s *Scene) D {
 			y += d.Size.Y - dp(gtx, tuck)
 			n++
 		}
+		if s.Fresh && !hero && len(s.Questions) == 0 {
+			attach(func(gtx C, joined bool) D { return th.noticeCard(gtx, freshNotice(s), joined, false) })
+		}
 		if s.Notice != "" && !hero && len(s.Questions) == 0 {
-			attach(func(gtx C, joined bool) D { return th.noticeCard(gtx, "info", s.Notice, joined, false) })
+			attach(func(gtx C, joined bool) D {
+				return th.noticeCard(gtx, notice{icon: "info", title: s.Notice}, joined, false)
+			})
 		}
 		if len(s.Questions) > 0 && !hero {
 			attach(func(gtx C, joined bool) D { return th.questionDrawer(gtx, s, joined) })
@@ -417,11 +423,29 @@ func (th *Theme) pointerMoved(gtx C, id string, size image.Point) bool {
 	return moved
 }
 
+// notice is one of the composer's notice cards: its icon, its title and
+// description, and whether it has a dismiss button, whose click target
+// is dismiss ("" in a mockup).
+type notice struct {
+	icon, title, desc string
+	dismissible       bool
+	dismiss           string
+}
+
+// freshNotice is the banner while /clear is armed (ComposerFreshSession.tsx);
+// its dismiss keeps the current session.
+func freshNotice(s *Scene) notice {
+	return notice{icon: "eraser", title: "Your next message starts a fresh session", desc: "The agent won't see earlier messages in this thread.",
+		dismissible: true, dismiss: liveID(s, "fresh.keep")}
+}
+
 // noticeCard is a notice (ComposerBannerStack.tsx): a comfortable root
-// padded 5 4, one 24dp row of the 12dp icon and the 12/24 medium title,
-// then the 17dp the next surface covers. Detached, under a new thread's
-// composer, it's a whole 16dp-rounded card.
-func (th *Theme) noticeCard(gtx C, icon, title string, joined, detached bool) D {
+// padded 5 4, one 24dp wrap-actions row of the 12dp icon, then the 12/24
+// medium title and the muted 12/16 description filling what's left (none
+// on a card under 400), then a 48dp column ending in its dismiss; then the
+// 17dp the next surface covers. Detached, under a new thread's composer,
+// it's a whole 16dp-rounded card.
+func (th *Theme) noticeCard(gtx C, n notice, joined, detached bool) D {
 	w := gtx.Constraints.Max.X
 	rowH := dp(gtx, 24)
 	padY, padX := dp(gtx, 5), dp(gtx, 4)
@@ -444,16 +468,43 @@ func (th *Theme) noticeCard(gtx C, icon, title string, joined, detached bool) D 
 	func() {
 		off := op.Offset(image.Pt((rowH-dp(gtx, 12))/2, (rowH-dp(gtx, 12))/2)).Push(gtx.Ops)
 		defer off.Pop()
-		LucideW(icon, P.MutedForeground, 12)(gtx)
+		LucideW(n.icon, P.MutedForeground, 12)(gtx)
 	}()
+	room := rw - rowH - dp(gtx, 4)
+	if n.dismissible {
+		room -= dp(gtx, 4+48)
+		// The first card's dismiss follows its top-right corner; a
+		// detached one's, its bottom-right too.
+		corner, bottom := dp(gtx, 12), dp(gtx, 8)
+		if joined {
+			corner = dp(gtx, 8)
+		}
+		if detached {
+			bottom = dp(gtx, 12)
+		}
+		off := op.Offset(image.Pt(rw-rowH, 0)).Push(gtx.Ops)
+		th.bannerDismiss(gtx, n.dismiss, g, corner, bottom)
+		off.Pop()
+	}
 	tg := gtx
-	tg.Constraints = layout.Constraints{Max: image.Pt(max(0, rw-rowH-dp(gtx, 4)), rowH)}
+	tg.Constraints = layout.Constraints{Max: image.Pt(max(0, room), rowH)}
 	td := record(tg, func(gtx C) D {
-		return th.Text(gtx, Txt{Size: 12, LineH: 24.0 / 12, Font: UI(font.Medium), Color: bodyText(), MaxLines: 1}, title)
+		return th.Text(gtx, Txt{Size: 12, LineH: 24.0 / 12, Font: UI(font.Medium), Color: bodyText(), MaxLines: 1}, n.title)
 	})
-	off := op.Offset(image.Pt(rowH+dp(gtx, 4), (rowH-td.Size.Y)/2)).Push(gtx.Ops)
+	x := rowH + dp(gtx, 4)
+	off := op.Offset(image.Pt(x, (rowH-td.Size.Y)/2)).Push(gtx.Ops)
 	td.call.Add(gtx.Ops)
 	off.Pop()
+	if rest := room - td.Size.X - dp(gtx, 4); n.desc != "" && w >= dp(gtx, 400) && rest > 0 {
+		dg := gtx
+		dg.Constraints = layout.Constraints{Max: image.Pt(rest, rowH)}
+		dd := record(dg, func(gtx C) D {
+			return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: P.MutedForeground, MaxLines: 1}, n.desc)
+		})
+		off := op.Offset(image.Pt(x+td.Size.X+dp(gtx, 4), (rowH-dd.Size.Y)/2)).Push(gtx.Ops)
+		dd.call.Add(gtx.Ops)
+		off.Pop()
+	}
 	return D{Size: r.Max}
 }
 
@@ -487,7 +538,7 @@ func (th *Theme) heroNotices(gtx C, s *Scene) D {
 	if s.Notice == "" {
 		return D{}
 	}
-	return pad(16, 0, 0, 0).Layout(gtx, func(gtx C) D { return th.noticeCard(gtx, "info", s.Notice, false, true) })
+	return pad(16, 0, 0, 0).Layout(gtx, func(gtx C) D { return th.noticeCard(gtx, notice{icon: "info", title: s.Notice}, false, true) })
 }
 
 // threadError is T3's ThreadErrorBanner in the chat's banner lane

@@ -58,7 +58,8 @@ quarantine flag, so Gatekeeper leaves it alone.
   it, or on a new thread starts it in the background, Shift+Enter is a
   newline. The model picker with its effort column (effort, fast mode,
   service tier, …) and the permissions menu come from the server's config.
-  Unsent text is kept per thread while the app runs.
+  On servers that support it, /clear makes the next message start a fresh
+  session. Unsent text is kept per thread while the app runs.
 - Ctrl+V (⌘V on a Mac) pastes images into the composer as chips at the caret, like the web
   composer's, sent at that spot in the message: screenshots, pictures copied
   from a browser, or image files copied in Explorer or the Finder (up to 100, 10 MB each).

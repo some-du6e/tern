@@ -344,6 +344,29 @@ func TestNoticeBanner(t *testing.T) {
 	}
 }
 
+// While /clear is armed its banner sits over the card (ComposerFreshSession.tsx):
+// the eraser 6dp into its icon column, the title, the description after
+// it and the dismiss at the card's end; a card under 400 drops the
+// description.
+func TestFreshBanner(t *testing.T) {
+	th := NewTheme()
+	s := &Scene{Model: "Opus 5.5", Fresh: true}
+	img := drawComposer(t, th, s, 200, 0)
+	if l, r := ink(img, 5, 29, 22, 714); l < 28 || l > 40 || r < 690 {
+		t.Errorf("the banner's ink spans x %d..%d, want the eraser from about 32 and the dismiss by its end", l, r)
+	}
+	if l, _ := ink(img, 5, 29, 320, 520); l < 0 {
+		t.Error("no description after the title")
+	}
+	narrow := drawn(t, image.Pt(420, 200), 1, func(gtx C) D {
+		fill(gtx, P.Background, image.Rect(0, 0, 420, 200), 0)
+		return th.composerArea(gtx, s, false)
+	})
+	if l, _ := ink(narrow, 5, 29, 300, 360); l >= 0 {
+		t.Errorf("a 376dp banner still shows its description, at x %d", l)
+	}
+}
+
 // A thread's error is T3's ThreadErrorBanner in the banner lane over the
 // conversation (§2.9; ChatBannerLane.tsx): 12dp from the canvas top,
 // centred in the lane, rounded 12, edged in --error at 32% on alert glass.

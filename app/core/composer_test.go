@@ -65,16 +65,16 @@ func TestSlashItems(t *testing.T) {
 		return strings.Join(out, " ")
 	}
 	at := func(q string, start int) *trigger { return &trigger{kind: "slash", query: q, start: start} }
-	if got, want := labels(slashItems(p, at("", 0), "")), "/model /compact /review /resume /skill:frontend-refactor"; got != want {
+	if got, want := labels(slashItems(p, at("", 0), "", false)), "/model /compact /review /resume /skill:frontend-refactor"; got != want {
 		t.Errorf("all: %s, want %s", got, want)
 	}
-	if got, want := labels(slashItems(p, at("re", 0), "")), "/resume /review /skill:frontend-refactor /model"; got != want {
+	if got, want := labels(slashItems(p, at("re", 0), "", false)), "/resume /review /skill:frontend-refactor /model"; got != want {
 		t.Errorf(`"re": %s, want %s`, got, want)
 	}
-	if got, want := labels(slashItems(p, at("", 6), "later ")), "/model /skill:frontend-refactor"; got != want {
+	if got, want := labels(slashItems(p, at("", 6), "later ", false)), "/model /skill:frontend-refactor"; got != want {
 		t.Errorf("mid-prompt: %s, want %s", got, want)
 	}
-	if items := slashItems(p, at("skill", 0), ""); labels(items) != "/skill:frontend-refactor" || items[0].insert != "$frontend-refactor " || items[0].Badge != "Personal" {
+	if items := slashItems(p, at("skill", 0), "", false); labels(items) != "/skill:frontend-refactor" || items[0].insert != "$frontend-refactor " || items[0].Badge != "Personal" {
 		t.Errorf(`"skill": %+v`, items)
 	}
 	if got := labels(skillItems(p, &trigger{kind: "skill", query: "front"})); got != "frontend-refactor" {
@@ -252,6 +252,54 @@ func TestCommandMenu(t *testing.T) {
 	}
 	if s := typed("/mo"); len(s.Suggest) != 1 {
 		t.Fatalf("a new trigger opens it: %+v", s.Suggest)
+	}
+}
+
+// Where the server takes freshContext and the thread has messages, the /
+// menu offers T3's /clear in place of the provider's; picking it, or
+// sending /clear alone, arms a fresh session, whose banner shows until its
+// dismiss keeps the current session (ChatView.tsx, useComposerSend.ts).
+func TestFreshSession(t *testing.T) {
+	a := testApp(t)
+	cfg := &t3.ServerConfig{Providers: []t3.Provider{{InstanceID: "claudeAgent", Driver: "claudeAgent", SlashCommands: []t3.SlashCommand{{Name: "clear"}}}}}
+	cfg.Settings.DefaultModelSelection = &t3.ModelSelection{InstanceID: "claudeAgent", Model: "opus"}
+	cfg.Environment.Capabilities.FreshContext = true
+	a.envs[0].config = cfg
+	a.openThread("swiss/t1")
+	th := ui.NewTheme()
+	typed := func(s string) *ui.Scene {
+		th.SetEditorText("composer", s)
+		a.handle(th, ui.Action{ID: "composer", Kind: "change", Text: s})
+		return a.build(time.Now())
+	}
+	menu := func(s *ui.Scene) string {
+		var out []string
+		for _, it := range s.Suggest {
+			out = append(out, it.Label+" "+it.Desc)
+		}
+		return strings.Join(out, ", ")
+	}
+	if got := menu(typed("/cl")); got != "/clear Run provider command" {
+		t.Fatalf("a thread without messages: %s, want the provider's /clear", got)
+	}
+	a.view.messages["m1"] = t3.Message{ID: "m1", Role: "user", Text: "hi"}
+	typed("")
+	if got := menu(typed("/cl")); got != "/clear Start a fresh session; earlier messages stay visible" {
+		t.Fatalf("with messages: %s, want T3's /clear alone", got)
+	}
+	a.handle(th, ui.Action{ID: "suggest", Kind: "key", Text: "⏎"})
+	a.Handle(th, th.Actions())
+	if s := a.build(time.Now()); !s.Fresh || th.EditorText("composer") != "" || a.picker != nil {
+		t.Fatalf("after picking /clear: armed %v, prompt %q", s.Fresh, th.EditorText("composer"))
+	}
+	a.handle(th, ui.Action{ID: "fresh.keep", Kind: "click"})
+	if s := a.build(time.Now()); s.Fresh {
+		t.Fatal("Keep the current session left it armed")
+	}
+	th.SetEditorText("composer", "/clear ")
+	a.handle(th, ui.Action{ID: "composer", Kind: "submit"})
+	if s := a.build(time.Now()); !s.Fresh || th.EditorText("composer") != "" {
+		t.Fatalf("sending /clear alone: armed %v, prompt %q", s.Fresh, th.EditorText("composer"))
 	}
 }
 

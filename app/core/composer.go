@@ -34,12 +34,14 @@ type composerState struct {
 	custom    map[int]string // what was typed for each question
 	// responding is the requests whose answers are on their way.
 	responding map[string]bool
-	sending    bool         // a send is on its way
-	scratch    string       // the scratch project a draft moved to, until the shell has it
-	stash      []stashEntry // the prompts put aside, newest first
-	stashOpen  bool         // their list is open
-	stashSel   int          // its highlighted row
-	stashed    time.Time    // when a prompt was last put aside, for the tab's pulse
+	// fresh is the threads whose next message starts a fresh session (/clear).
+	fresh     map[string]bool
+	sending   bool         // a send is on its way
+	scratch   string       // the scratch project a draft moved to, until the shell has it
+	stash     []stashEntry // the prompts put aside, newest first
+	stashOpen bool         // their list is open
+	stashSel  int          // its highlighted row
+	stashed   time.Time    // when a prompt was last put aside, for the tab's pulse
 	// editing is the queued run whose message is in the composer, and
 	// editSaved the draft it took the place of.
 	editing, editSaved string
@@ -112,6 +114,7 @@ type menuItem struct {
 	ui.Suggestion
 	insert string // typed in the trigger's place
 	model  bool   // /model: it opens the model menu instead
+	clear  bool   // /clear: it arms a fresh session instead
 	score  int
 	tie    string
 }
@@ -278,11 +281,16 @@ func rank(items []menuItem) []menuItem {
 }
 
 // slashItems is the / menu (useComposerMenuItems.ts, composerSlashCommandSearch.ts):
-// /model, then the provider's commands (only at the prompt's start, and
-// /compact only with nothing before it) and its skills as /skill:name,
-// ranked against the query.
-func slashItems(p *t3.Provider, t *trigger, before string) []menuItem {
+// /model, /clear where a fresh session can start, then the provider's
+// commands (only at the prompt's start, /compact only with nothing before
+// it, and not its own /clear where T3's is: that would clear a session T3
+// still treats as live) and its skills as /skill:name, ranked against the
+// query.
+func slashItems(p *t3.Provider, t *trigger, before string, fresh bool) []menuItem {
 	items := []menuItem{{Suggestion: ui.Suggestion{Label: "/model", Desc: "Switch response model for this thread"}, model: true, tie: "0\x00model"}}
+	if fresh && t.start == 0 {
+		items = append(items, menuItem{Suggestion: ui.Suggestion{Label: "/clear", Desc: "Start a fresh session; earlier messages stay visible"}, clear: true, tie: "0\x01clear"})
+	}
 	var skills []t3.Skill
 	if p != nil {
 		skills = invocable(p.Skills)
@@ -291,7 +299,7 @@ func slashItems(p *t3.Provider, t *trigger, before string) []menuItem {
 			names[strings.ToLower(strings.TrimSpace(s.Name))] = true
 		}
 		for _, c := range p.SlashCommands {
-			if t.start != 0 || names[strings.ToLower(strings.TrimSpace(c.Name))] || (c.Name == "compact" && strings.TrimSpace(before) != "") {
+			if t.start != 0 || names[strings.ToLower(strings.TrimSpace(c.Name))] || (c.Name == "compact" && strings.TrimSpace(before) != "") || (c.Name == "clear" && fresh) {
 				continue
 			}
 			desc := c.Description
@@ -795,7 +803,7 @@ func (a *App) composerChanged(th *ui.Theme, text string) {
 	p := a.provider(a.choiceFor(a.composerKey()).sel.InstanceID)
 	switch t.kind {
 	case "slash":
-		c.items = slashItems(p, t, string(runes[:t.start]))
+		c.items = slashItems(p, t, string(runes[:t.start]), a.freshCommand())
 	case "skill":
 		c.items = skillItems(p, t)
 	case "path":
@@ -810,6 +818,24 @@ func (a *App) composerChanged(th *ui.Theme, text string) {
 	}
 	c.sel = min(c.sel, max(0, len(c.items)-1))
 }
+
+// freshSession is whether the open thread's next message can start a
+// fresh session (ChatView.tsx freshSessionAvailable): it has messages and
+// its server takes freshContext. Call with the lock held.
+func (a *App) freshSession() bool {
+	cfg := a.cfg()
+	return a.draft == "" && a.view != nil && len(a.view.messages) > 0 && cfg != nil && cfg.Environment.Capabilities.FreshContext
+}
+
+// freshCommand is whether /clear is on offer: a fresh session can start,
+// and no approval or question has the composer, whose text answers it.
+// Call with the lock held.
+func (a *App) freshCommand() bool {
+	return a.freshSession() && len(a.shownApprovals()) == 0 && len(a.questionsLocked()) == 0
+}
+
+// isClear is isClearComposerCommand: the prompt is /clear alone.
+var isClear = regexp.MustCompile(`(?i)^/clear\s*$`)
 
 // pathQuery is what an @ word searches for: trimmed, and 256 characters at
 // most, which is all the server takes (contracts project.ts).
@@ -921,7 +947,8 @@ func (a *App) menuKey(th *ui.Theme, name string) {
 }
 
 // pickItem puts row i in the trigger's place, taking one space after it
-// so none doubles; /model opens the model menu instead.
+// so none doubles; /model opens the model menu instead, and /clear arms a
+// fresh session.
 func (a *App) pickItem(th *ui.Theme, i int) {
 	a.mu.Lock()
 	c := &a.comp
@@ -938,8 +965,13 @@ func (a *App) pickItem(th *ui.Theme, i int) {
 		end++
 	}
 	th.ReplaceText("composer", t.start, end, it.insert)
-	if it.model {
+	switch {
+	case it.model:
 		a.handle(th, ui.Action{ID: "model", Kind: "click"})
+	case it.clear:
+		a.mu.Lock()
+		a.comp.fresh[a.composerKey()] = true
+		a.mu.Unlock()
 	}
 }
 

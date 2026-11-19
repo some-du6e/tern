@@ -18,7 +18,7 @@ LUCIDE = ["settings", "server", "laptop", "monitor", "circle-user", "git-branch"
           "paperclip", "corner-up-right", "zap", "pen-line", "shield-check", "shield-off",
           "chevron-up", "circle-alert", "info", "image", "file", "arrow-up", "bookmark", "file-text",
           "shield", "eye", "hammer", "wrench", "triangle-alert", "chevron-left", "list-plus", "pencil",
-          "blocks", "user-round", "package", "workflow"]
+          "blocks", "user-round", "package", "workflow", "eraser"]
 
 assets = pathlib.Path(sys.argv[1])
 bundle = "\n".join(p.read_text(errors="replace") for p in assets.glob("*.js"))

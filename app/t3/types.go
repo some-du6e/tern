@@ -254,6 +254,8 @@ type ServerConfig struct {
 			ServerResolvedCommandContext bool `json:"serverResolvedCommandContext"`
 			InlineMessageContext         bool `json:"inlineMessageContext"`
 			ThreadStop                   bool `json:"threadStop"`
+			// FreshContext: a message can start a fresh session (/clear).
+			FreshContext bool `json:"freshContext"`
 		} `json:"capabilities"`
 	} `json:"environment"`
 }

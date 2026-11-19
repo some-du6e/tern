@@ -11,8 +11,8 @@ import (
 
 // The composer's states (docs/ui/07-composer.md): a prompt with a picture
 // chip and a tile, the @ menu, a run with its queue and banners, the
-// questions, the trigger's speeds and no provider, and a new thread's
-// hero, with and without a project.
+// questions, the trigger's speeds and no provider, an armed /clear, and a
+// new thread's hero, with and without a project.
 
 // pictures is n made-up screenshots, as the composer's tiles.
 func pictures(n int) []ui.Thumb {
@@ -135,6 +135,15 @@ func noProviderScene() *ui.Scene {
 	s.Provider, s.Model, s.Effort, s.Speed = "", "", "", ""
 	s.NoProvider = true
 	s.Placeholder = "Enable a provider in Settings to send a message"
+	return s
+}
+
+// freshScene has /clear armed: its banner over the card says the next
+// message starts a fresh session.
+func freshScene() *ui.Scene {
+	s := composerScene()
+	s.Thumbs, s.Composer, s.RuntimeChip = nil, "", false
+	s.Fresh = true
 	return s
 }
 

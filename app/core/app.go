@@ -198,7 +198,7 @@ func NewWithStore(store *t3.Store, redraw func()) (*App, error) {
 	_, _ = store.Get("sidebar-width", &a.sidebarWidth)
 	_ = store.Delete("panel-hidden") // from when details were a side panel
 	_, _ = store.Get(stashFile, &a.comp.stash)
-	a.comp.responding, a.dismissed = map[string]bool{}, map[string]bool{}
+	a.comp.responding, a.comp.fresh, a.dismissed = map[string]bool{}, map[string]bool{}, map[string]bool{}
 	if len(a.comp.stash) > 0 {
 		go a.decodeStash()
 	}

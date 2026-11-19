@@ -1081,6 +1081,7 @@ func (a *App) composerScene(s *ui.Scene, key string) {
 	if aps := a.shownApprovals(); len(aps) > 0 {
 		shown = &aps[0]
 	}
+	s.Fresh = a.comp.fresh[key] && a.freshSession() && shown == nil
 	// Once the config says which providers are ready, none at all is the
 	// trigger's to say (ComposerControlsBar.tsx).
 	noProvider := a.cfg() != nil && len(a.pickerTabs()) == 0

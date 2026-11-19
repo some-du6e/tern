@@ -56,6 +56,7 @@ func main() {
 		{"c10-composer-suggestion", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, suggestionScene()) }},
 		{"c11-composer-ultrafast", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, ultrafastScene()) }},
 		{"c12-composer-no-provider", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, noProviderScene()) }},
+		{"c13-composer-fresh-session", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, freshScene()) }},
 		{"c5b-new-thread-stash", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, heroStashScene()) }},
 		{"c5-new-thread-hero", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, heroScene()) }},
 		{"c6-new-thread-scratch", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, scratchScene()) }},

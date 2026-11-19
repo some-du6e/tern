@@ -352,6 +352,11 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		a.deleteStash(atoi(arg))
 	case "attach":
 		a.attach()
+	case "fresh.keep":
+		// The fresh session banner's dismiss: keep the current session.
+		a.mu.Lock()
+		delete(a.comp.fresh, a.composerKey())
+		a.mu.Unlock()
 	case "project.scratch":
 		// From anywhere, Mod+Alt+N: a new thread, then out of its project.
 		a.mu.Lock()
@@ -975,6 +980,14 @@ func (a *App) send(th *ui.Theme, alternate, background bool) bool {
 		a.mu.Unlock()
 		return false
 	}
+	if isClear.MatchString(text) && len(a.images[key]) == 0 && a.freshCommand() {
+		// /clear alone arms a fresh session rather than going as a message.
+		a.comp.fresh[key] = true
+		a.mu.Unlock()
+		th.SetEditorText("composer", "")
+		a.changed()
+		return true
+	}
 	if run := a.comp.editing; run != "" {
 		// The composer holds a queued message: the send updates it
 		// (queued-run.edit), which keeps its pictures, and the draft it
@@ -1012,6 +1025,8 @@ func (a *App) send(th *ui.Theme, alternate, background bool) bool {
 	inline := e.config != nil && e.config.Environment.Capabilities.InlineMessageContext
 	imgs := a.images[key]
 	approvals := a.shownApprovals()
+	// An armed /clear goes with this message, and is spent once it lands.
+	fresh := a.comp.fresh[key] && a.freshCommand()
 	delete(a.images, key)
 	delete(a.trash, key)
 	a.comp.sending, a.comp.pos = true, 0
@@ -1021,9 +1036,12 @@ func (a *App) send(th *ui.Theme, alternate, background bool) bool {
 	saveDraft(key, "")
 	a.changed()
 	go func() {
-		err := a.deliver(e, conn, draft, t, sel, runtime, body, text, imgs, approvals, alternate, background, smart, inline)
+		err := a.deliver(e, conn, draft, t, sel, runtime, body, text, imgs, approvals, alternate, background, smart, inline, fresh)
 		a.mu.Lock()
 		a.comp.sending = false
+		if err == nil && fresh {
+			delete(a.comp.fresh, key)
+		}
 		if err != nil {
 			a.fail(err)
 			if len(imgs) > 0 && len(a.images[key]) == 0 {
@@ -1047,7 +1065,7 @@ func (a *App) send(th *ui.Theme, alternate, background bool) bool {
 	return true
 }
 
-func (a *App) deliver(e *envState, conn *t3.Conn, draft string, t *t3.Thread, sel t3.ModelSelection, runtime, body, text string, imgs []pastedImage, approvals []approval, alternate, background, smart, inline bool) error {
+func (a *App) deliver(e *envState, conn *t3.Conn, draft string, t *t3.Thread, sel t3.ModelSelection, runtime, body, text string, imgs []pastedImage, approvals []approval, alternate, background, smart, inline, fresh bool) error {
 	feedback, decline := redirect(approvals)
 	if feedback != "" {
 		// The request takes feedback, so the message is its decline, not a
@@ -1119,6 +1137,10 @@ func (a *App) deliver(e *envState, conn *t3.Conn, draft string, t *t3.Thread, se
 		"modelSelection": sel,
 		"createdBy":      "user",
 		"creationSource": "web",
+	}
+	if fresh {
+		// /clear: the agent starts over without the thread's earlier messages.
+		cmd["freshContext"] = true
 	}
 	mergeMap(cmd, msg)
 	busy := t.ActiveRunID != ""
