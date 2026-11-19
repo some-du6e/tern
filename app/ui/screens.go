@@ -674,6 +674,12 @@ func (th *Theme) messages(gtx C, s *Scene, compact bool) D {
 			return pad(gap, 0, 0, 0).Layout(gtx, func(gtx C) D { return th.item(gtx, it, s.Phase) })
 		})
 	}
+	if len(s.Queue) > 0 {
+		// The queue is the timeline's footer, so it scrolls with the thread.
+		rows = append(rows, func(gtx C) D {
+			return pad(16, 0, 0, 0).Layout(gtx, func(gtx C) D { return th.queue(gtx, s) })
+		})
+	}
 	rows = append(rows, Spacer(0, 18))
 	// Pinned to the bottom like a chat: the newest row sits above the composer.
 	l := th.List("messages", true)
@@ -749,6 +755,8 @@ func (th *Theme) item(gtx C, it Item, phase float64) D {
 		})
 	case ItemAssistant:
 		return th.Markdown(gtx, it.Text)
+	case ItemApproval:
+		return th.approvalRow(gtx, it.Approval)
 	case ItemFold:
 		return th.Click(prefixID("fold:", it.ID), func(gtx C) D { return th.foldRow(gtx, it) })(gtx)
 	case ItemTool:
@@ -1098,80 +1106,220 @@ func (th *Theme) ModelPicker(gtx C, p *ModelPicker) D { return th.modelPicker(gt
 // TraitsMenu draws the model options menu on its own, for the animation render.
 func (th *Theme) TraitsMenu(gtx C, t *Traits) D { return th.traitsMenu(gtx, &Scene{}, "trait", t) }
 
-// modelPicker is T3's model menu: search on top, a rail of Favorites and
-// providers on the left, that provider's models on the right. Options live
-// in the traits menu, not here.
+// modelPicker is T3's model picker: search on top, a rail of Favorites
+// and providers on the left, that provider's models on the right, and
+// docked beside them the effort column, the model's options
+// (ProviderModelPicker.tsx: the list 360 wide by the 192dp column).
 func (th *Theme) modelPicker(gtx C, s *Scene, p *ModelPicker) D {
 	return popupFrame(gtx, func(gtx C) D {
-		return FixedW(gtx, 420, func(gtx C) D {
-			list := func(gtx C) D {
-				return pad(6, 6, 6, 6).Layout(gtx, func(gtx C) D {
-					tab := p.Tabs[p.Tab]
-					name := tab.Provider
-					if name == "" {
-						name = "Favorites"
-					}
-					kids := []layout.FlexChild{rigid(func(gtx C) D {
-						return pad(4, 8, 6, 8).Layout(gtx, func(gtx C) D {
-							return th.Text(gtx, Txt{Size: 10.5, Color: ColFaint, Font: UI(font.SemiBold), MaxLines: 1}, strings.ToUpper(name))
-						})
-					})}
-					for _, m := range p.Models {
-						m := m
-						kids = append(kids, rigid(th.Click(prefixID("picker.model:", m.ID), func(gtx C) D { return th.pickerRow(gtx, m) })))
-					}
-					if len(p.Models) == 0 {
-						kids = append(kids, rigid(func(gtx C) D {
-							return pad(6, 8, 8, 8).Layout(gtx, func(gtx C) D { return th.Small(gtx, ColFaint, "No models match.") })
-						}))
-					}
-					if p.Legacy > 0 {
-						kids = append(kids, rigid(func(gtx C) D {
-							return FixedH(gtx, 28, func(gtx C) D {
-								gtx.Constraints.Min.X = gtx.Constraints.Max.X
-								return pad(0, 8, 0, 6).Layout(gtx, func(gtx C) D {
-									return Row(gtx,
-										rigid(IconW(IconChevronRight, ColFaint, 13)),
-										rigid(Spacer(4, 0)),
-										rigid(func(gtx C) D { return th.Label(gtx, ColDim, font.Normal, "Legacy models") }),
-										rigid(Spacer(6, 0)),
-										rigid(func(gtx C) D { return th.Small(gtx, ColFaint, fmt.Sprint(p.Legacy)) }),
-									)
-								})
-							})
-						}))
-					}
-					return Col(gtx, kids...)
-				})
-			}
-			body := func(gtx C) D {
-				m := op.Record(gtx.Ops)
-				lgtx := gtx
-				lgtx.Constraints.Max.X -= dp(gtx, 45)
-				h := list(lgtx).Size.Y
-				m.Stop()
-				gtx.Constraints.Min.Y = h
-				return layout.Flex{}.Layout(gtx,
-					rigid(func(gtx C) D { return th.pickerRail(gtx, s, p) }),
-					rigid(divider),
-					flexed(list),
-				)
-			}
-			return Col(gtx,
-				rigid(func(gtx C) D {
-					if s.Live {
-						return pad(8, 8, 8, 8).Layout(gtx, th.Field("picker.search", IconSearch, true, "Search models", false))
-					}
-					return pad(8, 8, 8, 8).Layout(gtx, th.Input(IconSearch, true, p.Query, "Search models", true))
-				}),
-				rigid(func(gtx C) D {
-					hline(gtx, ColBorder, 0, 0, gtx.Constraints.Max.X)
-					return D{Size: image.Pt(gtx.Constraints.Max.X, max(1, dp(gtx, 1)))}
-				}),
-				rigid(body),
-			)
-		})
+		if s.Traits == nil {
+			return th.modelList(gtx, s, p, 420)
+		}
+		list := record(gtx, func(gtx C) D { return th.modelList(gtx, s, p, 360) })
+		list.call.Add(gtx.Ops)
+		defer op.Offset(image.Pt(list.Size.X, 0)).Push(gtx.Ops).Pop()
+		col := th.effortColumn(gtx, s, s.Traits, list.Size.Y)
+		return D{Size: image.Pt(list.Size.X+col.Size.X, list.Size.Y)}
 	})
+}
+
+// modelList is the picker's search, rail and models, w wide.
+func (th *Theme) modelList(gtx C, s *Scene, p *ModelPicker, w float32) D {
+	return FixedW(gtx, w, func(gtx C) D {
+		list := func(gtx C) D {
+			return pad(6, 6, 6, 6).Layout(gtx, func(gtx C) D {
+				tab := p.Tabs[p.Tab]
+				name := tab.Provider
+				if name == "" {
+					name = "Favorites"
+				}
+				kids := []layout.FlexChild{rigid(func(gtx C) D {
+					return pad(4, 8, 6, 8).Layout(gtx, func(gtx C) D {
+						return th.Text(gtx, Txt{Size: 10.5, Color: ColFaint, Font: UI(font.SemiBold), MaxLines: 1}, strings.ToUpper(name))
+					})
+				})}
+				for _, m := range p.Models {
+					m := m
+					kids = append(kids, rigid(th.Click(prefixID("picker.model:", m.ID), func(gtx C) D { return th.pickerRow(gtx, m) })))
+				}
+				if len(p.Models) == 0 {
+					kids = append(kids, rigid(func(gtx C) D {
+						return pad(6, 8, 8, 8).Layout(gtx, func(gtx C) D { return th.Small(gtx, ColFaint, "No models match.") })
+					}))
+				}
+				if p.Legacy > 0 {
+					kids = append(kids, rigid(func(gtx C) D {
+						return FixedH(gtx, 28, func(gtx C) D {
+							gtx.Constraints.Min.X = gtx.Constraints.Max.X
+							return pad(0, 8, 0, 6).Layout(gtx, func(gtx C) D {
+								return Row(gtx,
+									rigid(IconW(IconChevronRight, ColFaint, 13)),
+									rigid(Spacer(4, 0)),
+									rigid(func(gtx C) D { return th.Label(gtx, ColDim, font.Normal, "Legacy models") }),
+									rigid(Spacer(6, 0)),
+									rigid(func(gtx C) D { return th.Small(gtx, ColFaint, fmt.Sprint(p.Legacy)) }),
+								)
+							})
+						})
+					}))
+				}
+				return Col(gtx, kids...)
+			})
+		}
+		body := func(gtx C) D {
+			m := op.Record(gtx.Ops)
+			lgtx := gtx
+			lgtx.Constraints.Max.X -= dp(gtx, 45)
+			h := list(lgtx).Size.Y
+			m.Stop()
+			gtx.Constraints.Min.Y = h
+			return layout.Flex{}.Layout(gtx,
+				rigid(func(gtx C) D { return th.pickerRail(gtx, s, p) }),
+				rigid(divider),
+				flexed(list),
+			)
+		}
+		return Col(gtx,
+			rigid(func(gtx C) D {
+				if s.Live {
+					return pad(8, 8, 8, 8).Layout(gtx, th.Field("picker.search", IconSearch, true, "Search models", false))
+				}
+				return pad(8, 8, 8, 8).Layout(gtx, th.Input(IconSearch, true, p.Query, "Search models", true))
+			}),
+			rigid(func(gtx C) D {
+				hline(gtx, ColBorder, 0, 0, gtx.Constraints.Max.X)
+				return D{Size: image.Pt(gtx.Constraints.Max.X, max(1, dp(gtx, 1)))}
+			}),
+			rigid(body),
+		)
+	})
+}
+
+// effortColumn is the picker's effort column (ComposerEffortColumn): 192
+// wide on --muted at 40% behind a rule at border/70; its head, the first
+// option's name and the model's, over a rule; then the options' 32dp rows,
+// the picked one with its check, the default saying so, a switch for an
+// on/off option. It's as tall as the list beside it, h.
+func (th *Theme) effortColumn(gtx C, s *Scene, t *Traits, h int) D {
+	w := dp(gtx, 192)
+	px := max(1, dp(gtx, 1))
+	bg := over(alpha(P.Muted, uint8(int(P.Muted.A)*40/100)), P.Popover)
+	if P.Muted.A == 0xff {
+		bg = over(alpha(P.Muted, 0x66), P.Popover)
+	}
+	fill(gtx, bg, image.Rect(0, px, w, h-px), 0)
+	vline(gtx, over(alpha(P.Border, uint8(int(P.Border.A)*7/10)), P.Popover), 0, px, h-px)
+	muted := Txt{Size: 14, LineH: 20.0 / 14, Color: P.MutedForeground, MaxLines: 1}
+	head := "Effort"
+	if len(t.Groups) > 0 && t.Groups[0].Label != "" {
+		head = t.Groups[0].Label
+	}
+	// The head: px-3 pt-2.5, a 33dp row ruled under at border/70.
+	func() {
+		defer op.Offset(image.Pt(px+dp(gtx, 12), dp(gtx, 10))).Push(gtx.Ops).Pop()
+		rw := w - px - dp(gtx, 24)
+		hd := record(gtx, func(gtx C) D { return th.Text(gtx, muted, head) })
+		hd.call.Add(gtx.Ops)
+		mg := gtx
+		mg.Constraints = layout.Constraints{Max: image.Pt(max(0, rw-hd.Size.X-dp(gtx, 8)), dp(gtx, 20))}
+		md := record(mg, func(gtx C) D {
+			return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: P.MutedForeground, MaxLines: 1}, s.Model)
+		})
+		mo := op.Offset(image.Pt(rw-md.Size.X, (hd.Size.Y-md.Size.Y)/2)).Push(gtx.Ops)
+		md.call.Add(gtx.Ops)
+		mo.Pop()
+		hline(gtx, over(alpha(P.Border, uint8(int(P.Border.A)*7/10)), bg), dp(gtx, 33-1-1), 0, rw)
+	}()
+	rows := gtx
+	rows.Constraints = layout.Constraints{Min: image.Pt(w-px-dp(gtx, 16), 0), Max: image.Pt(w-px-dp(gtx, 16), 1<<20)}
+	list := record(rows, func(gtx C) D {
+		var kids []layout.FlexChild
+		for i, g := range t.Groups {
+			if i > 0 {
+				kids = append(kids, rigid(func(gtx C) D {
+					hline(gtx, over(alpha(P.Border, uint8(int(P.Border.A)*7/10)), bg), dp(gtx, 4), 0, gtx.Constraints.Max.X)
+					return D{Size: image.Pt(gtx.Constraints.Max.X, dp(gtx, 9))}
+				}))
+				if !g.Bool && g.Label != "" {
+					kids = append(kids, rigid(func(gtx C) D {
+						return pad(6, 8, 4, 8).Layout(gtx, func(gtx C) D {
+							return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Font: UI(font.Medium), Color: P.MutedForeground, MaxLines: 1}, g.Label)
+						})
+					}))
+				}
+			}
+			if g.Bool {
+				kids = append(kids, rigid(th.columnRow(liveID(s, fmt.Sprintf("trait:%d", i)), g.Label, false, false, bg, &g)))
+				continue
+			}
+			for j, c := range g.Choices {
+				id := liveID(s, fmt.Sprintf("trait:%d:%d", i, j))
+				if c.Off {
+					id = ""
+				}
+				kids = append(kids, rigid(th.columnRow(id, c.Label, j == g.Sel, c.Default, bg, nil)), rigid(Spacer(0, 2)))
+			}
+		}
+		return Col(gtx, kids...)
+	})
+	view := h - dp(gtx, 43) - dp(gtx, 6)
+	defer op.Offset(image.Pt(px+dp(gtx, 8), dp(gtx, 43))).Push(gtx.Ops).Pop()
+	th.vscroll(gtx, "effort", image.Pt(w-px-dp(gtx, 16), max(0, view)), list.Size.Y, list.call)
+	return D{Size: image.Pt(w, h)}
+}
+
+// columnRow is one of the column's rows: 32 tall, padded 0 8, rounded 4,
+// 14/20 in the foreground, lit at foreground 9% under the pointer; picked,
+// a 14dp check at its end, else "Default" for the default; an on/off
+// option ends in its switch.
+func (th *Theme) columnRow(id, label string, picked, isDefault bool, bg color.NRGBA, toggle *Trait) W {
+	return func(gtx C) D {
+		w := gtx.Constraints.Max.X
+		h := dp(gtx, 32)
+		hovered := false
+		if id != "" {
+			c, _ := th.events(gtx, id)
+			hovered = c.Hovered()
+		}
+		if hovered {
+			fill(gtx, over(alpha(P.Foreground, 0x17), bg), image.Rect(0, 0, w, h), dp(gtx, 4))
+		}
+		x := dp(gtx, 8)
+		end := w - dp(gtx, 8)
+		switch {
+		case toggle != nil:
+			sw := record(gtx, func(gtx C) D { return Switch(gtx, onAmt(toggle.On)) })
+			so := op.Offset(image.Pt(end-sw.Size.X, (h-sw.Size.Y)/2)).Push(gtx.Ops)
+			sw.call.Add(gtx.Ops)
+			so.Pop()
+			end -= sw.Size.X + dp(gtx, 8)
+		case picked:
+			co := op.Offset(image.Pt(end-dp(gtx, 14), (h-dp(gtx, 14))/2)).Push(gtx.Ops)
+			LucideW("check", P.Foreground, 14)(gtx)
+			co.Pop()
+			end -= dp(gtx, 14+8)
+		case isDefault:
+			dd := record(gtx, func(gtx C) D {
+				return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: over(alpha(P.MutedForeground, 0xb3), bg), MaxLines: 1}, "Default")
+			})
+			do := op.Offset(image.Pt(end-dd.Size.X, (h-dd.Size.Y)/2)).Push(gtx.Ops)
+			dd.call.Add(gtx.Ops)
+			do.Pop()
+			end -= dd.Size.X + dp(gtx, 8)
+		}
+		lg := gtx
+		lg.Constraints = layout.Constraints{Max: image.Pt(max(0, end-x), h)}
+		ld := record(lg, func(gtx C) D {
+			return th.Text(gtx, Txt{Size: 14, LineH: 20.0 / 14, Color: P.Foreground, MaxLines: 1}, label)
+		})
+		lo := op.Offset(image.Pt(x, (h-ld.Size.Y)/2)).Push(gtx.Ops)
+		ld.call.Add(gtx.Ops)
+		lo.Pop()
+		if id != "" {
+			th.hit(gtx, id, image.Pt(w, h))
+		}
+		return D{Size: image.Pt(w, h)}
+	}
 }
 
 // pickerRail is the column of tabs: a star for Favorites, then each ready
@@ -1824,6 +1972,7 @@ func (th *Theme) codeBoxesFocus(gtx C, code string, n int, active bool) D {
 // Phone is the same thread view at phone width: one column, a back button
 // instead of the sidebar, the composer's secondary controls tucked away.
 func (th *Theme) Phone(gtx C, s *Scene) D {
+	th.in.window = gtx.Constraints.Max
 	return Fill(gtx, ColPanelHi, func(gtx C) D {
 		return Col(gtx,
 			rigid(func(gtx C) D {

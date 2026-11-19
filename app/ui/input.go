@@ -67,6 +67,11 @@ type input struct {
 	focus       string
 	caret       [2]int // the composer's selection last frame, to step over chips
 	composer    composerUI
+	preview     *imagePreview                 // the picture the image dialog shows
+	scrolls     map[string]*scrollArea        // the scroll areas, by id
+	hovers      map[string]*gesture.Hover     // areas that only watch the pointer, by id
+	window      image.Point                   // the window's size in px, for T3's viewport breakpoints
+	movers      map[string]*int               // areas that watch the pointer move over them, by id
 	selectables map[string]*widget.Selectable // selectable text: sent messages, code blocks
 	copies      map[string]string             // copy buttons' text, by click id
 	copied      map[string]time.Time          // when each was last clicked, for its check
@@ -83,6 +88,9 @@ type input struct {
 type Action struct {
 	ID, Kind, Text string
 	Alt            bool
+	// Background is Mod+Alt+Enter's send: a new thread starts out of the
+	// way and the composer stays a new thread.
+	Background bool
 }
 
 // Actions returns and clears what happened since the last call.
@@ -260,7 +268,12 @@ func (th *Theme) Tip(id, tip string, up bool, align int, w W) W {
 // in over 150ms (docs/ui/02-primitives.md §3.7, port note 10).
 func (th *Theme) tipAt(gtx C, id, tip string, size image.Point, up bool, align int) {
 	c := th.in.clicks[id]
-	if c == nil || !c.Hovered() || tip == "" {
+	th.tipShow(gtx, id, c != nil && c.Hovered(), tip, size, up, align)
+}
+
+// tipShow is tipAt for a target that knows whether the pointer's on it.
+func (th *Theme) tipShow(gtx C, id string, hovered bool, tip string, size image.Point, up bool, align int) {
+	if !hovered || tip == "" {
 		delete(th.in.tipSince, id)
 		return
 	}
@@ -468,7 +481,7 @@ func (th *Theme) editor(gtx C, id string, t Txt, placeholder string) D {
 	}
 	d := ed.Layout(gtx, th.Shaper, t.Font, unit.Sp(t.Size), col(t.Color), sel)
 	if id == "composer" {
-		th.drawChips(gtx, ed, d.Size, editorScroll(ed, d.Size), glass(), float32(t.Size), chipPictures(th.in.composer.thumbs))
+		th.drawChips(gtx, ed, d.Size, editorScroll(ed, d.Size), glass(), float32(t.Size), chipPictures(th.in.composer.thumbs), true)
 	}
 	return d
 }

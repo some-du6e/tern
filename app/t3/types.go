@@ -28,6 +28,27 @@ type RuntimeRequest struct {
 	Kind string `json:"kind"`
 }
 
+// Request is one of a thread's runtime requests as its projection has it
+// (OrchestrationV2RuntimeRequest): what it asks, whether it's still
+// pending, and whether the provider can still take an answer.
+type Request struct {
+	ID                 string `json:"id"`
+	Kind               string `json:"kind"`
+	Status             string `json:"status"` // pending, resolved, expired, cancelled
+	CreatedAt          string `json:"createdAt"`
+	ResponseCapability struct {
+		Type             string `json:"type"` // live, message, not_resumable
+		SupportsFeedback bool   `json:"supportsFeedback"`
+	} `json:"responseCapability"`
+}
+
+// ApprovalOption is one answer an approval offers.
+type ApprovalOption struct {
+	Decision string `json:"decision"` // accept, acceptForSession, decline, cancel
+	Label    string `json:"label"`
+	Warning  string `json:"warning"`
+}
+
 type Lineage struct {
 	ParentThreadID       string `json:"parentThreadId"`
 	RelationshipToParent string `json:"relationshipToParent"`
@@ -51,6 +72,7 @@ type Thread struct {
 	DeletedAt             string          `json:"deletedAt"`
 	LastError             string          `json:"lastError"`
 	ActiveRunID           string          `json:"activeRunId"`
+	LatestRunID           string          `json:"latestRunId"`
 	ActivityRunStatus     string          `json:"activityRunStatus"`
 	ActivityRunStartedAt  string          `json:"activityRunStartedAt"`
 	PendingRuntimeRequest *RuntimeRequest `json:"pendingRuntimeRequest"`
@@ -98,6 +120,8 @@ type TurnItem struct {
 	UpdatedAt   string  `json:"updatedAt"`
 	RequestID   string  `json:"requestId"`
 	PlanID      string  `json:"planId"`
+	// ScheduledTaskID is set on a user message an automation sent.
+	ScheduledTaskID string `json:"scheduledTaskId"`
 
 	// tools
 	Input                  json.RawMessage `json:"input"`
@@ -114,6 +138,11 @@ type TurnItem struct {
 	Result                 string          `json:"result"`
 	OutputIndicatesFailure bool            `json:"outputIndicatesFailure"`
 	Reason                 string          `json:"reason"`
+
+	// approval_request: what it asks for (its detail is Prompt) and its answers
+	RequestKind string           `json:"requestKind"`
+	AppName     string           `json:"appName"`
+	Options     []ApprovalOption `json:"options"`
 
 	Steps []struct {
 		Step   string `json:"step"`
@@ -155,6 +184,12 @@ type Message struct {
 	ID   string `json:"id"`
 	Role string `json:"role"`
 	Text string `json:"text"`
+	// Who sent it: automations and other agents send user messages too.
+	CreatedBy       string `json:"createdBy"` // user, agent, system
+	ScheduledTaskID string `json:"scheduledTaskId"`
+	Context         *struct {
+		Guest json.RawMessage `json:"guest"`
+	} `json:"context"`
 }
 
 // ThreadItem is one value from orchestration.subscribeThread.
@@ -164,8 +199,9 @@ type ThreadItem struct {
 		VisibleTurnItems []struct {
 			Item json.RawMessage `json:"item"`
 		} `json:"visibleTurnItems"`
-		Runs     []Run     `json:"runs"`
-		Messages []Message `json:"messages"`
+		Runs            []Run     `json:"runs"`
+		Messages        []Message `json:"messages"`
+		RuntimeRequests []Request `json:"runtimeRequests"`
 	} `json:"projection"`
 	HistoryCursor  string `json:"historyCursor"`
 	HasMoreHistory bool   `json:"hasMoreHistory"`
@@ -201,7 +237,10 @@ type ServerConfig struct {
 	Settings             struct {
 		DefaultModelSelection *ModelSelection `json:"defaultModelSelection"`
 		DefaultRuntimeMode    string          `json:"defaultRuntimeMode"`
-		Favorites             []struct {
+		// PromptSuggestionsEnabled: the server streams the providers'
+		// guesses at the next prompt.
+		PromptSuggestionsEnabled bool `json:"promptSuggestionsEnabled"`
+		Favorites                []struct {
 			Provider string `json:"provider"`
 			Model    string `json:"model"`
 		} `json:"favorites"`

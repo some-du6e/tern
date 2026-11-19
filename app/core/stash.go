@@ -1,6 +1,8 @@
 package core
 
 import (
+	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -96,33 +98,74 @@ func (a *App) stashLocked(th *ui.Theme, key string) {
 		a.comp.stash = a.comp.stash[:stashMax]
 	}
 	a.comp.stashOpen = false
+	a.comp.stashed = time.Now()
 	a.saveStashLocked()
 }
 
-// saveStashLocked writes the stash, dropping the pictures past what it
-// keeps. Call with the lock held.
+// saveStashLocked drops the pictures past what the stash keeps and writes
+// it off the UI's path, the newest copy last. Call with the lock held.
 func (a *App) saveStashLocked() {
 	room := stashImageBytes
 	for i := range a.comp.stash {
 		e := &a.comp.stash[i]
 		var keep []clip.Image
-		for _, im := range e.Images {
+		var thumbs []ui.Thumb
+		for j, im := range e.Images {
 			if len(im.Data) > room {
 				e.Dropped++
 				continue
 			}
 			room -= len(im.Data)
 			keep = append(keep, im)
+			if j < len(e.thumbs) {
+				thumbs = append(thumbs, e.thumbs[j])
+			}
 		}
 		if len(keep) < len(e.Images) {
-			e.Images, e.thumbs = keep, nil
+			e.Images, e.thumbs = keep, thumbs
 		}
 	}
-	_ = a.store.Put(stashFile, a.comp.stash)
+	a.stashWrites++
+	gen, snapshot := a.stashWrites, slices.Clone(a.comp.stash)
+	a.stashSaving.Add(1)
+	go func() {
+		defer a.stashSaving.Done()
+		a.stashFileMu.Lock()
+		defer a.stashFileMu.Unlock()
+		if gen > a.stashWritten {
+			a.stashWritten = gen
+			_ = a.store.Put(stashFile, snapshot)
+		}
+	}()
+}
+
+// decodeStash makes the stashed pictures' thumbnails, off the UI's path,
+// for a stash read back from disk.
+func (a *App) decodeStash() {
+	a.mu.Lock()
+	entries := slices.Clone(a.comp.stash)
+	a.mu.Unlock()
+	thumbs := map[string][]ui.Thumb{}
+	for _, e := range entries {
+		for _, im := range e.Images {
+			t := ui.NewThumb(im.Data)
+			t.Name = im.Name
+			thumbs[e.ID] = append(thumbs[e.ID], t)
+		}
+	}
+	a.mu.Lock()
+	for i := range a.comp.stash {
+		if e := &a.comp.stash[i]; e.thumbs == nil && len(thumbs[e.ID]) == len(e.Images) {
+			e.thumbs = thumbs[e.ID]
+		}
+	}
+	a.mu.Unlock()
+	a.changed()
 }
 
 // restoreStash brings entry i back: its text after the composer's (a
 // blank line between), its pictures as tiles, and takes it off the stash.
+// When the composer hasn't room for all its pictures it stays stashed.
 func (a *App) restoreStash(th *ui.Theme, i int) {
 	a.mu.Lock()
 	if i < 0 || i >= len(a.comp.stash) {
@@ -130,20 +173,23 @@ func (a *App) restoreStash(th *ui.Theme, i int) {
 		return
 	}
 	e := a.comp.stash[i]
+	key := a.imageKey()
+	if len(a.images[key])+len(e.Images) > maxImages {
+		a.fail(errors.New("a message takes " + strconv.Itoa(maxImages) + " images at most, so this one stays stashed"))
+		a.mu.Unlock()
+		a.changed()
+		return
+	}
 	a.comp.stash = append(a.comp.stash[:i:i], a.comp.stash[i+1:]...)
 	a.comp.stashOpen = false
 	a.saveStashLocked()
-	key := a.composerKey()
 	for j, im := range e.Images {
-		n := a.freeNumber(key)
-		if n == 0 {
-			break
-		}
-		p := pastedImage{id: t3.NewID(), n: n, img: im}
+		p := pastedImage{id: t3.NewID(), n: a.freeNumber(key), img: im}
 		if j < len(e.thumbs) {
 			p.thumb = e.thumbs[j]
 		} else {
 			p.thumb = ui.NewThumb(im.Data)
+			p.thumb.Name = im.Name
 		}
 		p.thumb.N = 0
 		a.images[key] = append(a.images[key], p)
@@ -198,16 +244,29 @@ func (a *App) stashMenuKey(th *ui.Theme, name string) {
 
 // stashScene shows the stash, its list unless a menu is open. Call with
 // the lock held.
-func (a *App) stashScene(s *ui.Scene) {
-	for i := range a.comp.stash {
-		e := &a.comp.stash[i]
-		if e.thumbs == nil {
-			for _, im := range e.Images {
-				e.thumbs = append(e.thumbs, ui.NewThumb(im.Data))
-			}
-		}
-		s.Stash = append(s.Stash, ui.Stashed{Snippet: stashSnippet(*e), Thumbs: e.thumbs, Dropped: e.Dropped, Age: age(e.Created)})
+func (a *App) stashScene(s *ui.Scene, now time.Time) {
+	for _, e := range a.comp.stash {
+		s.Stash = append(s.Stash, ui.Stashed{Snippet: stashSnippet(e), Thumbs: e.thumbs, Dropped: e.Dropped, Age: relativeAge(e.Created, now)})
 	}
 	s.StashOpen = a.comp.stashOpen && len(s.Suggest) == 0 && s.SuggestEmpty == ""
 	s.StashSel = a.comp.stashSel
+	s.Stashed = a.comp.stashed
+}
+
+// relativeAge is T3's RelativeTime (formatRelativeElapsed): "just now",
+// then "4m ago", "1h ago", "2d ago".
+func relativeAge(t, now time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	switch d := max(0, now.Sub(t)); {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return strconv.Itoa(int(d/time.Minute)) + "m ago"
+	case d < 24*time.Hour:
+		return strconv.Itoa(int(d/time.Hour)) + "h ago"
+	default:
+		return strconv.Itoa(int(d/(24*time.Hour))) + "d ago"
+	}
 }

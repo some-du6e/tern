@@ -13,50 +13,61 @@ import (
 	"gioui.org/op"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
+	"gioui.org/text"
 	"gioui.org/unit"
 	"gioui.org/widget"
+	"golang.org/x/image/math/fixed"
 )
 
-// A picture in text is a chip, like T3's web composer: ChipRune(n) and then
-// chipPad figure spaces, which reserve the chip's width and don't wrap. The
-// text keeps the run whole: the caret steps over it, Backspace and Delete
-// take all of it, and a run broken some other way is cleared. drawChips
-// paints the chip over it.
+// A picture in text is a chip, like T3's web composer: ChipRune(n), then
+// fill that reserves the chip's width and doesn't wrap, figure spaces and
+// for the last few dp narrow no-break spaces. The text keeps the run
+// whole: the caret steps over it, Backspace and Delete take all of it, and
+// a run broken some other way is cleared. drawChips paints the chip over
+// it.
 
 const (
-	chipFill = ' ' // FIGURE SPACE: wide and non-breaking
-	chipPad  = 7
+	chipFill  = '\u2007' // FIGURE SPACE: wide and non-breaking
+	chipFine  = '\u202f' // NARROW NO-BREAK SPACE: the fine steps
+	chipPad   = 7        // ChipText's fill
+	chipRunes = 0xE000   // ChipRune(n) is this plus n, in the private use area
+	// MaxChips is how many pictures one message takes (chatAttachment.ts).
+	MaxChips = 100
 )
 
-// ChipRune is the rune that starts picture n's chip, ① to ⑨.
-func ChipRune(n int) rune { return '①' + rune(n-1) }
+// ChipRune is the rune that starts picture n's chip.
+func ChipRune(n int) rune { return chipRunes + rune(n) }
 
 // ChipN is the picture number r starts a chip for, or 0.
 func ChipN(r rune) int {
-	if r >= '①' && r <= '⑨' {
-		return int(r-'①') + 1
+	if r > chipRunes && r <= chipRunes+MaxChips {
+		return int(r - chipRunes)
 	}
 	return 0
 }
 
-// ChipText is picture n's whole chip.
-func ChipText(n int) string { return string(ChipRune(n)) + strings.Repeat(string(chipFill), chipPad) }
+func isFill(r rune) bool { return r == chipFill || r == chipFine }
 
-const chipLen = 1 + chipPad // in runes
+// ChipText is picture n's chip with a set fill, for text whose chips
+// aren't sized to their labels.
+func ChipText(n int) string { return string(ChipRune(n)) + strings.Repeat(string(chipFill), chipPad) }
 
 // HasChips reports whether s has a chip in it.
 func HasChips(s string) bool {
 	return strings.ContainsFunc(s, func(r rune) bool { return ChipN(r) != 0 })
 }
 
-// TrimText trims s's surrounding white space but not a chip's fill, which
-// counts as a space and would leave a chip at the end broken.
-func TrimText(s string) string {
-	return strings.TrimFunc(s, func(r rune) bool { return r != chipFill && unicode.IsSpace(r) })
+// Chips is the numbers of the pictures s has chips for, in order.
+func Chips(s string) []int {
+	var out []int
+	for _, c := range chipSpans(s) {
+		out = append(out, c.n)
+	}
+	return out
 }
 
-// StripChips is s without its chips.
-func StripChips(s string) string {
+// ReplaceChips is s with each chip swapped for with(n).
+func ReplaceChips(s string, with func(n int) string) string {
 	spans := chipSpans(s)
 	if len(spans) == 0 {
 		return s
@@ -66,47 +77,58 @@ func StripChips(s string) string {
 	at := 0
 	for _, c := range spans {
 		b.WriteString(string(rs[at:c.start]))
+		b.WriteString(with(c.n))
 		at = c.end
 	}
 	b.WriteString(string(rs[at:]))
 	return b.String()
 }
 
+// TrimText trims s's surrounding white space but not a chip's fill, which
+// counts as a space and would leave a chip at the end broken.
+func TrimText(s string) string {
+	return strings.TrimFunc(s, func(r rune) bool { return !isFill(r) && unicode.IsSpace(r) })
+}
+
+// StripChips is s without its chips.
+func StripChips(s string) string { return ReplaceChips(s, func(int) string { return "" }) }
+
 // chipSpan is one chip's rune range [start, end) and number.
 type chipSpan struct{ start, end, n int }
 
-// chipSpans finds the whole chips in s.
+// chipSpans finds the whole chips in s: a chip rune and all the fill
+// after it.
 func chipSpans(s string) []chipSpan {
 	rs := []rune(s)
 	var out []chipSpan
 	for i := 0; i < len(rs); i++ {
 		n := ChipN(rs[i])
-		if n == 0 || i+chipLen > len(rs) {
+		if n == 0 {
 			continue
 		}
-		whole := true
-		for j := i + 1; j < i+chipLen; j++ {
-			whole = whole && rs[j] == chipFill
+		j := i + 1
+		for j < len(rs) && isFill(rs[j]) {
+			j++
 		}
-		if whole {
-			out = append(out, chipSpan{i, i + chipLen, n})
-			i += chipLen - 1
+		if j > i+1 {
+			out = append(out, chipSpan{i, j, n})
+			i = j - 1
 		}
 	}
 	return out
 }
 
-// fixChips clears broken chips: a chip rune without all its fill, and fill
+// fixChips clears broken chips: a chip rune without its fill, and fill
 // that's not in a chip. It reports whether it changed anything.
 func fixChips(ed *widget.Editor) bool {
 	txt := ed.Text()
-	if !HasChips(txt) && !strings.ContainsRune(txt, chipFill) {
+	if !HasChips(txt) && !strings.ContainsFunc(txt, isFill) {
 		return false
 	}
 	rs := []rune(txt)
 	keep := make([]bool, len(rs))
 	for i := range keep {
-		keep[i] = ChipN(rs[i]) == 0 && rs[i] != chipFill
+		keep[i] = ChipN(rs[i]) == 0 && !isFill(rs[i])
 	}
 	for _, c := range chipSpans(txt) {
 		for i := c.start; i < c.end; i++ {
@@ -215,12 +237,14 @@ func mix(a, b color.NRGBA, t float32) color.NRGBA {
 }
 
 // drawChips paints T3's image chip over each chip in t (ContextChip.tsx,
-// contextChipParts.tsx): no pill, the picture itself at 1em, rounded 4,
-// then 0.2em on its label in medium, both in --context-chip-image, on the
-// text's baseline. chip gives chip n's label and picture; one still
-// loading shows lucide's image. bg is what the text sits on, to hide the
-// run the chip holds; scroll is how far the text has scrolled.
-func (th *Theme) drawChips(gtx C, t textRegions, size image.Point, scroll image.Point, bg color.NRGBA, sizeSp float32, chip func(n int) (string, Thumb)) {
+// ImageChipButton in contextChipParts.tsx): no pill, the picture itself at
+// 1em, rounded 4, then 0.2em on its name in medium and 0.33em on, its size
+// at 10, all in --context-chip-image, on the text's baseline. chip gives
+// chip n's picture, its name and size; one still loading shows lucide's
+// image. bg is what the text sits on, to hide the run the chip holds;
+// scroll is how far the text has scrolled. Live, a chip is a button: its
+// tooltip is the name over the size, and a click opens the picture.
+func (th *Theme) drawChips(gtx C, t textRegions, size image.Point, scroll image.Point, bg color.NRGBA, sizeSp float32, chip func(n int) Thumb, live bool) {
 	spans := chipSpans(t.Text())
 	if len(spans) == 0 {
 		return
@@ -229,6 +253,7 @@ func (th *Theme) drawChips(gtx C, t textRegions, size image.Point, scroll image.
 	em := gtx.Metric.PxPerSp * sizeSp
 	ink := P.ContextChipImage
 	label := Txt{Size: unit.Sp(sizeSp), Color: ink, Font: UI(font.Medium), MaxLines: 1}
+	small := Txt{Size: 10, LineH: 14.0 / 10, Color: ink, Font: UI(font.Medium), MaxLines: 1}
 	var regs []widget.Region
 	for _, c := range spans {
 		regs = t.Regions(c.start, c.end, regs[:0])
@@ -242,9 +267,10 @@ func (th *Theme) drawChips(gtx C, t textRegions, size image.Point, scroll image.
 			}
 		}
 		base := b.Max.Y - regs[0].Baseline
-		// Hide the rune and its fill; the circled digit dips below the line.
+		// Hide the rune and its fill.
 		fill(gtx, bg, image.Rect(b.Min.X, b.Min.Y-dp(gtx, 2), b.Max.X, b.Max.Y+dp(gtx, 3)), 0)
-		name, pic := chip(c.n)
+		pic := chip(c.n)
+		name, sz := chipLabel(pic)
 		icon := int(em + 0.5)
 		// The picture centres on the chip's line, the text's ascent over
 		// its descent (line-height: normal).
@@ -255,30 +281,138 @@ func (th *Theme) drawChips(gtx C, t textRegions, size image.Point, scroll image.
 		}
 		off.Pop()
 		x := b.Min.X + icon + int(0.2*em+0.5)
-		m := op.Record(gtx.Ops)
-		lg := gtx
-		lg.Constraints = layout.Constraints{Max: image.Pt(max(0, b.Max.X-x), b.Dy())}
-		ld := th.Text(lg, label, name)
-		call := m.Stop()
-		lo := op.Offset(image.Pt(x, base-(ld.Size.Y-ld.Baseline))).Push(gtx.Ops)
-		call.Add(gtx.Ops)
-		lo.Pop()
+		for i, part := range []struct {
+			t Txt
+			s string
+		}{{label, name}, {small, sz}} {
+			if part.s == "" {
+				continue
+			}
+			if i > 0 {
+				x += int(0.33*em + 0.5)
+			}
+			m := op.Record(gtx.Ops)
+			lg := gtx
+			lg.Constraints = layout.Constraints{Max: image.Pt(max(0, b.Max.X-x), b.Dy())}
+			ld := th.Text(lg, part.t, part.s)
+			call := m.Stop()
+			lo := op.Offset(image.Pt(x, base-(ld.Size.Y-ld.Baseline))).Push(gtx.Ops)
+			call.Add(gtx.Ops)
+			lo.Pop()
+			x += ld.Size.X
+		}
+		if !live {
+			continue
+		}
+		id := "chip:" + strconv.Itoa(c.n)
+		co := op.Offset(b.Min).Push(gtx.Ops)
+		clicked, hovered := th.localClick(gtx, id, b.Size())
+		th.tipShow(gtx, id, hovered, strings.TrimSpace(pic.Name+"\n"+sz), b.Size(), true, 0)
+		co.Pop()
+		if clicked && pic.ok {
+			th.openPreview(pic)
+		}
 	}
 }
 
-// ImageLabel is a composer picture's name in its chip.
-func ImageLabel(n int) string { return "Image " + strconv.Itoa(n) }
+// chipLabel is what an image chip says: the file's name cut in the middle
+// to 36 characters (middleTruncateAttachmentName) and its size.
+func chipLabel(t Thumb) (name, size string) {
+	if t.Size > 0 {
+		size = FormatSize(t.Size)
+	}
+	return MiddleTruncate(t.Name, 36), size
+}
 
-// chipPictures is drawChips' chip for the composer: picture n's label and
-// its thumbnail among thumbs.
-func chipPictures(thumbs []Thumb) func(n int) (string, Thumb) {
-	return func(n int) (string, Thumb) {
+// ImageChip is picture n's chip in the composer, named name and size
+// bytes big. Its fill comes as close as the fill's steps allow to what
+// drawChips draws over it, so the text after it sits where T3's does.
+func (th *Theme) ImageChip(n int, name string, size int) string {
+	// Measured at ten times the prompt's 14, for the fractions.
+	const em = 140
+	nm, sz := chipLabel(Thumb{Name: name, Size: size})
+	want := float32(1.2 * em)
+	if nm != "" {
+		want += th.advance(UI(font.Medium), em, nm)
+	}
+	if sz != "" {
+		want += 0.33*em + th.advance(UI(font.Medium), em*10/promptSize, sz)
+	}
+	have := th.advance(UI(font.Normal), em, string(ChipRune(n)))
+	wide, fine := th.advance(UI(font.Normal), em, string(chipFill)), th.advance(UI(font.Normal), em, string(chipFine))
+	bestA, bestB, bestErr := 1, 0, float32(1<<30)
+	for a := 0; wide > 0 && float32(a-1)*wide <= want-have; a++ {
+		b := 0
+		if rest := want - have - float32(a)*wide; fine > 0 && rest > 0 {
+			b = int(rest/fine + 0.5)
+		}
+		if a+b == 0 {
+			continue
+		}
+		if e := abs32(have + float32(a)*wide + float32(b)*fine - want); e < bestErr {
+			bestA, bestB, bestErr = a, b, e
+		}
+	}
+	return string(ChipRune(n)) + strings.Repeat(string(chipFill), bestA) + strings.Repeat(string(chipFine), bestB)
+}
+
+func abs32(x float32) float32 {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+// advance is how wide s sets on one line in f at px pixels to the em.
+func (th *Theme) advance(f font.Font, px int, s string) float32 {
+	th.Shaper.LayoutString(text.Parameters{Font: f, PxPerEm: fixed.I(px), MaxLines: 1, MaxWidth: 1 << 24}, s)
+	var w fixed.Int26_6
+	for g, ok := th.Shaper.NextGlyph(); ok; g, ok = th.Shaper.NextGlyph() {
+		w = max(w, g.X+g.Advance)
+	}
+	return float32(w) / 64
+}
+
+// MiddleTruncate is middleTruncateAttachmentName (composerInlineChip.ts):
+// name cut to most runes, the end kept, with "…" for what's gone.
+func MiddleTruncate(name string, most int) string {
+	rs := []rune(name)
+	switch {
+	case len(rs) <= most:
+		return name
+	case most <= 0:
+		return ""
+	case most == 1:
+		return "…"
+	}
+	avail := most - 1
+	tail := (avail + 1) / 2
+	if avail >= 18 {
+		tail = 14
+	}
+	tail = min(avail-1, tail)
+	return string(rs[:avail-tail]) + "…" + string(rs[len(rs)-tail:])
+}
+
+// FormatSize is formatAttachmentSize: "N KB", rounded up and at least 1,
+// or from 1024 KB on "N.N MB".
+func FormatSize(bytes int) string {
+	kb := max(1, (bytes+1023)/1024)
+	if kb >= 1024 {
+		return strconv.FormatFloat(float64(bytes)/(1024*1024), 'f', 1, 64) + " MB"
+	}
+	return strconv.Itoa(kb) + " KB"
+}
+
+// chipPictures is drawChips' chip for the composer: picture n among thumbs.
+func chipPictures(thumbs []Thumb) func(n int) Thumb {
+	return func(n int) Thumb {
 		for _, t := range thumbs {
 			if t.N == n {
-				return ImageLabel(n), t
+				return t
 			}
 		}
-		return ImageLabel(n), Thumb{}
+		return Thumb{}
 	}
 }
 
@@ -315,12 +449,12 @@ func editorScroll(ed *widget.Editor, size image.Point) image.Point {
 // selectable, which the chips need for their positions.
 func (th *Theme) chipText(gtx C, id, s string, labels []string) D {
 	d, sel := th.selectableSel(gtx, id, s, UI(font.Normal), SizeBody, ColText, 1.42)
-	th.drawChips(gtx, sel, d.Size, image.Point{}, ColFrameHover, float32(SizeBody), func(n int) (string, Thumb) {
+	th.drawChips(gtx, sel, d.Size, image.Point{}, ColFrameHover, float32(SizeBody), func(n int) Thumb {
 		if n <= len(labels) {
-			return labels[n-1], Thumb{}
+			return Thumb{Name: labels[n-1]}
 		}
-		return ImageLabel(n), Thumb{}
-	})
+		return Thumb{}
+	}, false)
 	return d
 }
 

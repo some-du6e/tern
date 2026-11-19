@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -160,27 +161,32 @@ func TestEffortSuffix(t *testing.T) {
 	}
 }
 
-// The placeholder is T3's, first that applies (ChatComposer.tsx).
+// The placeholder is T3's, first that applies (ChatComposer.tsx): an
+// approval that takes feedback asks for it, one that doesn't says a send
+// declines it; then the question's, the provider's, the suggestion.
 func TestPlaceholder(t *testing.T) {
 	no := false
 	for _, c := range []struct {
-		approval bool
-		q        *t3.Question
-		none     bool
-		want     string
+		approval   *approval
+		q          *t3.Question
+		none       bool
+		suggestion string
+		want       string
 	}{
-		{true, &t3.Question{}, true, "Send a message to decline and redirect the agent"},
-		{false, &t3.Question{AllowCustomAnswer: &no}, false, "Choose an option above"},
-		{false, &t3.Question{}, false, "Type your answer"},
-		{false, &t3.Question{Options: []struct {
+		{&approval{live: true, feedback: true}, nil, false, "", "Send feedback to decline this request"},
+		{&approval{live: true}, &t3.Question{}, true, "", "Send a message to decline and redirect the agent"},
+		{nil, &t3.Question{AllowCustomAnswer: &no}, false, "", "Choose an option above"},
+		{nil, &t3.Question{}, false, "", "Type your answer"},
+		{nil, &t3.Question{Options: []struct {
 			Label       string `json:"label"`
 			Value       string `json:"value"`
 			Description string `json:"description"`
-		}{{Label: "A"}}}, false, "Type your own answer, or leave this blank to use the selected option"},
-		{false, nil, true, "Enable a provider in Settings to send a message"},
-		{false, nil, false, "Ask anything. @ files, $ skills, / commands"},
+		}{{Label: "A"}}}, false, "", "Type your own answer, or leave this blank to use the selected option"},
+		{nil, nil, true, "go ahead", "Enable a provider in Settings to send a message"},
+		{nil, nil, false, "go ahead", "go ahead"},
+		{nil, nil, false, "", "Ask anything. @ files, $ skills, / commands"},
 	} {
-		if got := placeholder(c.approval, c.q, c.none); got != c.want {
+		if got := placeholder(c.approval, c.q, c.none, c.suggestion); got != c.want {
 			t.Errorf("got %q, want %q", got, c.want)
 		}
 	}
@@ -196,14 +202,18 @@ func TestDispatchMode(t *testing.T) {
 
 // Typing / opens the menu over the composer; the arrows move its
 // highlight and Enter picks: /model empties the prompt and opens the
-// model menu. Escape closes the menu until the word changes.
+// model menu. Escape shuts a trigger of that kind at that place, whatever
+// is typed after it, until the caret leaves it (useComposerTriggerState.ts).
 func TestCommandMenu(t *testing.T) {
 	a := testApp(t)
 	a.openThread("swiss/t1")
 	th := ui.NewTheme()
-	th.SetEditorText("composer", "/mo")
-	a.handle(th, ui.Action{ID: "composer", Kind: "change", Text: "/mo"})
-	s := a.build(time.Now())
+	typed := func(s string) *ui.Scene {
+		th.SetEditorText("composer", s)
+		a.handle(th, ui.Action{ID: "composer", Kind: "change", Text: s})
+		return a.build(time.Now())
+	}
+	s := typed("/mo")
 	if len(s.Suggest) != 1 || s.Suggest[0].Label != "/model" || s.SuggestSel != 0 {
 		t.Fatalf("menu = %+v", s.Suggest)
 	}
@@ -215,21 +225,87 @@ func TestCommandMenu(t *testing.T) {
 	if th.EditorText("composer") != "" || a.picker == nil {
 		t.Fatalf("after Enter: %q, picker %v", th.EditorText("composer"), a.picker != nil)
 	}
-	th.SetEditorText("composer", "/mo")
-	a.handle(th, ui.Action{ID: "composer", Kind: "change", Text: "/mo"})
+	typed("/mo")
 	a.handle(th, ui.Action{ID: "suggest", Kind: "key", Text: "⎋"})
 	a.handle(th, ui.Action{ID: "composer", Kind: "caret", Text: "/mo"})
 	if s := a.build(time.Now()); len(s.Suggest) != 0 || s.SuggestEmpty != "" {
 		t.Fatalf("after Escape the menu stays shut: %+v", s.Suggest)
 	}
-	th.SetEditorText("composer", "/mod")
-	a.handle(th, ui.Action{ID: "composer", Kind: "change", Text: "/mod"})
-	if s := a.build(time.Now()); len(s.Suggest) != 1 {
-		t.Fatalf("a changed word opens it again: %+v", s.Suggest)
+	if s := typed("/mod"); len(s.Suggest) != 0 {
+		t.Fatalf("more typed after Escape opened it again: %+v", s.Suggest)
 	}
-	th.SetEditorText("composer", "/zz")
-	a.handle(th, ui.Action{ID: "composer", Kind: "change", Text: "/zz"})
-	if s := a.build(time.Now()); len(s.Suggest) != 0 || s.SuggestEmpty != "No matching command." {
+	// With no trigger at the caret the dismissal ends.
+	typed("")
+	if s := typed("/zz"); len(s.Suggest) != 0 || s.SuggestEmpty != "No matching command." {
 		t.Fatalf("no match: %+v %q", s.Suggest, s.SuggestEmpty)
+	}
+	if s := typed("/mo"); len(s.Suggest) != 1 {
+		t.Fatalf("a new trigger opens it: %+v", s.Suggest)
+	}
+}
+
+// A file mention is T3's serializeComposerFileLink: the basename with
+// \ [ ] escaped, the path as encodeURI writes it with ( ) # ? \ escaped.
+func TestFileLink(t *testing.T) {
+	for _, c := range []struct{ path, want string }{
+		{"app/ui/composer.go", "[composer.go](app/ui/composer.go)"},
+		{"app/blog/[slug].tsx", `[\[slug\].tsx](app/blog/%5Bslug%5D.tsx)`},
+		{"docs/a b(1).md", "[a b(1).md](docs/a%20b%281%29.md)"},
+		{"a%20b.md", "[a%20b.md](a%2520b.md)"},
+		{"notes/#1?.md", "[#1?.md](notes/%231%3F.md)"},
+		{"é.txt", "[é.txt](%C3%A9.txt)"},
+	} {
+		if got := fileLink(c.path); got != c.want {
+			t.Errorf("%q: %s, want %s", c.path, got, c.want)
+		}
+	}
+}
+
+// An @ word searches for what follows the sign, 256 characters at most.
+func TestPathQuery(t *testing.T) {
+	long := strings.Repeat("x", 300)
+	if q := pathQuery(&trigger{kind: "path", query: " " + long}); len([]rune(q)) != 256 {
+		t.Fatalf("query of %d runes, want 256", len([]rune(q)))
+	}
+}
+
+// A message comes back as typed (recallableComposerPrompt): no Ultrathink
+// prefix, review comments or legacy context blocks at its end, no inline
+// references; T3's own prompts come back as nothing.
+func TestRecallable(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"Ultrathink:\nfix it ![shot](t3-context://v1/image/image_x)", "fix it"},
+		{"look here\n\n<review_comment file=\"a.go\">nit</review_comment>", "look here"},
+		{"run it\n<terminal_context>\n- Terminal 1 lines 1-4:\nls\n</terminal_context>", "run it"},
+		{"[User attached one or more files without additional text. Respond using the conversation context and the attached files.]", ""},
+		{"PLEASE IMPLEMENT THIS PLAN:\n1. do it", ""},
+	} {
+		if got := recallable(c.in); got != c.want {
+			t.Errorf("%q: %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// The history is what the user typed: not what an automation, another
+// agent or a guest sent (buildComposerPromptHistoryEntries).
+func TestPromptHistoryIsTheUsers(t *testing.T) {
+	v := newView(nil, "t")
+	add := func(id, text string, ord float64, m t3.Message) {
+		raw, _ := json.Marshal(map[string]any{"id": id, "type": "user_message", "messageId": id, "text": text, "ordinal": ord})
+		v.put(raw)
+		m.ID, m.Role, m.Text = id, "user", text
+		v.messages[id] = m
+	}
+	add("m1", "mine", 1, t3.Message{CreatedBy: "user"})
+	add("m2", "the agent's", 2, t3.Message{CreatedBy: "agent"})
+	add("m3", "on a schedule", 3, t3.Message{CreatedBy: "user", ScheduledTaskID: "task"})
+	guest := t3.Message{CreatedBy: "user"}
+	guest.Context = &struct {
+		Guest json.RawMessage `json:"guest"`
+	}{Guest: json.RawMessage(`{"name":"A guest","text":"hi"}`)}
+	add("m4", "a guest's", 4, guest)
+	add("m5", "mine again", 5, t3.Message{CreatedBy: "user"})
+	if got := strings.Join(promptHistory(v), ", "); got != "mine, mine again" {
+		t.Fatalf("history = %s", got)
 	}
 }

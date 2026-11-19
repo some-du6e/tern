@@ -54,13 +54,14 @@ quarantine flag, so Gatekeeper leaves it alone.
 - Threads: messages, reasoning, tool calls (click to load their output),
   plans and errors, with finished runs folded into "Worked for…". "Load
   earlier" pages in older history.
-- The composer: Enter sends (the server steers or queues if a run is busy),
-  Alt+Enter queues, Shift+Enter is a newline. The model picker, the options
-  menu (effort, fast mode, service tier, …) and the access menu come from the
-  server's config. Unsent text is kept per thread while the app runs.
+- The composer: Enter sends (steering a busy run), Mod+Enter queues behind
+  it, or on a new thread starts it in the background, Shift+Enter is a
+  newline. The model picker with its effort column (effort, fast mode,
+  service tier, …) and the permissions menu come from the server's config.
+  Unsent text is kept per thread while the app runs.
 - Ctrl+V (⌘V on a Mac) pastes images into the composer as chips at the caret, like the web
   composer's, sent at that spot in the message: screenshots, pictures copied
-  from a browser, or image files copied in Explorer or the Finder (up to 8, 10 MB each).
+  from a browser, or image files copied in Explorer or the Finder (up to 100, 10 MB each).
   Backspace or × removes one, undo brings it back. Sent messages show their
   pictures and chips too.
 - Right-click a thread for Pin, Settle (or Wake up), Mark unread, Archive
@@ -73,8 +74,8 @@ quarantine flag, so Gatekeeper leaves it alone.
 - On a Mac the window has no title bar: the traffic lights sit in the top row
   and the headers drag the window.
 - New threads in any project on any machine (the dropdown in the header),
-  approvals (Approve, For session, Decline), agent questions,
-  the queue (send now, cancel) and Stop.
+  approvals in the timeline (Approve, Decline and the rest under More), agent
+  questions, the queue (send now, edit, remove) and Stop.
 - Reconnects with backoff after a dropped socket or sleep, and renews the
   1-hour Connect session before it runs out.
 

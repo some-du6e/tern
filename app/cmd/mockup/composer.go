@@ -69,18 +69,57 @@ func mentionScene() *ui.Scene {
 	return s
 }
 
-// busyScene is a run with nothing typed: Stop, the queue past three, and
-// a failed action and a notice attached over the card.
+// busyScene is a run with nothing typed: Stop, the queue past three at
+// the timeline's foot, a notice attached over the card and the thread's
+// error in the banner lane over the conversation.
 func busyScene() *ui.Scene {
 	s := base("Port the T3 Connect client to Go")
-	s.Queue = []string{
-		"then add a tray icon on Windows with the running count",
-		"and a menu item to pause every run",
-		"check it on a 125% display",
-		"write it up in the README",
+	s.Queue = []ui.QueuedMessage{
+		{Text: "then add a tray icon on Windows with the running count"},
+		{Text: "and a menu item to pause every run"},
+		{Text: "check it on a 125% display"},
+		{Text: "write it up in the README"},
 	}
 	s.Error = "Couldn't upload the picture: the server said 413"
 	s.Notice = "Loading earlier turns…"
+	return s
+}
+
+// queueEditScene is a queued message in the composer: its row says so,
+// with Cancel, and the send button updates it; a stop was just clicked.
+func queueEditScene() *ui.Scene {
+	s := busyScene()
+	s.Error, s.Notice = "", ""
+	s.Queue = s.Queue[:2]
+	s.Queue[1].Editing = true
+	s.EditingQueued = true
+	s.Composer = "and a menu item to pause every run, with a shortcut"
+	s.Stop = ui.StopPending
+	return s
+}
+
+// permissionsScene is the permissions menu open over its chip, T3's
+// segmented modes.
+func permissionsScene() *ui.Scene {
+	s := composerScene()
+	s.Access = &ui.Permissions{Modes: ui.RuntimeModes, Sel: 0}
+	return s
+}
+
+// suggestionScene is a settled thread whose provider guessed the next
+// prompt: the placeholder, with its Tab key.
+func suggestionScene() *ui.Scene {
+	s := composerScene()
+	s.Thumbs, s.Composer, s.RuntimeChip = nil, "", false
+	s.Suggestion = "go ahead and set it up"
+	s.Placeholder = s.Suggestion
+	return s
+}
+
+// heroStashScene is a new thread with prompts stashed: the tab on its card.
+func heroStashScene() *ui.Scene {
+	s := heroScene()
+	s.Stash = []ui.Stashed{{Snippet: "try the sidebar's rows at 1k threads", Age: "4m ago"}}
 	return s
 }
 
@@ -91,9 +130,9 @@ func stashScene() *ui.Scene {
 	s.Thumbs, s.Composer, s.RuntimeChip = nil, "", false
 	s.Notice = "Loading earlier turns…"
 	s.Stash = []ui.Stashed{
-		{Snippet: "try the sidebar's rows at 1k threads with the hover card open", Age: "4m"},
-		{Snippet: "(2 images)", Thumbs: pictures(2), Age: "1h"},
-		{Snippet: "rename the store files and keep the old names working for a release", Dropped: 1, Age: "2d"},
+		{Snippet: "try the sidebar's rows at 1k threads with the hover card open", Age: "4m ago"},
+		{Snippet: "(2 images)", Thumbs: pictures(2), Age: "1h ago"},
+		{Snippet: "rename the store files and keep the old names working for a release", Dropped: 1, Age: "2d ago"},
 	}
 	s.StashOpen, s.StashSel = true, 1
 	return s

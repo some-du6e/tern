@@ -117,7 +117,7 @@ func base(selected string) *ui.Scene {
 func runningScene() *ui.Scene {
 	s := base("Port the T3 Connect client to Go")
 	s.Composer = "also make sure it survives the display going to sleep on"
-	s.Queue = []string{"then add a tray icon on Windows with the running count"}
+	s.Queue = []ui.QueuedMessage{{Text: "then add a tray icon on Windows with the running count"}}
 	return s
 }
 
@@ -131,7 +131,7 @@ func approvalScene() *ui.Scene {
 	s.Active[2].Note = "git push -u origin t3/go-client"
 	items := threadItems()
 	items = items[:len(items)-2]
-	items = append(items, ui.Item{Kind: ui.ItemTool, Tool: ui.ToolCommand, Title: "git push -u origin t3/go-client", Meta: "waiting for you"})
+	items = append(items, ui.Item{Kind: ui.ItemApproval, Approval: &ui.PendingApproval{ID: "req-1", Kind: "command", Detail: "git push -u origin t3/go-client", Live: true}})
 	s.Items = items
 	s.Placeholder = "Send a message to decline and redirect the agent"
 	s.Picker = &ui.ModelPicker{
@@ -158,15 +158,16 @@ func claudeTraits() *ui.Traits {
 	}}
 }
 
-// traitsScene has the options menu open over the effort button.
+// traitsScene is the model picker with its effort column: the model's
+// options beside the models (ProviderModelPicker.tsx).
 func traitsScene() *ui.Scene {
 	s := approvalScene()
-	s.Picker = nil
 	s.Traits = claudeTraits()
+	s.Traits.Groups[0].Choices[1].Default = true
 	return s
 }
 
-// codexScene is the options menu for a Codex model: effort and service tier.
+// codexScene is the picker's column for a Codex model: effort and service tier.
 func codexScene() *ui.Scene {
 	s := traitsScene()
 	s.Provider, s.Model = "Codex", "GPT-5.5"
@@ -251,28 +252,19 @@ func questionScene() *ui.Scene {
 	return s
 }
 
+// draftScene is a new thread with the / menu open over its hero's
+// composer: T3 shows a draft as the hero while it has no turns.
 func draftScene() *ui.Scene {
-	s := base("")
-	s.Title = "New thread"
-	s.State = ui.ThreadIdle
-	s.StateLabel = "Draft"
-	s.Project = "in tern  ›  new worktree"
-	s.Tabs = []string{"New thread", "Port the T3 Connect clie…"}
-	s.MoreAbove = false
-	s.Items = []ui.Item{{Kind: ui.ItemNotice, Text: "The first message starts the thread."}}
+	s := heroScene()
 	s.Composer = "/re"
 	s.Thumbs = pictures(2)
 	s.Suggest = []ui.Suggestion{
 		{Label: "/review", Desc: "Review the current diff for bugs"},
 		{Label: "/resume", Desc: "Resume an earlier conversation"},
 		{Label: "/release-notes", Desc: "Show what changed in this version"},
-		{Prefix: "/skill:", Label: "frontend-refactor", Desc: "Refactor a component", Badge: "Personal"},
+		{Prefix: "/skill:", Label: "frontend-refactor", Desc: "Refactor a component", Badge: "Personal", BadgeIcon: "user-round"},
 		{Label: "/pr-comments", Desc: "Fetch review comments on this branch"},
 	}
-	s.Run = nil
-	s.Changes = nil
-	s.Panel = ui.PanelBrowser
-	s.Browser = &ui.Browser{}
 	return s
 }
 

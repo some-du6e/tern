@@ -1,14 +1,19 @@
 package ui
 
 import (
+	"bytes"
 	"image"
 	"image/color"
+	"image/png"
 	"strconv"
+	"strings"
 
 	"gioui.org/f32"
 	"gioui.org/font"
+	"gioui.org/gesture"
 	"gioui.org/io/event"
 	"gioui.org/io/key"
+	"gioui.org/io/pointer"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
@@ -56,14 +61,25 @@ func runtimeMode(id string) RuntimeMode {
 
 // glass is the card's glass as Chrome paints it over the canvas:
 // --chat-composer-glass-surface (--card; --surface-raised in dark) at the
-// 80% glass opacity, #ffffff / #0e0e0e. Gio has no backdrop blur, so it's
-// solid; the blur only shows where the timeline scrolls under the card.
+// 80% glass opacity over what it blurs, #ffffff / #0e0e0e. Gio has no
+// backdrop blur, so it's solid; the blur only shows where the timeline
+// scrolls under the card.
 func glass() color.NRGBA {
 	g := P.Card
 	if dark {
 		g = P.SurfaceRaised
 	}
-	return over(alpha(g, 0xcc), P.Background)
+	return over(alpha(g, 0xcc), composerBackdrop())
+}
+
+// composerBackdrop is what the composer's glass blurs as Chrome samples it
+// under the lane (§3.2): white in light, which the card's #ffffff and the
+// strip's #fdfdfd come from, and the page's black in dark.
+func composerBackdrop() color.NRGBA {
+	if dark {
+		return P.Background
+	}
+	return rgb(0xffffff)
 }
 
 // composerOutline is --chat-composer-outline, the card's 1dp edge.
@@ -77,32 +93,28 @@ func composerOutline() color.NRGBA {
 // composerAnchors are where the footer's triggers landed, relative to the
 // card, for the menus that open off them.
 type composerAnchors struct {
-	model, traits, access image.Rectangle
+	model, access image.Rectangle
 }
 
-// composerArea is the thread's composer, bottom of the lane: the queue,
-// the surfaces attached above the card, then the card.
+// composerArea is the thread's composer, bottom of the lane: the surfaces
+// attached above the card, then the card.
 func (th *Theme) composerArea(gtx C, s *Scene, compact bool) D {
-	w := gtx.Constraints.Max.X
-	if compact {
-		// The phone gives it 10dp margins and 14 under.
-		w -= 2 * dp(gtx, 10)
+	return th.phoneMargins(gtx, compact, func(gtx C) D { return th.composerStack(gtx, s, false) })
+}
+
+// phoneMargins lays w out the lane wide, or on a phone (below 640) in
+// T3's 12dp of lane padding with the 16dp spacer under it (03-shell.md
+// port note 9).
+func (th *Theme) phoneMargins(gtx C, compact bool, w W) D {
+	if !compact {
+		return w(gtx)
 	}
+	full := gtx.Constraints.Max.X
 	g := gtx
-	g.Constraints = layout.Constraints{Min: image.Pt(w, 0), Max: image.Pt(w, gtx.Constraints.Max.Y)}
-	m := op.Record(gtx.Ops)
-	d := Col(g,
-		rigid(func(gtx C) D { return th.queue(gtx, s) }),
-		rigid(func(gtx C) D { return th.composerStack(gtx, s, false) }),
-	)
-	call := m.Stop()
-	defer op.Offset(image.Pt((gtx.Constraints.Max.X-w)/2, 0)).Push(gtx.Ops).Pop()
-	call.Add(gtx.Ops)
-	h := d.Size.Y
-	if compact {
-		h += dp(gtx, 14)
-	}
-	return D{Size: image.Pt(gtx.Constraints.Max.X, h)}
+	g.Constraints = layout.Constraints{Min: image.Pt(full-2*dp(gtx, 12), 0), Max: image.Pt(full-2*dp(gtx, 12), gtx.Constraints.Max.Y-dp(gtx, 16))}
+	defer op.Offset(image.Pt(dp(gtx, 12), 0)).Push(gtx.Ops).Pop()
+	d := w(g)
+	return D{Size: image.Pt(full, d.Size.Y+dp(gtx, 16))}
 }
 
 // composerStack is the attached surfaces, the card over their tucked
@@ -112,6 +124,9 @@ func (th *Theme) composerStack(gtx C, s *Scene, strip bool) D {
 	if s.Live {
 		th.composerChords(gtx, s)
 	}
+	ui := &th.in.composer
+	ui.menuWas, ui.menuShown = ui.menuShown, false
+	ui.stashWas, ui.stashShown = ui.stashShown, false
 	// The dock first, so the card covers its tuck.
 	dm := op.Record(gtx.Ops)
 	dg := gtx
@@ -152,17 +167,16 @@ func (th *Theme) composerStack(gtx C, s *Scene, strip bool) D {
 	return D{Size: image.Pt(w, top+h)}
 }
 
-// composerMenus opens tern's existing menus off the triggers that T3's
-// picker would open from: above them, flush with their end (the access
-// menu with the footer chip's start), 4dp up.
+// composerMenus opens the menus off their triggers, above them and 4dp
+// up: the model picker flush with the trigger's end (side top, align
+// end), the permissions menu with the footer chip's start or the strip
+// chip's end.
 func (th *Theme) composerMenus(gtx C, s *Scene, at composerAnchors) {
 	switch {
 	case s.Picker != nil:
 		th.popAbove(gtx, at.model, true, func(gtx C) D { return th.modelPicker(gtx, s, s.Picker) })
-	case s.Traits != nil:
-		th.popAbove(gtx, at.traits, true, func(gtx C) D { return th.traitsMenu(gtx, s, "trait", s.Traits) })
 	case s.Access != nil:
-		th.popAbove(gtx, at.access, !s.RuntimeChip, func(gtx C) D { return th.traitsMenu(gtx, s, "access", s.Access) })
+		th.popAbove(gtx, at.access, !s.RuntimeChip, func(gtx C) D { return th.permissionsMenu(gtx, s) })
 	}
 }
 
@@ -196,13 +210,13 @@ func (th *Theme) composerCard(gtx C, s *Scene, at *composerAnchors) D {
 	off := op.Offset(image.Pt(px, px)).Push(gtx.Ops)
 	body := th.composerBody(inner, s)
 	fo := op.Offset(image.Pt(0, body.Size.Y)).Push(gtx.Ops)
-	foot := th.composerFooter(inner, s, at)
+	foot := th.composerFooter(inner, s, at, w)
 	fo.Pop()
 	off.Pop()
 	call := m.Stop()
 	// The anchors were laid out in the footer's frame.
 	shift := image.Pt(px, px+body.Size.Y)
-	at.model, at.traits, at.access = at.model.Add(shift), at.traits.Add(shift), at.access.Add(shift)
+	at.model, at.access = at.model.Add(shift), at.access.Add(shift)
 
 	r := image.Rect(0, 0, w, 2*px+body.Size.Y+foot.Size.Y)
 	rad := dp(gtx, composerRadius)
@@ -302,7 +316,9 @@ func (th *Theme) cssText(gtx C, t Txt, s string) D {
 
 // prompt is the editor in its content box, w wide: at least two lines
 // tall, scrolling past 208dp with its padding (the editor's -m-1 p-1), its
-// lines in CSS line boxes (lineBox).
+// lines in CSS line boxes (lineBox). Live, it's read-only while a
+// question takes only its options or its answers are on their way, and it
+// tells core when it gains and loses the focus (the typing guard).
 func (th *Theme) prompt(gtx C, s *Scene, w int) D {
 	t := promptText(P.ContrastForeground)
 	b := th.lineBox(gtx, t)
@@ -317,26 +333,41 @@ func (th *Theme) prompt(gtx C, s *Scene, w int) D {
 	if s.Live {
 		ed := th.Editor("composer")
 		ed.Submit = true
+		asking := len(s.Questions) > 0
+		ed.ReadOnly = asking && (s.Answering || s.Questions[min(s.Question, len(s.Questions)-1)].NoCustom)
 		ui := &th.in.composer
 		ui.menu, ui.rows = len(s.Suggest) > 0 || s.SuggestEmpty != "", len(s.Suggest) > 0
 		ui.stash = s.StashOpen
-		ui.history = len(s.Thumbs) == 0 && len(s.Questions) == 0
+		ui.history = len(s.Thumbs) == 0 && !asking
+		ui.suggestion = s.Suggestion != "" && s.Placeholder == s.Suggestion
+		ui.queue = len(s.Queue)
 		ui.thumbs = s.Thumbs
+		if f := gtx.Focused(ed); f != ui.focused {
+			ui.focused = f
+			th.push(Action{ID: "composer", Kind: map[bool]string{true: "focus", false: "blur"}[f]})
+		}
 		d = th.editor(g, "composer", t, "")
+		ui.size = d.Size
 		empty = ed.Len() == 0
 	} else {
 		empty = s.Composer == ""
 		if !empty {
 			var sel *widget.Selectable
 			d, sel = th.selectableSel(g, "composer", s.Composer, t.Font, t.Size, t.Color, t.LineH)
-			th.drawChips(g, sel, d.Size, image.Point{}, glass(), float32(t.Size), chipPictures(s.Thumbs))
+			th.drawChips(g, sel, d.Size, image.Point{}, glass(), float32(t.Size), chipPictures(s.Thumbs), false)
 		}
 	}
 	if empty && s.Placeholder != "" {
-		pt := promptText(P.ContrastPlaceholder)
 		pg := g
 		pg.Constraints.Min = image.Point{}
-		th.Text(pg, pt, s.Placeholder)
+		pd := th.Text(pg, promptText(P.ContrastPlaceholder), s.Placeholder)
+		if s.Suggestion != "" && s.Placeholder == s.Suggestion {
+			// The suggestion's key, 8dp after it and a pixel up (align-[1px]).
+			kd := record(gtx, th.T3KbdOutline("⇥ Tab", glass()))
+			ko := op.Offset(image.Pt(pd.Size.X+dp(gtx, 8), (int(b.exact+0.5)-kd.Size.Y)/2-b.lead-dp(gtx, 1))).Push(gtx.Ops)
+			kd.call.Add(gtx.Ops)
+			ko.Pop()
+		}
 	}
 	off.Pop()
 	h := max(minH, min(maxH, b.height(d.Size.Y)))
@@ -355,16 +386,24 @@ func selection() color.NRGBA {
 
 // composerKeys is the prompt's own keys, taken before the editor's
 // (ComposerPromptEditorTiptap.tsx, composerCommandKey.ts): Mod+Enter sends
-// the other way (queued, while a run works); with the @, / or $ menu
-// open, the arrows move its highlight, Enter and Tab pick, Escape
-// dismisses it; else Up on the first line, with the prompt empty or still
-// a recalled one, goes back through the thread's prompts, and Down on the
-// last line comes forward.
+// the other way (queued, while a run works; in the background, from a new
+// thread), Mod+Alt+Enter in the background, Alt+Enter is a newline and
+// never a send, Alt+Up edits the last queued message; with the @, / or $
+// menu open, the arrows move its highlight, Enter and Tab pick, Escape
+// dismisses it; with an empty prompt showing a suggestion, Tab takes it
+// and Escape dismisses it; else Up on the first line, with the prompt
+// empty or still a recalled one, goes back through the thread's prompts,
+// and Down on the last line comes forward.
 func (th *Theme) composerKeys(gtx C, ed *widget.Editor) {
 	ui := &th.in.composer
 	filters := []event.Filter{
-		key.Filter{Focus: ed, Name: key.NameReturn, Required: key.ModShortcut},
-		key.Filter{Focus: ed, Name: key.NameEnter, Required: key.ModShortcut},
+		key.Filter{Focus: ed, Name: key.NameReturn, Required: key.ModShortcut, Optional: key.ModAlt},
+		key.Filter{Focus: ed, Name: key.NameEnter, Required: key.ModShortcut, Optional: key.ModAlt},
+		key.Filter{Focus: ed, Name: key.NameReturn, Required: key.ModAlt},
+		key.Filter{Focus: ed, Name: key.NameEnter, Required: key.ModAlt},
+	}
+	if ui.queue > 0 {
+		filters = append(filters, key.Filter{Focus: ed, Name: key.NameUpArrow, Required: key.ModAlt})
 	}
 	switch {
 	case ui.menu:
@@ -380,9 +419,12 @@ func (th *Theme) composerKeys(gtx C, ed *widget.Editor) {
 			filters = append(filters, key.Filter{Focus: ed, Name: n})
 		}
 		filters = append(filters, key.Filter{Focus: ed, Name: key.NameDeleteBackward, Required: key.ModShortcut})
-	case ui.history:
+	case ui.suggestion && ed.Len() == 0:
+		filters = append(filters, key.Filter{Focus: ed, Name: key.NameTab}, key.Filter{Focus: ed, Name: key.NameEscape})
+	}
+	if ui.history && !ui.menu && !ui.stash {
 		browsing := ui.recalled != "" && ed.Text() == ui.recalled
-		first, last := caretLines(ed)
+		first, last := caretLines(ed, ui.size)
 		if first && (ed.Len() == 0 || browsing) {
 			filters = append(filters, key.Filter{Focus: ed, Name: key.NameUpArrow})
 		}
@@ -399,15 +441,26 @@ func (th *Theme) composerKeys(gtx C, ed *widget.Editor) {
 		if !ok || ke.State != key.Press {
 			continue
 		}
+		enter := ke.Name == key.NameReturn || ke.Name == key.NameEnter
 		switch {
+		case enter && ke.Modifiers.Contain(key.ModShortcut):
+			th.push(Action{ID: "composer", Kind: "submit", Text: ed.Text(), Alt: true, Background: ke.Modifiers.Contain(key.ModAlt)})
+		case enter && ke.Modifiers.Contain(key.ModAlt):
+			if !ed.ReadOnly {
+				th.InsertText("composer", "\n")
+			}
+		case ke.Name == key.NameUpArrow && ke.Modifiers.Contain(key.ModAlt):
+			th.push(Action{ID: "queue:-1:edit", Kind: "click"})
 		case ui.stash && !ui.menu && ke.Name == key.NameDeleteBackward:
 			th.push(Action{ID: "stash", Kind: "key", Text: string(ke.Name)})
-		case ke.Modifiers.Contain(key.ModShortcut):
-			th.push(Action{ID: "composer", Kind: "submit", Text: ed.Text(), Alt: true})
 		case ui.menu:
 			th.push(Action{ID: "suggest", Kind: "key", Text: string(ke.Name)})
 		case ui.stash:
 			th.push(Action{ID: "stash", Kind: "key", Text: string(ke.Name)})
+		case ke.Name == key.NameTab:
+			th.push(Action{ID: "composer", Kind: "suggestion", Text: "take"})
+		case ke.Name == key.NameEscape:
+			th.push(Action{ID: "composer", Kind: "suggestion", Text: "dismiss"})
 		case ke.Name == key.NameUpArrow:
 			th.push(Action{ID: "composer", Kind: "history", Text: "back"})
 		default:
@@ -416,108 +469,155 @@ func (th *Theme) composerKeys(gtx C, ed *widget.Editor) {
 	}
 }
 
-// caretLines reports whether the caret is on the prompt's first line and
-// on its last, by its baseline against the first and last runes'.
-func caretLines(ed *widget.Editor) (first, last bool) {
+// caretLines reports whether the caret is on the prompt's first visual
+// line and on its last. Regions are in document space and cover only the
+// lines in view, while the caret's coordinates are the view's, so the
+// caret's baseline goes into document space first; a last line out of
+// view isn't the caret's. size is the editor's from the last frame.
+func caretLines(ed *widget.Editor, size image.Point) (first, last bool) {
 	n := ed.Len()
 	if n == 0 {
 		return true, true
 	}
-	y := int(ed.CaretCoords().Y + 0.5)
-	base := func(regs []widget.Region) int { return regs[0].Bounds.Max.Y - regs[0].Baseline }
-	head, tail := ed.Regions(0, 1, nil), ed.Regions(n-1, n, nil)
-	if len(head) == 0 || len(tail) == 0 {
-		return true, true
+	line, _ := ed.CaretPos()
+	tail := ed.Regions(n-1, n, nil)
+	if len(tail) == 0 {
+		return line == 0, false
 	}
-	return y <= base(head), y >= base(tail)
+	t := tail[len(tail)-1]
+	y := int(ed.CaretCoords().Y+0.5) + editorScroll(ed, size).Y
+	return line == 0, y >= t.Bounds.Max.Y-t.Baseline
 }
 
 // composerChords are the composer's shortcuts from anywhere
-// (composerShortcuts.ts): Mod+Shift+M the model menu, Mod+Shift+E its
-// options, Mod+Shift+A the permissions, Mod+S the stash.
+// (composerShortcuts.ts, keybindings.ts): Mod+Shift+M the model picker,
+// Mod+Shift+E the same picker, for its effort column, Mod+Shift+A the
+// permissions, Mod+S the stash, Mod+Shift+Enter sends the first queued
+// message now, Mod+Alt+N starts a thread without a project; and a letter
+// typed while nothing has the focus goes into the prompt.
 func (th *Theme) composerChords(gtx C, s *Scene) {
+	filters := []event.Filter{
+		key.Filter{Name: "M", Required: key.ModShortcut | key.ModShift},
+		key.Filter{Name: "E", Required: key.ModShortcut | key.ModShift},
+		key.Filter{Name: "A", Required: key.ModShortcut | key.ModShift},
+		key.Filter{Name: "S", Required: key.ModShortcut},
+		key.Filter{Name: key.NameReturn, Required: key.ModShortcut | key.ModShift},
+		key.Filter{Name: key.NameEnter, Required: key.ModShortcut | key.ModShift},
+		key.Filter{Name: "N", Required: key.ModShortcut | key.ModAlt},
+		key.Filter{Name: key.NameSpace},
+		// ⌘ or Ctrl held swaps the send button's steer for queue.
+		key.Filter{Name: key.NameCtrl, Optional: key.ModCtrl | key.ModShift | key.ModAlt | key.ModCommand},
+		key.Filter{Name: key.NameCommand, Optional: key.ModCtrl | key.ModShift | key.ModAlt | key.ModCommand},
+	}
+	for c := 'A'; c <= 'Z'; c++ {
+		filters = append(filters, key.Filter{Name: key.Name(string(c)), Optional: key.ModShift})
+	}
 	for {
-		ev, ok := gtx.Event(
-			key.Filter{Name: "M", Required: key.ModShortcut | key.ModShift},
-			key.Filter{Name: "E", Required: key.ModShortcut | key.ModShift},
-			key.Filter{Name: "A", Required: key.ModShortcut | key.ModShift},
-			key.Filter{Name: "S", Required: key.ModShortcut},
-		)
+		ev, ok := gtx.Event(filters...)
 		if !ok {
 			return
 		}
 		ke, ok := ev.(key.Event)
-		if !ok || ke.State != key.Press {
+		if !ok {
 			continue
 		}
-		id := map[key.Name]string{"M": "model", "E": "traits", "A": "access", "S": "stash.save"}[ke.Name]
-		if id == "traits" && s.Effort == "" && !s.Fast && s.Window == "" {
-			id = "model"
+		if ke.Name == key.NameCtrl || ke.Name == key.NameCommand {
+			th.in.composer.held = ke.State == key.Press
+			continue
 		}
-		th.push(Action{ID: id, Kind: "click"})
+		if ke.State != key.Press {
+			continue
+		}
+		short := ke.Modifiers.Contain(key.ModShortcut)
+		switch {
+		case !short && !ke.Modifiers.Contain(key.ModAlt):
+			// Type to focus (composerFocusRedirect.ts), for the keys whose
+			// text Gio's names give whatever the keyboard.
+			if th.typing(gtx) || s.Picker != nil || s.Access != nil || s.Projects != nil || th.in.preview != nil {
+				continue
+			}
+			r := " "
+			if ke.Name != key.NameSpace {
+				r = string(ke.Name)
+				if !ke.Modifiers.Contain(key.ModShift) {
+					r = strings.ToLower(r)
+				}
+			}
+			ed := th.Editor("composer")
+			n := ed.Len()
+			ed.SetCaret(n, n)
+			th.InsertText("composer", r)
+			th.Focus("composer")
+		case ke.Name == "N":
+			if s.CanScratch {
+				th.push(Action{ID: "project.scratch", Kind: "click"})
+			}
+		case ke.Name == key.NameReturn || ke.Name == key.NameEnter:
+			if len(s.Queue) > 0 {
+				th.push(Action{ID: "queue:0:steer", Kind: "click"})
+			}
+		default:
+			id := map[key.Name]string{"M": "model", "E": "model", "A": "access", "S": "stash.save"}[ke.Name]
+			th.push(Action{ID: id, Kind: "click"})
+		}
 	}
 }
 
 // composerFooter is the controls row, padded 0 8 8 (8 on top too while a
-// question is open): attach, then the model trigger and permissions chip
-// flush right against the primary actions.
-func (th *Theme) composerFooter(gtx C, s *Scene, at *composerAnchors) D {
-	top := float32(0)
+// question is open, when it's the 28dp answer actions): attach, then the
+// model trigger and permissions chip flush right against the primary
+// actions. formW is the composer's width, for the compact answer actions.
+func (th *Theme) composerFooter(gtx C, s *Scene, at *composerAnchors, formW int) D {
+	top, row := float32(0), float32(32)
 	asking := len(s.Questions) > 0
 	if asking {
-		top = 8
+		top, row = 8, 28
 	}
 	w := gtx.Constraints.Max.X
 	return pad(top, 8, 8, 8).Layout(gtx, func(gtx C) D {
 		// Everything here is placed by its own size.
 		gtx.Constraints.Min = image.Point{}
-		h := dp(gtx, 32)
+		h := dp(gtx, row)
 		x := 0
 		left := dp(gtx, top) // the anchors' frame starts at the footer's top-left, 8 in
-		if !asking {
-			// The attach button, then its 8dp margin.
+		if !asking || !s.Questions[min(s.Question, len(s.Questions)-1)].NoCustom {
+			// The attach button, then its 8dp margin; a question takes
+			// pictures unless only its options answer it.
 			off := op.Offset(image.Pt(0, (h-dp(gtx, 28))/2)).Push(gtx.Ops)
 			th.attachButton(gtx, s)
 			off.Pop()
 			x = dp(gtx, 28+8)
 		}
 		// The primary actions take what they need from the right.
-		pm := op.Record(gtx.Ops)
 		pg := gtx
 		pg.Constraints = layout.Constraints{Max: image.Pt(gtx.Constraints.Max.X, h)}
-		pd := th.primaryActions(pg, s)
-		primary := pm.Stop()
+		compact := asking && formW < dp(gtx, 780) // composerFooterLayout.ts
+		pd := record(pg, func(gtx C) D { return th.primaryActions(gtx, s, compact) })
 		end := gtx.Constraints.Max.X
 		po := op.Offset(image.Pt(end-pd.Size.X, (h-pd.Size.Y)/2)).Push(gtx.Ops)
-		primary.Add(gtx.Ops)
+		pd.call.Add(gtx.Ops)
 		po.Pop()
 		end -= pd.Size.X + dp(gtx, 8)
 
 		// The controls, right to left: the chip, then the trigger.
 		cy := (h - dp(gtx, 28)) / 2
 		if s.RuntimeChip {
-			cm := op.Record(gtx.Ops)
-			cd := th.permissionsChip(gtx, s, false)
-			chip := cm.Stop()
+			cd := record(gtx, func(gtx C) D { return th.permissionsChip(gtx, s, false) })
 			end -= cd.Size.X
 			co := op.Offset(image.Pt(end, cy)).Push(gtx.Ops)
-			chip.Add(gtx.Ops)
+			cd.call.Add(gtx.Ops)
 			co.Pop()
 			at.access = image.Rectangle{Min: image.Pt(end+dp(gtx, 8), cy+left), Max: image.Pt(end+cd.Size.X+dp(gtx, 8), cy+left+cd.Size.Y)}
 			end -= dp(gtx, 2)
 		}
-		mm := op.Record(gtx.Ops)
 		mg := gtx
 		mg.Constraints = layout.Constraints{Max: image.Pt(max(0, end-x), dp(gtx, 28))}
-		md, split := th.modelTrigger(mg, s)
-		trigger := mm.Stop()
+		md := record(mg, func(gtx C) D { return th.modelTrigger(gtx, s) })
 		mx := end - md.Size.X
 		mo := op.Offset(image.Pt(mx, cy)).Push(gtx.Ops)
-		trigger.Add(gtx.Ops)
+		md.call.Add(gtx.Ops)
 		mo.Pop()
-		o := image.Pt(mx+dp(gtx, 8), cy+left)
-		at.model = image.Rectangle{Max: md.Size}.Add(o)
-		at.traits = image.Rect(split, 0, md.Size.X, md.Size.Y).Add(o)
+		at.model = image.Rectangle{Max: md.Size}.Add(image.Pt(mx+dp(gtx, 8), cy+left))
 		if !s.RuntimeChip {
 			at.access = at.model
 		}
@@ -581,7 +681,8 @@ func (c composerControl) text() color.NRGBA {
 	return alpha(P.Foreground, 0xcc)
 }
 
-// layout draws the control's fill, icon and label and returns its size.
+// composerControlW draws the control's fill, icon and label and returns
+// its size.
 func (th *Theme) composerControlW(gtx C, c composerControl) D {
 	size, line, weight, padX, iconSize := unit.Sp(14), float32(20), font.Medium, float32(8), float32(16)
 	if c.xs {
@@ -593,32 +694,32 @@ func (th *Theme) composerControlW(gtx C, c composerControl) D {
 	}
 	gtx.Constraints.Min = image.Point{}
 	txt := over(c.text(), c.on)
-	m := op.Record(gtx.Ops)
-	cd := layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-		rigid(func(gtx C) D {
-			if c.icon == "" {
-				return D{}
-			}
-			col := txt
-			if !c.iconLabel && !c.xs {
-				col = P.MutedForeground
-			}
-			return LucideW(c.icon, col, iconSize)(gtx)
-		}),
-		rigid(func(gtx C) D {
-			if c.icon == "" || c.label == "" {
-				return D{}
-			}
-			return D{Size: image.Pt(dp(gtx, 6), 0)}
-		}),
-		rigid(func(gtx C) D {
-			if c.label == "" {
-				return D{}
-			}
-			return th.Text(gtx, Txt{Size: size, LineH: line / float32(size), Font: UI(weight), Color: txt, MaxLines: 1}, c.label)
-		}),
-	)
-	call := m.Stop()
+	cd := record(gtx, func(gtx C) D {
+		return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+			rigid(func(gtx C) D {
+				if c.icon == "" {
+					return D{}
+				}
+				col := txt
+				if !c.iconLabel && !c.xs {
+					col = P.MutedForeground
+				}
+				return LucideW(c.icon, col, iconSize)(gtx)
+			}),
+			rigid(func(gtx C) D {
+				if c.icon == "" || c.label == "" {
+					return D{}
+				}
+				return D{Size: image.Pt(dp(gtx, 6), 0)}
+			}),
+			rigid(func(gtx C) D {
+				if c.label == "" {
+					return D{}
+				}
+				return th.Text(gtx, Txt{Size: size, LineH: line / float32(size), Font: UI(weight), Color: txt, MaxLines: 1}, c.label)
+			}),
+		)
+	})
 	h := dp(gtx, c.height())
 	px := max(1, dp(gtx, 1))
 	w := cd.Size.X + dp(gtx, ps) + dp(gtx, padX) + 2*px
@@ -627,7 +728,7 @@ func (th *Theme) composerControlW(gtx C, c composerControl) D {
 		fill(gtx, over(P.Accent, c.on), r, dp(gtx, 8))
 	}
 	defer op.Offset(image.Pt(px+dp(gtx, ps), (h-cd.Size.Y)/2)).Push(gtx.Ops).Pop()
-	call.Add(gtx.Ops)
+	cd.call.Add(gtx.Ops)
 	return D{Size: r.Max}
 }
 
@@ -661,22 +762,119 @@ func (th *Theme) permissionsChip(gtx C, s *Scene, xs bool) D {
 	return d
 }
 
-// modelTrigger is the model and effort trigger (ProviderModelPicker.tsx):
-// the provider's mark, the model's short name and the effort suffix. T3
-// opens one picker that holds both; until tern's picker has the effort
-// column, the suffix opens the options menu and the rest the model menu.
-// It returns where the suffix starts.
-func (th *Theme) modelTrigger(gtx C, s *Scene) (D, int) {
-	mid, tid := liveID(s, "model"), ""
-	if s.Effort != "" || s.Fast || s.Window != "" {
-		tid = liveID(s, "traits")
-	}
-	hot := s.Picker != nil || s.Traits != nil
-	for _, id := range []string{mid, tid} {
-		if id != "" {
-			c, _ := th.events(gtx, id)
-			hot = hot || c.Hovered()
+// permissionsMenu is the permissions chip's menu, T3's
+// ComposerPermissionsSection in the menu frame (§3.8): 288 wide, padded 6
+// 8, 6 apart, "Permissions", the modes as one segmented row of icons and
+// under it the mode on show, the pointer's or the thread's, with its
+// description, two lines kept for it.
+func (th *Theme) permissionsMenu(gtx C, s *Scene) D {
+	p := s.Access
+	return popupFrame(gtx, func(gtx C) D {
+		return pad(4, 4, 4, 4).Layout(gtx, func(gtx C) D {
+			return pad(6, 8, 6, 8).Layout(gtx, func(gtx C) D {
+				w := dp(gtx, 288-16)
+				gtx.Constraints = layout.Constraints{Min: image.Pt(w, 0), Max: image.Pt(w, gtx.Constraints.Max.Y)}
+				muted := Txt{Size: 12, LineH: 16.0 / 12, Color: P.MutedForeground}
+				head := muted
+				head.Font = UI(font.Medium)
+				shown := p.Sel
+				if pm := th.in.composer.previewMode - 1; pm >= 0 && pm < len(p.Modes) {
+					shown = pm
+				}
+				th.in.composer.previewMode = 0
+				var mode RuntimeMode
+				if shown >= 0 && shown < len(p.Modes) {
+					mode = p.Modes[shown]
+				}
+				label := Txt{Size: 14, LineH: 20.0 / 14, Color: P.Foreground}
+				if shown != p.Sel {
+					label.Color = P.MutedForeground
+				}
+				return Col(gtx,
+					rigid(func(gtx C) D { return th.Text(gtx, head, "Permissions") }),
+					rigid(Spacer(0, 6)),
+					rigid(func(gtx C) D { return th.permissionSegments(gtx, s, w) }),
+					rigid(Spacer(0, 6)),
+					rigid(func(gtx C) D { return th.Text(gtx, label, mode.Label) }),
+					rigid(Spacer(0, 2)),
+					rigid(func(gtx C) D {
+						d := th.Text(gtx, muted, mode.Desc)
+						return D{Size: image.Pt(d.Size.X, max(d.Size.Y, dp(gtx, 32)))}
+					}),
+				)
+			})
+		})
+	})
+}
+
+// permissionSegments is the modes' row: 28 tall, rounded 8, padded 2 on
+// --input at 40%, an equal 24dp segment each with its icon at 14; the
+// thread's on --input at 72% in the foreground, the pointer's on --accent.
+func (th *Theme) permissionSegments(gtx C, s *Scene, w int) D {
+	p := s.Access
+	h, padIn := dp(gtx, 28), dp(gtx, 2)
+	group := over(alpha(P.Input, uint8(int(P.Input.A)*40/100)), P.Popover)
+	fill(gtx, group, image.Rect(0, 0, w, h), dp(gtx, 8))
+	n := max(1, len(p.Modes))
+	segW := (w - 2*padIn) / n
+	for i, m := range p.Modes {
+		x := padIn + i*segW
+		sw := segW
+		if i == n-1 {
+			sw = w - padIn - x
 		}
+		func() {
+			defer op.Offset(image.Pt(x, padIn)).Push(gtx.Ops).Pop()
+			id := liveID(s, "access:0:"+strconv.Itoa(i))
+			hovered := false
+			if id != "" {
+				c, _ := th.events(gtx, id)
+				hovered = c.Hovered()
+			}
+			if hovered {
+				th.in.composer.previewMode = i + 1
+			}
+			r := image.Rect(0, 0, sw, h-2*padIn)
+			rad := dp(gtx, 6)
+			nw, ne := 0, 0
+			if i == 0 {
+				nw = rad
+			}
+			if i == n-1 {
+				ne = rad
+			}
+			col := P.MutedForeground
+			var bg color.NRGBA
+			switch {
+			case i == p.Sel:
+				bg, col = over(alpha(P.Input, uint8(int(P.Input.A)*72/100)), group), P.Foreground
+			case hovered:
+				bg, col = over(P.Accent, group), P.Foreground
+			}
+			if bg.A != 0 {
+				paint.FillShape(gtx.Ops, bg, clip.RRect{Rect: r, NW: nw, SW: nw, NE: ne, SE: ne}.Op(gtx.Ops))
+			}
+			io := op.Offset(image.Pt((sw-dp(gtx, 14))/2, (r.Dy()-dp(gtx, 14))/2)).Push(gtx.Ops)
+			LucideW(m.Icon, col, 14)(gtx)
+			io.Pop()
+			if id != "" {
+				th.hit(gtx, id, r.Max)
+			}
+		}()
+	}
+	return D{Size: image.Pt(w, h)}
+}
+
+// modelTrigger is the model and effort trigger (ProviderModelPicker.tsx):
+// one button, the provider's mark, the model's short name and the effort
+// suffix, which opens T3's one picker for both, the model list beside the
+// effort column. It has no tooltip; the composer names it.
+func (th *Theme) modelTrigger(gtx C, s *Scene) D {
+	id := liveID(s, "model")
+	hot := s.Picker != nil
+	if id != "" {
+		c, _ := th.events(gtx, id)
+		hot = hot || c.Hovered()
 	}
 	on := glass()
 	label := over(alpha(P.Foreground, 0xcc), on)
@@ -692,7 +890,6 @@ func (th *Theme) modelTrigger(gtx C, s *Scene) (D, int) {
 	px, padX, gap := max(1, dp(gtx, 1)), dp(gtx, 8), dp(gtx, 6)
 
 	// The suffix: the effort word, the bolt, the context window.
-	sm := op.Record(gtx.Ops)
 	sg := gtx
 	sg.Constraints.Min = image.Point{}
 	var parts []layout.FlexChild
@@ -719,8 +916,7 @@ func (th *Theme) modelTrigger(gtx C, s *Scene) (D, int) {
 			return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Font: UI(font.Medium), Color: muted, MaxLines: 1}, s.Window)
 		})
 	}
-	suffix := layout.Flex{Alignment: layout.Middle}.Layout(sg, parts...)
-	suffixCall := sm.Stop()
+	suffix := record(sg, func(gtx C) D { return layout.Flex{Alignment: layout.Middle}.Layout(gtx, parts...) })
 
 	// The label truncates to what's left, at most 224.
 	icon := 0
@@ -731,12 +927,10 @@ func (th *Theme) modelTrigger(gtx C, s *Scene) (D, int) {
 	if suffix.Size.X > 0 {
 		tail = gap - dp(gtx, 2) + suffix.Size.X
 	}
-	lm := op.Record(gtx.Ops)
 	lg := gtx
 	lg.Constraints = layout.Constraints{Max: image.Pt(max(0, min(dp(gtx, 224), gtx.Constraints.Max.X-2*px-2*padX-icon-tail)), gtx.Constraints.Max.Y)}
 	t.Color = label
-	ld := th.Text(lg, t, name)
-	labelCall := lm.Stop()
+	ld := record(lg, func(gtx C) D { return th.Text(gtx, t, name) })
 
 	h := dp(gtx, 28)
 	w := max(dp(gtx, 52), 2*px+2*padX+icon+ld.Size.X+tail)
@@ -752,39 +946,41 @@ func (th *Theme) modelTrigger(gtx C, s *Scene) (D, int) {
 		x += icon
 	}
 	off := op.Offset(image.Pt(x, (h-ld.Size.Y)/2)).Push(gtx.Ops)
-	labelCall.Add(gtx.Ops)
+	ld.call.Add(gtx.Ops)
 	off.Pop()
 	x += ld.Size.X
-	split := w
 	if suffix.Size.X > 0 {
-		split = x
 		off := op.Offset(image.Pt(x+gap-dp(gtx, 2), (h-suffix.Size.Y)/2)).Push(gtx.Ops)
-		suffixCall.Add(gtx.Ops)
+		suffix.call.Add(gtx.Ops)
 		off.Pop()
 	}
-	if mid != "" {
-		th.hit(gtx, mid, r.Max)
+	if id != "" {
+		th.hit(gtx, id, r.Max)
 	}
-	if tid != "" {
-		off := op.Offset(image.Pt(split, 0)).Push(gtx.Ops)
-		th.hit(gtx, tid, image.Pt(w-split, h))
-		off.Pop()
-	}
-	return D{Size: r.Max}, split
+	return D{Size: r.Max}
 }
 
-// primaryActions is the send button, or Stop while a run can be stopped
-// and nothing's typed; with a question open, Previous and the Submit pill
-// (ComposerPrimaryActions.tsx).
-func (th *Theme) primaryActions(gtx C, s *Scene) D {
+// primaryActions is T3's ComposerPrimaryActions (§5.3): with a question
+// open, the answer actions; while a run can be stopped (or a stop is on
+// its way) with nothing typed, Stop; else send, with Stop after it while
+// a stop is pending or landed, so the target clicked stays at the end.
+func (th *Theme) primaryActions(gtx C, s *Scene, compact bool) D {
 	running := s.State == ThreadRunning
 	if len(s.Questions) > 0 {
-		return th.answerActions(gtx, s, running)
+		return th.answerActions(gtx, s, running, compact)
 	}
-	if running && !th.hasContent(s) {
-		return th.stopButton(gtx, s)
+	stopping := s.Stop == StopPending || s.Stop == StopTimedOut
+	if (running || stopping) && !th.hasContent(s) && !s.EditingQueued {
+		return th.stopButton(gtx, s, false)
 	}
-	return th.sendButton(gtx, s, running)
+	if s.Stop == StopIdle {
+		return th.sendButton(gtx, s, running)
+	}
+	return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+		rigid(func(gtx C) D { return th.sendButton(gtx, s, running) }),
+		rigid(Spacer(8, 0)),
+		rigid(func(gtx C) D { return th.stopButton(gtx, s, false) }),
+	)
 }
 
 // hasContent reports whether the composer has something to send.
@@ -798,75 +994,183 @@ func (th *Theme) hasContent(s *Scene) bool {
 	return s.Composer != ""
 }
 
-// sendButton is the 32dp round send button: --message-action with the
-// arrow, the steer arrow while a run works, a spinner while it sends.
+// sendArt is the send button's nightly artwork at 1x and 2x, and the same
+// at 110% brightness for hover (send-night@*.png, from tools/t3ui/sendart.py).
+var sendArt = map[[2]int]paint.ImageOp{}
+
+func sendArtImage(scale int, bright bool) paint.ImageOp {
+	k := [2]int{scale, 0}
+	if bright {
+		k[1] = 1
+	}
+	if im, ok := sendArt[k]; ok {
+		return im
+	}
+	data, err := artFiles.ReadFile("art/send-night@" + strconv.Itoa(scale) + "x.png")
+	if err != nil {
+		panic(err)
+	}
+	src, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		panic(err)
+	}
+	img := image.NewNRGBA(src.Bounds())
+	for y := src.Bounds().Min.Y; y < src.Bounds().Max.Y; y++ {
+		for x := src.Bounds().Min.X; x < src.Bounds().Max.X; x++ {
+			c := color.NRGBAModel.Convert(src.At(x, y)).(color.NRGBA)
+			if bright {
+				// filter: brightness(1.1), in sRGB as Chrome applies it.
+				up := func(v uint8) uint8 { return uint8(min(255, int(float32(v)*1.1+0.5))) }
+				c.R, c.G, c.B = up(c.R), up(c.G), up(c.B)
+			}
+			img.SetNRGBA(x, y, c)
+		}
+	}
+	im := paint.NewImageOp(img)
+	sendArt[k] = im
+	return im
+}
+
+// sendButton is the 32dp round send button. tern runs against T3's
+// nightly, whose button wears the stage art (StageBackdropButtonArt):
+// the nightly sky behind a white arrow, brightened and grown to 105% on
+// hover, at 64% while there's nothing to send. While a run works it
+// steers (corner-up-right), or queues (list-plus) with ⌘ or Ctrl held
+// and on a ⌘- or Ctrl-click; for a queued message being edited it's a
+// check; a spinner while it sends, when it's off.
 func (th *Theme) sendButton(gtx C, s *Scene, running bool) D {
 	id := liveID(s, "send")
 	enabled := th.hasContent(s) && !s.Sending
-	hovered := false
-	if id != "" && enabled {
-		c, _ := th.events(gtx, id)
-		hovered = c.Hovered()
-	}
 	sz := dp(gtx, 32)
 	r := image.Rect(0, 0, sz, sz)
-	on := glass()
+	hovered := false
+	if id != "" && enabled {
+		hovered = th.modClick(gtx, id, r.Max)
+	}
+	queueing := running && !s.EditingQueued && th.in.composer.held
 	label := "Submit message"
 	switch {
-	case s.Sending:
-		label = "Submitting message"
+	case s.EditingQueued:
+		label = "Update queued message"
+	case queueing:
+		label = "Queue message"
 	case running:
-		label = "Click to steer, " + Shortcut("Enter") + " to queue"
+		label = "Steer message"
+	}
+	tip := label
+	switch {
+	case s.Sending && s.EditingQueued:
+		tip = "Updating queued message"
+	case s.Sending:
+		tip = "Submitting message"
+	case running && !s.EditingQueued:
+		mod := "Ctrl"
+		if Shortcut("")[0] != 'C' {
+			mod = "⌘"
+		}
+		tip = "Click to steer, " + mod + "-click or " + Shortcut("Enter") + " to queue"
 	}
 	func() {
 		if hovered {
 			c := f32.Pt(float32(sz)/2, float32(sz)/2)
 			defer op.Affine(f32.Affine2D{}.Scale(c, f32.Pt(1.05, 1.05))).Push(gtx.Ops).Pop()
 		}
-		fg := P.MessageActionForeground
-		if !enabled && !s.Sending {
-			fill(gtx, over(alpha(P.Foreground, 0x1f), on), r, sz/2)
-			fg = P.MutedForeground
+		on := glass()
+		if !enabled {
+			defer paint.PushOpacity(gtx.Ops, 0.64).Pop()
 		} else {
-			bg := P.MessageAction
-			if hovered {
-				bg = P.MessageActionHover
-			}
 			// The control highlight is a 1dp line under it, not inset.
 			fill(gtx, over(alpha(rgb(0xffffff), 0x29), on), r.Add(image.Pt(0, max(1, dp(gtx, 1)))), sz/2)
-			shadow(gtx, r, sz/2, []boxShadow{{0, 1, 2, 0, alpha(P.MessageAction, 0x3d)}})
-			fill(gtx, bg, r, sz/2)
+			shadow(gtx, r, sz/2, []boxShadow{{0, 1, 2, 0, alpha(rgb(0), 0x3d)}})
 		}
+		func() {
+			defer clip.Ellipse{Max: r.Max}.Push(gtx.Ops).Pop()
+			scale := 1
+			if gtx.Metric.PxPerDp >= 1.5 {
+				scale = 2
+			}
+			k := float32(sz) / float32(32*scale)
+			defer op.Affine(f32.Affine2D{}.Scale(f32.Point{}, f32.Pt(k, k))).Push(gtx.Ops).Pop()
+			sendArtImage(scale, hovered).Add(gtx.Ops)
+			paint.PaintOp{}.Add(gtx.Ops)
+		}()
+		fg := rgb(0xffffff)
+		icon := ""
 		switch {
 		case s.Sending:
 			off := op.Offset(image.Pt((sz-dp(gtx, 14))/2, (sz-dp(gtx, 14))/2)).Push(gtx.Ops)
-			T3Spinner(fg, 14, s.Phase)(gtx)
+			T3Spinner(fg, 14, s.Phase/5)(gtx)
 			off.Pop()
+		case s.EditingQueued:
+			icon = "check"
+		case queueing:
+			icon = "list-plus"
 		case running:
-			off := op.Offset(image.Pt((sz-dp(gtx, 16))/2, (sz-dp(gtx, 16))/2)).Push(gtx.Ops)
-			LucideW("corner-up-right", fg, 16)(gtx)
-			off.Pop()
+			icon = "corner-up-right"
 		default:
 			sendArrow(gtx, fg, image.Pt((sz-dp(gtx, 14))/2, (sz-dp(gtx, 14))/2))
 		}
+		if icon != "" {
+			off := op.Offset(image.Pt((sz-dp(gtx, 16))/2, (sz-dp(gtx, 16))/2)).Push(gtx.Ops)
+			LucideW(icon, fg, 16)(gtx)
+			off.Pop()
+		}
 	}()
 	if id != "" {
-		if enabled {
-			th.hit(gtx, id, r.Max)
+		if !enabled {
+			// The tooltip sits on a wrapper, so a disabled button still
+			// explains itself; it takes no clicks.
+			hovered = th.hoverArea(gtx, id+".tip", r.Max)
+			th.tipShow(gtx, id+".tip", hovered, tip, r.Max, true, 0)
 		} else {
-			// The tooltip sits on a wrapper, so a disabled button explains itself.
-			th.events(gtx, id)
-			th.hover(gtx, id, r.Max)
+			th.tipAt(gtx, id, tip, r.Max, true, 0)
 		}
-		th.tipAt(gtx, id, label, r.Max, true, 0)
 	}
 	return D{Size: r.Max}
 }
 
-// hover is hit for a target that only has a tooltip: no hand cursor.
-func (th *Theme) hover(gtx C, id string, size image.Point) {
+// modClick is click target id, size big, whose click carries ⌘ or Ctrl
+// as Alt (T3's alternate dispatch); it reports whether the pointer's on
+// it.
+func (th *Theme) modClick(gtx C, id string, size image.Point) bool {
+	if th.in.clicks == nil {
+		th.in.clicks = map[string]*gesture.Click{}
+	}
+	c := th.in.clicks[id]
+	if c == nil {
+		c = new(gesture.Click)
+		th.in.clicks[id] = c
+	}
+	for {
+		e, ok := c.Update(gtx.Source)
+		if !ok {
+			break
+		}
+		if e.Kind == gesture.KindClick {
+			th.push(Action{ID: id, Kind: "click", Alt: e.Modifiers.Contain(key.ModShortcut)})
+		}
+	}
 	defer clip.Rect{Max: size}.Push(gtx.Ops).Pop()
-	th.in.clicks[id].Add(gtx.Ops)
+	c.Add(gtx.Ops)
+	pointer.CursorPointer.Add(gtx.Ops)
+	return c.Hovered()
+}
+
+// hoverArea reports whether the pointer's over a size-sized area that
+// takes no clicks.
+func (th *Theme) hoverArea(gtx C, id string, size image.Point) bool {
+	if th.in.hovers == nil {
+		th.in.hovers = map[string]*gesture.Hover{}
+	}
+	h := th.in.hovers[id]
+	if h == nil {
+		h = new(gesture.Hover)
+		th.in.hovers[id] = h
+	}
+	over := h.Update(gtx.Source)
+	defer clip.Rect{Max: size}.Push(gtx.Ops).Pop()
+	h.Add(gtx.Ops)
+	return over
 }
 
 // sendArrow is the idle send icon: T3's own 14dp arrow, stroked 1.8 with
@@ -889,59 +1193,104 @@ func sendArrow(gtx C, col color.NRGBA, at image.Point) {
 	}
 }
 
-// stopButton is Stop: a 32dp round button in --destructive at 90% (full on
-// hover) with a 12dp white square: "Interrupt".
-func (th *Theme) stopButton(gtx C, s *Scene) D {
+// stopButton is Stop: a round button in --destructive at 90% (full on
+// hover) with a 12dp white square, 32dp or 28 in the answer row (size-8
+// sm:size-7). After a click it's "Stopping…", then "Stopped" once the run
+// can't be stopped, both off at 64% until it can again (or 10s pass).
+func (th *Theme) stopButton(gtx C, s *Scene, inRow bool) D {
 	id := liveID(s, "stop")
+	off := s.Stop == StopPending || s.Stop == StopLanded
 	hovered := false
-	if id != "" {
+	if id != "" && !off {
 		c, _ := th.events(gtx, id)
 		hovered = c.Hovered()
 	}
 	sz := dp(gtx, 32)
+	if inRow {
+		sz = dp(gtx, 28)
+	}
 	r := image.Rect(0, 0, sz, sz)
 	on := glass()
 	bg := over(alpha(P.Destructive, 0xe6), on)
 	if hovered {
 		bg = P.Destructive
 	}
-	fill(gtx, over(alpha(rgb(0xffffff), 0x29), on), r.Add(image.Pt(0, max(1, dp(gtx, 1)))), sz/2)
-	shadow(gtx, r, sz/2, []boxShadow{{0, 1, 2, 0, alpha(P.Destructive, 0x3d)}})
-	fill(gtx, bg, r, sz/2)
-	k := float32(dp(gtx, 12)) / 12
-	o := image.Pt((sz-dp(gtx, 12))/2, (sz-dp(gtx, 12))/2)
-	sq := image.Rect(o.X+int(2*k+0.5), o.Y+int(2*k+0.5), o.X+int(10*k+0.5), o.Y+int(10*k+0.5))
-	fill(gtx, rgb(0xffffff), sq, int(1.5*k+0.5))
+	tip := "Interrupt"
+	switch s.Stop {
+	case StopPending:
+		tip = "Stopping…"
+	case StopLanded:
+		tip = "Stopped"
+	}
+	func() {
+		if off {
+			defer paint.PushOpacity(gtx.Ops, 0.64).Pop()
+		}
+		fill(gtx, over(alpha(rgb(0xffffff), 0x29), on), r.Add(image.Pt(0, max(1, dp(gtx, 1)))), sz/2)
+		shadow(gtx, r, sz/2, []boxShadow{{0, 1, 2, 0, alpha(P.Destructive, 0x3d)}})
+		fill(gtx, bg, r, sz/2)
+		k := float32(dp(gtx, 12)) / 12
+		o := image.Pt((sz-dp(gtx, 12))/2, (sz-dp(gtx, 12))/2)
+		sq := image.Rect(o.X+int(2*k+0.5), o.Y+int(2*k+0.5), o.X+int(10*k+0.5), o.Y+int(10*k+0.5))
+		fill(gtx, rgb(0xffffff), sq, int(1.5*k+0.5))
+	}()
 	if id != "" {
-		th.hit(gtx, id, r.Max)
-		th.tipAt(gtx, id, "Interrupt", r.Max, true, 0)
+		if off {
+			hovered = th.hoverArea(gtx, id+".tip", r.Max)
+			th.tipShow(gtx, id+".tip", hovered, tip, r.Max, true, 0)
+		} else {
+			th.hit(gtx, id, r.Max)
+			th.tipAt(gtx, id, tip, r.Max, true, 0)
+		}
 	}
 	return D{Size: r.Max}
 }
 
 // answerActions is the footer while a question is open: Previous past the
-// first, the Submit pill, and Stop while the run can be stopped.
-func (th *Theme) answerActions(gtx C, s *Scene, running bool) D {
+// first, the Submit pill, and Stop while the run can be stopped, 8 apart;
+// under a 780dp composer they go compact, 6 apart, Previous an icon.
+func (th *Theme) answerActions(gtx C, s *Scene, running, compact bool) D {
+	gap := float32(8)
+	if compact {
+		gap = 6
+	}
 	var kids []layout.FlexChild
 	if s.Question > 0 {
-		kids = append(kids, rigid(th.T3Button(liveID(s, "q.prev"), Button{Variant: BtnOutline, Size: BtnSizeSm, Label: "Previous", Disabled: s.Answering, On: glass()})), rigid(Spacer(8, 0)))
+		id := liveID(s, "q.prev")
+		b := Button{Variant: BtnOutline, Size: BtnSizeSm, Label: "Previous", Disabled: s.Answering, On: glass()}
+		if compact {
+			b = Button{Variant: BtnOutline, Size: BtnSizeIconSm, Icon: "chevron-left", IconSize: 14, Disabled: s.Answering, On: glass()}
+		}
+		kids = append(kids, rigid(func(gtx C) D {
+			d := th.T3Button(id, b)(gtx)
+			if compact && id != "" {
+				th.tipAt(gtx, id, "Previous question", d.Size, true, 0)
+			}
+			return d
+		}), rigid(Spacer(gap, 0)))
 	}
-	kids = append(kids, rigid(func(gtx C) D { return th.submitPill(gtx, s) }))
-	if running {
-		kids = append(kids, rigid(Spacer(8, 0)), rigid(func(gtx C) D { return th.stopButton(gtx, s) }))
+	kids = append(kids, rigid(func(gtx C) D { return th.submitPill(gtx, s, compact) }))
+	if running || s.Stop != StopIdle {
+		kids = append(kids, rigid(Spacer(gap, 0)), rigid(func(gtx C) D { return th.stopButton(gtx, s, true) }))
 	}
 	return layout.Flex{Alignment: layout.Middle}.Layout(gtx, kids...)
 }
 
 // submitPill is the question's primary action: a 28dp --message-action
-// pill, "Next question", "Submit answer" or "Submit answers", disabled
-// until the question (or, at the last, every one) has its answer.
-func (th *Theme) submitPill(gtx C, s *Scene) D {
+// pill padded 16 (12 compact), "Next question", "Submit answer" or
+// "Submit answers" ("Next" or "Submit" compact; "Submitting..." while the
+// answers go), off until the question (or, at the last, every one) has
+// its answer.
+func (th *Theme) submitPill(gtx C, s *Scene, compact bool) D {
 	last := s.Question >= len(s.Questions)-1
 	label := "Next question"
 	switch {
 	case s.Answering:
 		label = "Submitting..."
+	case compact && last:
+		label = "Submit"
+	case compact:
+		label = "Next"
 	case last && s.Question > 0:
 		label = "Submit answers"
 	case last:
@@ -960,11 +1309,14 @@ func (th *Theme) submitPill(gtx C, s *Scene) D {
 		c, _ := th.events(gtx, id)
 		hovered = c.Hovered()
 	}
-	m := op.Record(gtx.Ops)
-	td := th.Text(gtx, Txt{Size: 14, LineH: 20.0 / 14, Font: UI(font.Medium), Color: P.MessageActionForeground, MaxLines: 1}, label)
-	call := m.Stop()
-	h := dp(gtx, 28)
-	r := image.Rect(0, 0, td.Size.X+2*dp(gtx, 16), h)
+	td := record(gtx, func(gtx C) D {
+		return th.Text(gtx, Txt{Size: 14, LineH: 20.0 / 14, Font: UI(font.Medium), Color: P.MessageActionForeground, MaxLines: 1}, label)
+	})
+	h, padX := dp(gtx, 28), dp(gtx, 16)
+	if compact {
+		padX = dp(gtx, 12)
+	}
+	r := image.Rect(0, 0, td.Size.X+2*padX, h)
 	if !enabled {
 		defer paint.PushOpacity(gtx.Ops, 0.64).Pop()
 	} else {
@@ -975,8 +1327,8 @@ func (th *Theme) submitPill(gtx C, s *Scene) D {
 		bg = P.MessageActionHover
 	}
 	fill(gtx, bg, r, h/2)
-	off := op.Offset(image.Pt(dp(gtx, 16), (h-td.Size.Y)/2)).Push(gtx.Ops)
-	call.Add(gtx.Ops)
+	off := op.Offset(image.Pt(padX, (h-td.Size.Y)/2)).Push(gtx.Ops)
+	td.call.Add(gtx.Ops)
 	off.Pop()
 	if id != "" && enabled {
 		th.hit(gtx, id, r.Max)
@@ -985,7 +1337,7 @@ func (th *Theme) submitPill(gtx C, s *Scene) D {
 }
 
 // answered reports whether question i has an answer: an option picked,
-// or for the question on show, an answer typed into the composer.
+// or typed into the composer, live for the question on show.
 func (th *Theme) answered(s *Scene, i int) bool {
 	q := s.Questions[i]
 	for _, on := range q.Chosen {
@@ -993,18 +1345,20 @@ func (th *Theme) answered(s *Scene, i int) bool {
 			return true
 		}
 	}
-	if i != s.Question || q.NoCustom {
+	switch {
+	case q.NoCustom:
 		return false
-	}
-	if s.Live {
+	case i != s.Question:
+		return q.Typed
+	case s.Live:
 		return TrimText(th.EditorText("composer")) != ""
 	}
 	return s.Composer != ""
 }
 
 // composerTile is a picture of the composer's as T3's 64dp tile: rounded
-// 8, a border at 80%, and its remove button in the corner
-// (ComposerAttachmentStrip.tsx).
+// 8, a border at 80%, a click that opens it ("Preview <name>") and its
+// remove button in the corner (ComposerAttachmentStrip.tsx).
 func (th *Theme) composerTile(t Thumb, i int, live bool) W {
 	return func(gtx C) D {
 		sz := dp(gtx, tileSize)
@@ -1018,24 +1372,23 @@ func (th *Theme) composerTile(t Thumb, i int, live bool) W {
 		}
 		strokeRect(gtx, over(alpha(P.Border, uint8(int(P.Border.A)*8/10)), glass()), r, rad, float32(max(1, dp(gtx, 1))))
 		if !live {
+			// The mockups show the remove button too, with nothing behind it.
+			defer op.Offset(image.Pt(sz-dp(gtx, 24+4), dp(gtx, 4))).Push(gtx.Ops).Pop()
+			mediaClose(gtx, 24, 14, false)
 			return D{Size: r.Max}
+		}
+		pid := "image.preview:" + strconv.Itoa(i)
+		if clicked, hovered := th.localClick(gtx, pid, r.Max); clicked && t.ok {
+			th.openPreview(t)
+		} else {
+			th.tipShow(gtx, pid, hovered && t.Name != "", "Preview "+t.Name, r.Max, true, 0)
 		}
 		// media-close: 24dp, black at 65% (80% on hover), a white x.
 		id := "image.remove:" + strconv.Itoa(i)
 		c, _ := th.events(gtx, id)
-		b := dp(gtx, 24)
-		defer op.Offset(image.Pt(sz-b-dp(gtx, 4), dp(gtx, 4))).Push(gtx.Ops).Pop()
-		br := image.Rect(0, 0, b, b)
-		bg := alpha(rgb(0), 0xa6)
-		if c.Hovered() {
-			bg = alpha(rgb(0), 0xcc)
-		}
-		fill(gtx, bg, br, dp(gtx, 8))
-		strokeRect(gtx, alpha(rgb(0xffffff), 0x33), br, dp(gtx, 8), float32(max(1, dp(gtx, 1))))
-		off := op.Offset(image.Pt((b-dp(gtx, 14))/2, (b-dp(gtx, 14))/2)).Push(gtx.Ops)
-		LucideW("x", rgb(0xffffff), 14)(gtx)
-		off.Pop()
-		th.hit(gtx, id, br.Max)
+		defer op.Offset(image.Pt(sz-dp(gtx, 24+4), dp(gtx, 4))).Push(gtx.Ops).Pop()
+		mediaClose(gtx, 24, 14, c.Hovered())
+		th.hit(gtx, id, image.Pt(dp(gtx, 24), dp(gtx, 24)))
 		return D{Size: r.Max}
 	}
 }
@@ -1045,9 +1398,13 @@ func (th *Theme) composerTile(t Thumb, i int, live bool) W {
 func LucideFill(name string, col color.NRGBA, sizeDp float32) W {
 	return func(gtx C) D {
 		k := float32(dp(gtx, sizeDp)) / 24
+		v, ok := lucideSegs.Load(name)
+		if !ok {
+			v, _ = lucideSegs.LoadOrStore(name, parseSVGPath(lucide[name]))
+		}
 		var p clip.Path
 		p.Begin(gtx.Ops)
-		for _, sg := range parseSVGPath(lucide[name]) {
+		for _, sg := range v.([]seg) {
 			pt := func(i int) f32.Point { return sg.p[i].Mul(k) }
 			switch sg.op {
 			case 'M':

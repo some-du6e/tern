@@ -70,6 +70,7 @@ type Button struct {
 	Variant  ButtonVariant
 	Size     ButtonSize
 	Icon     string
+	IconSize float32 // the icon's dp where the call site sets it, 0 for the size's
 	Label    string
 	Disabled bool
 	// Pressed is data-pressed, a trigger whose popup is open: it shows the
@@ -169,7 +170,11 @@ func (th *Theme) T3Button(id string, b Button) W {
 					return D{}
 				}
 				// Icons sit 2dp into the padding on both sides.
-				return pad(0, -2, 0, -2).Layout(gtx, LucideW(b.Icon, icon, sz.icon))
+				size := sz.icon
+				if b.IconSize > 0 {
+					size = b.IconSize
+				}
+				return pad(0, -2, 0, -2).Layout(gtx, LucideW(b.Icon, icon, size))
 			}),
 			layout.Rigid(func(gtx C) D {
 				if b.Label == "" || b.Icon == "" {
@@ -268,6 +273,31 @@ func (th *Theme) T3Kbd(label string, on color.NRGBA) W {
 		defer op.Offset(image.Pt((w-td.Size.X)/2, (h-td.Size.Y)/2)).Push(gtx.Ops).Pop()
 		call.Add(gtx.Ops)
 		return D{Size: image.Pt(w, h)}
+	}
+}
+
+// T3KbdOutline is the outline Kbd: 20 tall, at least 20 wide, padded 0 6,
+// radius 4, a 1dp border with a 2dp bottom at foreground 15%, 12/16
+// medium in muted foreground (kbd.tsx).
+func (th *Theme) T3KbdOutline(label string, on color.NRGBA) W {
+	return func(gtx C) D {
+		if on.A == 0 {
+			on = P.Background
+		}
+		td := record(gtx, func(gtx C) D {
+			return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Font: UI(font.Medium), Color: P.MutedForeground, MaxLines: 1}, label)
+		})
+		h := dp(gtx, 20)
+		w := max(h, td.Size.X+2*dp(gtx, 6))
+		r := image.Rect(0, 0, w, h)
+		rad := dp(gtx, 4)
+		edge := over(alpha(P.Foreground, 0x26), on)
+		fill(gtx, edge, r, rad)
+		px := max(1, dp(gtx, 1))
+		fill(gtx, on, image.Rect(px, px, w-px, h-2*px), max(0, rad-px))
+		defer op.Offset(image.Pt((w-td.Size.X)/2, (h-px-td.Size.Y)/2)).Push(gtx.Ops).Pop()
+		td.call.Add(gtx.Ops)
+		return D{Size: r.Max}
 	}
 }
 

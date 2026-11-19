@@ -668,18 +668,31 @@ type boxShadow struct {
 	col                color.NRGBA
 }
 
-// shadow paints CSS box shadows for the rounded rect r. Gio has no blur, so
-// each shadow's blurred edge is a stack of rounded rects, from the edge of
-// the blur in to its middle, whose alphas add up to the shadow's colour.
+// shadow paints CSS box shadows for the rounded rect r on the page's
+// background; shadowOn on another surface.
 func shadow(gtx C, r image.Rectangle, radius int, shadows []boxShadow) {
+	shadowOn(gtx, r, radius, P.Background, shadows)
+}
+
+// shadowOn paints CSS box shadows for the rounded rect r cast on the
+// surface on. Gio has no blur, so each shadow's blurred edge is a stack of
+// rounded rects, from the edge of the blur in to its middle, each adding
+// its share of the shadow's colour. Gio blends in linear light, so each
+// band's alpha is the one that darkens on as a browser's sRGB share would
+// (gioAlpha); else the shadow comes out at about half its strength.
+func shadowOn(gtx C, r image.Rectangle, radius int, on color.NRGBA, shadows []boxShadow) {
 	for _, sh := range shadows {
 		off := image.Pt(dp(gtx, sh.x), dp(gtx, sh.y))
 		blur := float32(dp(gtx, sh.blur))
 		spread := dp(gtx, sh.spread)
 		n := max(1, min(8, int(blur)))
-		c := sh.col
-		c.A = uint8(max(1, int(float32(sh.col.A)/float32(n)+0.5)))
+		share := float64(sh.col.A) / 255 / float64(n)
+		prev := on
 		for i := 0; i < n; i++ {
+			// A browser stacks i+1 shares: 1 - (1 - share)^(i+1).
+			next := over(alpha(sh.col, uint8((1-math.Pow(1-share, float64(i+1)))*255+0.5)), on)
+			c := alpha(sh.col, max(1, gioAlpha(sh.col, prev, next)))
+			prev = next
 			grow := spread + int(blur*(0.5-float32(i)/float32(n)))
 			rr := r.Add(off).Inset(-grow)
 			if rr.Dx() <= 0 || rr.Dy() <= 0 {
@@ -688,4 +701,18 @@ func shadow(gtx C, r image.Rectangle, radius int, shadows []boxShadow) {
 			fill(gtx, c, rr, max(0, radius+grow))
 		}
 	}
+}
+
+// recording is a widget laid out but not drawn: its size, and the ops
+// that draw it at the current offset.
+type recording struct {
+	D
+	call op.CallOp
+}
+
+// record lays w out without drawing it.
+func record(gtx C, w W) recording {
+	m := op.Record(gtx.Ops)
+	d := w(gtx)
+	return recording{d, m.Stop()}
 }

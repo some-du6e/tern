@@ -24,6 +24,14 @@ func ShortcutShift(k string) string {
 	return "Ctrl+Shift+" + k
 }
 
+// AltKey is k with Alt alone: ⌥Up on a Mac, Alt+Up elsewhere.
+func AltKey(k string) string {
+	if Shortcut(k)[0] != 'C' {
+		return "⌥" + k
+	}
+	return "Alt+" + k
+}
+
 // ShortcutAlt is Shortcut with Alt: ⌥⌘B on a Mac, Ctrl+Alt+B elsewhere.
 func ShortcutAlt(k string) string {
 	if s := Shortcut(k); s[0] != 'C' {

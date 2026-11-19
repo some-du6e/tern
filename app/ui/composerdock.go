@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"math"
 	"strconv"
+	"time"
 
 	"gioui.org/f32"
 	"gioui.org/font"
@@ -19,49 +20,37 @@ import (
 	"gioui.org/unit"
 )
 
-// What T3 attaches above the composer's card (ComposerBanner.tsx): notice
-// banners and the agent's questions, 22dp in from the card's sides with
-// their bottoms tucked 17dp under it; the @, / and $ menu, which rises out
-// of the card the same way; the messages queued behind a run; and the
-// context strip under a new thread's card.
-
-// bannerVariant is an attached surface's tone (ComposerBanner.tsx).
-type bannerVariant int
-
-const (
-	bannerDefault bannerVariant = iota
-	bannerError
-	bannerWarning
-)
-
-// colors are the variant's outline and tint over the glass: neutral ones
-// take the card's outline, error and warning their colour at 32% and 28%
-// with an 8% tint.
-func (v bannerVariant) colors() (outline, tint color.NRGBA) {
-	switch v {
-	case bannerError:
-		return alpha(P.Error, 0x52), alpha(P.Error, 0x14)
-	case bannerWarning:
-		return alpha(P.Warning, 0x47), alpha(P.Warning, 0x14)
-	}
-	return composerOutline(), color.NRGBA{}
-}
+// What T3 attaches above the composer's card (ComposerBanner.tsx): the
+// status notice and the agent's questions, 22dp in from the card's sides
+// with their bottoms tucked 17dp under it; the @, / and $ menu and the
+// stash, which rise out of the card the same way; the messages queued
+// behind a run, at the foot of the timeline; and the context strip under
+// a new thread's card.
 
 // attachedGlass paints an attached surface over r. Its bottom 16dp are
 // masked away and what follows covers it from 17dp up, so only the top
 // rounds (16): a joined surface, one after another, is square and has no
-// top edge. In dark, a shadow rises 10dp off the card below.
-func attachedGlass(gtx C, r image.Rectangle, joined bool, v bannerVariant) color.NRGBA {
-	outline, tint := v.colors()
-	g := over(tint, glass())
+// top edge. Its shadow is the composer's, light and dark (shadow-composer,
+// shadow-composer-dark), masked with it. A surface portaled out of the
+// composer (the @ menu, the stash) misses the composer's outline and takes
+// foreground 8% instead. In dark, a seam rises 10dp off the card below.
+func attachedGlass(gtx C, r image.Rectangle, joined, portaled bool) color.NRGBA {
+	g := glass()
 	px := max(1, dp(gtx, 1))
-	defer clip.Rect(image.Rect(r.Min.X, r.Min.Y, r.Max.X, r.Max.Y-dp(gtx, 16))).Push(gtx.Ops).Pop()
+	outline := composerOutline()
+	if portaled && !dark {
+		outline = alpha(P.Foreground, 0x14)
+	}
 	edge := over(outline, g)
+	rad := dp(gtx, composerRadius)
+	defer clip.Rect(image.Rect(r.Min.X-dp(gtx, 32), r.Min.Y-dp(gtx, 32), r.Max.X+dp(gtx, 32), r.Max.Y-dp(gtx, 16))).Push(gtx.Ops).Pop()
+	if !joined {
+		shadow(gtx, r, rad, composerShadow())
+	}
 	if joined {
 		fill(gtx, edge, r, 0)
 		fill(gtx, g, image.Rect(r.Min.X+px, r.Min.Y, r.Max.X-px, r.Max.Y), 0)
 	} else {
-		rad := dp(gtx, composerRadius)
 		fill(gtx, g, r, rad)
 		strokeRect(gtx, edge, r, rad, float32(px))
 	}
@@ -79,56 +68,56 @@ func attachedGlass(gtx C, r image.Rectangle, joined bool, v bannerVariant) color
 	return g
 }
 
-// composerDock is what sits on the card's top edge (ComposerBanner.Dock):
-// a column of the notices, then the agent's question, and at its end the
-// stash's tab, their bottoms lined up. A new thread shows its notices
-// under the composer instead (heroNotices).
-func (th *Theme) composerDock(gtx C, s *Scene) D {
-	if s.Hero != "" || s.Scratch {
-		return D{}
+// composerShadow is shadow-composer: 0 1px 2px black 5% in light; dark's
+// banners and detached cards cast shadow-composer-dark, 0 14px 32px -18px
+// black 75%.
+func composerShadow() []boxShadow {
+	if dark {
+		return []boxShadow{{0, 14, 32, -18, alpha(rgb(0), 0xbf)}}
 	}
+	return []boxShadow{{0, 1, 2, 0, alpha(rgb(0), 0x0d)}}
+}
+
+// composerDock is what sits on the card's top edge (ComposerBanner.Dock):
+// a column of the status notice (not while a question is open, which
+// keeps only the machine's own banners), then the agent's question, and
+// at its end the stash's tab, their bottoms lined up. A new thread's
+// notices go under its composer (heroNotices); its tab still shows here.
+func (th *Theme) composerDock(gtx C, s *Scene) D {
 	w := gtx.Constraints.Max.X
 	inset := dp(gtx, drawerInset)
 	cw := w - 2*inset
 	var tab func()
 	tabH := 0
 	if len(s.Stash) > 0 {
-		m := op.Record(gtx.Ops)
-		td := th.stashTab(gtx, s)
-		call := m.Stop()
+		td := record(gtx, func(gtx C) D { return th.stashTab(gtx, s) })
 		tabH = td.Size.Y
 		cw -= td.Size.X + dp(gtx, 4)
 		tab = func() {
 			defer op.Offset(image.Pt(w-inset-td.Size.X, 0)).Push(gtx.Ops).Pop()
-			call.Add(gtx.Ops)
+			td.call.Add(gtx.Ops)
 		}
 	}
-	m := op.Record(gtx.Ops)
-	y := 0
-	n := 0
-	attach := func(card func(gtx C, joined bool) D) {
-		off := op.Offset(image.Pt(inset, y)).Push(gtx.Ops)
-		g := gtx
-		g.Constraints = layout.Constraints{Min: image.Pt(cw, 0), Max: image.Pt(cw, gtx.Constraints.Max.Y)}
-		d := card(g, n > 0)
-		off.Pop()
-		y += d.Size.Y - dp(gtx, tuck)
-		n++
-	}
-	if s.Error != "" {
-		attach(func(gtx C, joined bool) D {
-			return th.noticeCard(gtx, s, bannerError, "circle-alert", s.Error, liveID(s, "error"), joined, false)
-		})
-	}
-	if s.Notice != "" {
-		attach(func(gtx C, joined bool) D {
-			return th.noticeCard(gtx, s, bannerDefault, "info", s.Notice, "", joined, false)
-		})
-	}
-	if len(s.Questions) > 0 {
-		attach(func(gtx C, joined bool) D { return th.questionDrawer(gtx, s, joined) })
-	}
-	column := m.Stop()
+	hero := s.Hero != "" || s.Scratch
+	y, n := 0, 0
+	col := record(gtx, func(gtx C) D {
+		attach := func(card func(gtx C, joined bool) D) {
+			off := op.Offset(image.Pt(inset, y)).Push(gtx.Ops)
+			g := gtx
+			g.Constraints = layout.Constraints{Min: image.Pt(cw, 0), Max: image.Pt(cw, gtx.Constraints.Max.Y)}
+			d := card(g, n > 0)
+			off.Pop()
+			y += d.Size.Y - dp(gtx, tuck)
+			n++
+		}
+		if s.Notice != "" && !hero && len(s.Questions) == 0 {
+			attach(func(gtx C, joined bool) D { return th.noticeCard(gtx, "info", s.Notice, joined, false) })
+		}
+		if len(s.Questions) > 0 && !hero {
+			attach(func(gtx C, joined bool) D { return th.questionDrawer(gtx, s, joined) })
+		}
+		return D{}
+	})
 	th.questionKeys(gtx, s)
 	colH := 0
 	if n > 0 {
@@ -140,7 +129,7 @@ func (th *Theme) composerDock(gtx C, s *Scene) D {
 	}
 	// The column and the tab sit on the dock's bottom (items-end).
 	off := op.Offset(image.Pt(0, h-colH)).Push(gtx.Ops)
-	column.Add(gtx.Ops)
+	col.call.Add(gtx.Ops)
 	off.Pop()
 	if tab != nil {
 		off := op.Offset(image.Pt(0, h-tabH)).Push(gtx.Ops)
@@ -149,6 +138,11 @@ func (th *Theme) composerDock(gtx C, s *Scene) D {
 	}
 	return D{Size: image.Pt(w, h)}
 }
+
+// stashPulse is the tab's pulse after a stash (index.css): the row in the
+// foreground for 1.2s, easing back over 0.2s; the count in --primary for
+// 1.2s, rising 2dp into place as it fades in over 180ms.
+const stashPulse = 1400 * time.Millisecond
 
 // stashTab is the stash's shoulder tab (ComposerStashBadge.tsx): an
 // attached surface as wide as its row, "Stash" and the count, muted
@@ -160,31 +154,50 @@ func (th *Theme) stashTab(gtx C, s *Scene) D {
 		c, _ := th.events(gtx, id)
 		hovered = c.Hovered()
 	}
-	col := P.MutedForeground
+	col, count := P.MutedForeground, P.MutedForeground
+	rise, fade := 0, float32(1)
+	if since := gtx.Now.Sub(s.Stashed); !s.Stashed.IsZero() && since >= 0 && since < stashPulse {
+		k := float32(1)
+		if since > 1200*time.Millisecond {
+			k = 1 - easeOut(float32(since-1200*time.Millisecond)/float32(200*time.Millisecond))
+		}
+		col = lerpCol(P.Foreground, P.MutedForeground, k)
+		if since < 1200*time.Millisecond {
+			count = P.Primary
+		}
+		if since < 180*time.Millisecond {
+			t := easeOut(float32(since) / float32(180*time.Millisecond))
+			rise, fade = dp(gtx, 2*(1-t)), t
+		}
+		gtx.Execute(op.InvalidateCmd{})
+	}
 	if hovered || s.StashOpen {
 		col = P.Foreground
 	}
-	m := op.Record(gtx.Ops)
-	rd := th.bannerRow(gtx, "bookmark", "Stash", strconv.Itoa(len(s.Stash)), col, false)
-	row := m.Stop()
+	rd := record(gtx, func(gtx C) D {
+		return th.bannerRow(gtx, "bookmark", "Stash", strconv.Itoa(len(s.Stash)), col, count, false, 0, rise, fade)
+	})
 	padX, padY := dp(gtx, 4), dp(gtx, 5)
 	r := image.Rect(0, 0, rd.Size.X+2*padX, rd.Size.Y+2*padY+dp(gtx, tuck))
-	g := attachedGlass(gtx, r, false, bannerDefault)
+	g := attachedGlass(gtx, r, false, false)
 	defer op.Offset(image.Pt(padX, padY)).Push(gtx.Ops).Pop()
 	if hovered {
 		fill(gtx, over(alpha(P.Foreground, 0x0d), g), image.Rectangle{Max: rd.Size}, dp(gtx, 12))
 	}
-	row.Add(gtx.Ops)
+	rd.call.Add(gtx.Ops)
 	if id != "" && !s.StashOpen {
 		th.hit(gtx, id, rd.Size)
 	}
 	return D{Size: r.Max}
 }
 
-// bannerRow is a banner's 24dp row (ComposerBanner.Row): the 12dp icon in
-// its 24dp column, the 12/16 content, and with a count, a 24dp column for
-// it in medium, tabular; with toggle, the open drawer's chevron after it.
-func (th *Theme) bannerRow(gtx C, icon, content, count string, col color.NRGBA, toggle bool) D {
+// bannerRow is a banner's 24dp row (ComposerBanner.Row): a [24][1fr][auto]
+// grid of the 12dp icon in its column, the 12/16 content and the actions:
+// with a count, a 24dp column for it in medium, tabular, in countCol
+// (risen rise px and at fade, for the stash's pulse); with toggle, the
+// open drawer's chevron after it. w stretches the row to w, the actions
+// at its end; 0 sizes it to its content.
+func (th *Theme) bannerRow(gtx C, icon, content, count string, col, countCol color.NRGBA, toggle bool, w, rise int, fade float32) D {
 	gtx.Constraints.Min = image.Point{}
 	rh := dp(gtx, 24)
 	t := Txt{Size: 12, LineH: 16.0 / 12, Color: col, MaxLines: 1}
@@ -192,80 +205,122 @@ func (th *Theme) bannerRow(gtx C, icon, content, count string, col color.NRGBA, 
 	LucideW(icon, col, 12)(gtx)
 	off.Pop()
 	x := rh + dp(gtx, 4)
-	m := op.Record(gtx.Ops)
-	cd := th.Text(gtx, t, content)
-	call := m.Stop()
+	cd := record(gtx, func(gtx C) D { return th.Text(gtx, t, content) })
 	off = op.Offset(image.Pt(x, (rh-cd.Size.Y)/2)).Push(gtx.Ops)
-	call.Add(gtx.Ops)
+	cd.call.Add(gtx.Ops)
 	off.Pop()
 	x += cd.Size.X
+	// The actions: the count's column and the chevron's.
+	ct := t
+	ct.Font, ct.Color = UI(font.Medium), countCol
+	nd := record(gtx, func(gtx C) D { return th.Text(gtx, ct, count) })
+	aw := 0
 	if count != "" {
-		x += dp(gtx, 4)
-		ct := t
-		ct.Font, ct.Color = UI(font.Medium), P.MutedForeground
-		m := op.Record(gtx.Ops)
-		nd := th.Text(gtx, ct, count)
-		call := m.Stop()
-		cw := max(rh, nd.Size.X)
-		off := op.Offset(image.Pt(x+(cw-nd.Size.X)/2, (rh-nd.Size.Y)/2)).Push(gtx.Ops)
-		call.Add(gtx.Ops)
-		off.Pop()
-		x += cw
+		aw += dp(gtx, 4) + max(rh, nd.Size.X)
 	}
 	if toggle {
-		off := op.Offset(image.Pt(x+(rh-dp(gtx, 14))/2, (rh-dp(gtx, 14))/2)).Push(gtx.Ops)
+		aw += rh
+	}
+	ax := x
+	if w > 0 {
+		x = max(x+aw, w)
+		ax = x - aw
+	} else {
+		x += aw
+	}
+	if count != "" {
+		ax += dp(gtx, 4)
+		cw := max(rh, nd.Size.X)
+		func() {
+			defer op.Offset(image.Pt(ax+(cw-nd.Size.X)/2, (rh-nd.Size.Y)/2+rise)).Push(gtx.Ops).Pop()
+			defer paint.PushOpacity(gtx.Ops, fade).Pop()
+			nd.call.Add(gtx.Ops)
+		}()
+		ax += cw
+	}
+	if toggle {
+		off := op.Offset(image.Pt(ax+(rh-dp(gtx, 14))/2, (rh-dp(gtx, 14))/2)).Push(gtx.Ops)
 		LucideW("chevron-down", P.ContrastMutedForeground, 14)(gtx)
 		off.Pop()
-		x += rh
 	}
 	return D{Size: image.Pt(x, rh)}
 }
 
 // stashDrawer is the open stash (ComposerStashMenu.tsx), rising out of
-// the card like the @ menu: a row that closes it, then a row per stashed
-// prompt (its snippet, its pictures, how old it is and its delete), the
-// highlighted one filled with --accent.
+// the card like the @ menu: a row that closes it, its count and chevron
+// at the end, then the stashed prompts' rows (snippet, pictures, age,
+// delete) in a scroll area at most min(384, 40% of the window) tall, the
+// highlighted one filled with --accent; or the line saying how to stash.
 func (th *Theme) stashDrawer(gtx C, s *Scene, w int) {
 	inset := dp(gtx, drawerInset)
 	cw := w - 2*inset
 	g := glass()
-	m := op.Record(gtx.Ops)
+	inner := cw - dp(gtx, 8)
 	cg := gtx
-	cg.Constraints = layout.Constraints{Min: image.Pt(cw, 0), Max: image.Pt(cw, dp(gtx, 384))}
-	body := pad(4, 4, 4, 4).Layout(cg, func(gtx C) D {
-		gtx.Constraints.Min.X = gtx.Constraints.Max.X
-		kids := []layout.FlexChild{rigid(func(gtx C) D {
-			d := th.bannerRow(gtx, "bookmark", "Stash", strconv.Itoa(len(s.Stash)), P.MutedForeground, true)
-			if id := liveID(s, "stash"); id != "" {
-				th.hit(gtx, id, image.Pt(gtx.Constraints.Max.X, d.Size.Y))
-			}
-			return D{Size: image.Pt(gtx.Constraints.Max.X, d.Size.Y)}
-		})}
+	cg.Constraints = layout.Constraints{Min: image.Pt(inner, 0), Max: image.Pt(inner, 1<<20)}
+	head := record(cg, func(gtx C) D {
+		id := liveID(s, "stash")
+		hovered := false
+		if id != "" {
+			c, _ := th.events(gtx, id)
+			hovered = c.Hovered()
+		}
+		rd := record(gtx, func(gtx C) D {
+			return th.bannerRow(gtx, "bookmark", "Stash", strconv.Itoa(len(s.Stash)), P.MutedForeground, P.MutedForeground, true, inner, 0, 1)
+		})
+		if hovered {
+			fill(gtx, over(alpha(P.Foreground, 0x0d), g), image.Rectangle{Max: rd.Size}, dp(gtx, 12))
+		}
+		rd.call.Add(gtx.Ops)
+		if id != "" {
+			th.hit(gtx, id, rd.Size)
+		}
+		return rd.D
+	})
+	rows := record(cg, func(gtx C) D {
+		if len(s.Stash) == 0 {
+			return th.bannerRow(gtx, "", "Nothing stashed yet. Press "+Shortcut("S")+" with a prompt in the composer to stash it.", "", P.MutedForeground, P.MutedForeground, false, inner, 0, 1)
+		}
+		var kids []layout.FlexChild
 		for i, e := range s.Stash {
-			i, e := i, e
-			kids = append(kids, rigid(Spacer(0, 1)), rigid(func(gtx C) D { return th.stashRow(gtx, s, i, e, g) }))
+			if i > 0 {
+				kids = append(kids, rigid(Spacer(0, 1)))
+			}
+			kids = append(kids, rigid(func(gtx C) D { return th.stashRow(gtx, s, i, e, g) }))
 		}
 		return Col(gtx, kids...)
 	})
-	call := m.Stop()
-	h := body.Size.Y + dp(gtx, tuck)
+	view := min(rows.Size.Y, dp(gtx, 384), th.in.window.Y*40/100)
+	if th.in.window.Y == 0 {
+		view = min(rows.Size.Y, dp(gtx, 384))
+	}
+	ui := &th.in.composer
+	if !ui.stashWas {
+		th.scrollArea("stash").y = 0
+	}
+	ui.stashShown = true
+	if s.StashSel >= 0 && s.StashSel < len(s.Stash) && (!ui.stashWas || ui.stashSel != s.StashSel) {
+		ui.stashSel = s.StashSel
+		top := s.StashSel * (dp(gtx, 24) + dp(gtx, 1))
+		th.scrollTo("stash", top, top+dp(gtx, 24), view)
+	}
+	pad4 := dp(gtx, 4)
+	h := pad4 + head.Size.Y + view + pad4 + dp(gtx, tuck)
 	defer op.Offset(image.Pt(inset, dp(gtx, tuck)-h)).Push(gtx.Ops).Pop()
-	attachedGlass(gtx, image.Rect(0, 0, cw, h), false, bannerDefault)
-	call.Add(gtx.Ops)
+	attachedGlass(gtx, image.Rect(0, 0, cw, h), false, true)
+	defer op.Offset(image.Pt(pad4, pad4)).Push(gtx.Ops).Pop()
+	head.call.Add(gtx.Ops)
+	defer op.Offset(image.Pt(0, head.Size.Y)).Push(gtx.Ops).Pop()
+	th.vscroll(gtx, "stash", image.Pt(inner, view), rows.Size.Y, rows.call)
 }
 
-// stashRow is one stashed prompt: 24dp, rounded 4, a click restores it.
+// stashRow is one stashed prompt: 24dp, rounded 4, a click restores it;
+// a pointer moving over it moves the highlight to it.
 func (th *Theme) stashRow(gtx C, s *Scene, i int, e Stashed, g color.NRGBA) D {
 	w := gtx.Constraints.Max.X
 	gtx.Constraints.Min = image.Point{}
 	rh := dp(gtx, 24)
 	id := liveID(s, "stash.restore:"+strconv.Itoa(i))
-	if id != "" {
-		c, _ := th.events(gtx, id)
-		if c.Hovered() && i != s.StashSel {
-			th.push(Action{ID: "stash", Kind: "hover", Text: strconv.Itoa(i)})
-		}
-	}
 	on := g
 	text := over(alpha(P.Foreground, 0xcc), g)
 	if i == s.StashSel {
@@ -275,25 +330,16 @@ func (th *Theme) stashRow(gtx C, s *Scene, i int, e Stashed, g color.NRGBA) D {
 	}
 	// The actions, right to left: delete, age, pictures, what was dropped.
 	x := w - rh
-	del := liveID(s, "stash.delete:"+strconv.Itoa(i))
 	func() {
 		defer op.Offset(image.Pt(x, 0)).Push(gtx.Ops).Pop()
-		if del != "" {
-			th.bannerDismiss(gtx, del, on, dp(gtx, 8), dp(gtx, 8))
-			return
-		}
-		off := op.Offset(image.Pt((rh-dp(gtx, 14))/2, (rh-dp(gtx, 14))/2)).Push(gtx.Ops)
-		LucideW("x", P.ContrastMutedForeground, 14)(gtx)
-		off.Pop()
+		th.bannerDismiss(gtx, liveID(s, "stash.delete:"+strconv.Itoa(i)), on, dp(gtx, 8), dp(gtx, 8))
 	}()
 	t := Txt{Size: 12, LineH: 16.0 / 12, Color: P.MutedForeground, MaxLines: 1}
 	place := func(w W) {
-		m := op.Record(gtx.Ops)
-		d := w(gtx)
-		call := m.Stop()
+		d := record(gtx, w)
 		x -= d.Size.X + dp(gtx, 4)
 		off := op.Offset(image.Pt(x, (rh-d.Size.Y)/2)).Push(gtx.Ops)
-		call.Add(gtx.Ops)
+		d.call.Add(gtx.Ops)
 		off.Pop()
 	}
 	if e.Age != "" {
@@ -301,8 +347,9 @@ func (th *Theme) stashRow(gtx C, s *Scene, i int, e Stashed, g color.NRGBA) D {
 	}
 	if n := min(3, len(e.Thumbs)); n > 0 {
 		place(func(gtx C) D {
+			// -space-x-1.5: each one 6dp over the one before, on top of it.
 			sz, step := dp(gtx, 16), dp(gtx, 16-6)
-			for j := n - 1; j >= 0; j-- {
+			for j := 0; j < n; j++ {
 				off := op.Offset(image.Pt(j*step, 0)).Push(gtx.Ops)
 				r := image.Rect(0, 0, sz, sz)
 				if !drawThumb(gtx, e.Thumbs[j], sz, dp(gtx, 4)) {
@@ -326,23 +373,53 @@ func (th *Theme) stashRow(gtx C, s *Scene, i int, e Stashed, g color.NRGBA) D {
 	sg.Constraints = layout.Constraints{Max: image.Pt(max(0, x-rh-dp(gtx, 8)), rh)}
 	st := t
 	st.Color = text
-	m := op.Record(gtx.Ops)
-	sd := th.Text(sg, st, e.Snippet)
-	call := m.Stop()
+	sd := record(sg, func(gtx C) D { return th.Text(gtx, st, e.Snippet) })
 	so := op.Offset(image.Pt(rh+dp(gtx, 4), (rh-sd.Size.Y)/2)).Push(gtx.Ops)
-	call.Add(gtx.Ops)
+	sd.call.Add(gtx.Ops)
 	so.Pop()
 	if id != "" {
+		if th.pointerMoved(gtx, id, image.Pt(w, rh)) && i != s.StashSel {
+			th.push(Action{ID: "stash", Kind: "hover", Text: strconv.Itoa(i)})
+		}
 		th.hit(gtx, id, image.Pt(x, rh))
 	}
 	return D{Size: image.Pt(w, rh)}
 }
 
+// pointerMoved watches a size-sized area for the pointer moving over it,
+// without taking its clicks, and reports whether it did since the last
+// frame: a list's highlight follows the mouse's moves, not a mouse at
+// rest (onMouseMove), so the arrow keys aren't undone.
+func (th *Theme) pointerMoved(gtx C, id string, size image.Point) bool {
+	if th.in.movers == nil {
+		th.in.movers = map[string]*int{}
+	}
+	tag := th.in.movers[id]
+	if tag == nil {
+		tag = new(int)
+		th.in.movers[id] = tag
+	}
+	moved := false
+	for {
+		ev, ok := gtx.Event(pointer.Filter{Target: tag, Kinds: pointer.Move})
+		if !ok {
+			break
+		}
+		if e, ok := ev.(pointer.Event); ok && e.Kind == pointer.Move {
+			moved = true
+		}
+	}
+	defer clip.Rect{Max: size}.Push(gtx.Ops).Pop()
+	defer pointer.PassOp{}.Push(gtx.Ops).Pop()
+	event.Op(gtx.Ops, tag)
+	return moved
+}
+
 // noticeCard is a notice (ComposerBannerStack.tsx): a comfortable root
-// padded 5 4, one 24dp row of the icon, the 12/24 medium title and the
-// dismiss button, then the 17dp the next surface covers. Detached, under a
-// new thread's composer, it's a whole 16dp-rounded card.
-func (th *Theme) noticeCard(gtx C, s *Scene, v bannerVariant, icon, title, dismiss string, joined, detached bool) D {
+// padded 5 4, one 24dp row of the 12dp icon and the 12/24 medium title,
+// then the 17dp the next surface covers. Detached, under a new thread's
+// composer, it's a whole 16dp-rounded card.
+func (th *Theme) noticeCard(gtx C, icon, title string, joined, detached bool) D {
 	w := gtx.Constraints.Max.X
 	rowH := dp(gtx, 24)
 	padY, padX := dp(gtx, 5), dp(gtx, 4)
@@ -353,61 +430,43 @@ func (th *Theme) noticeCard(gtx C, s *Scene, v bannerVariant, icon, title, dismi
 	r := image.Rect(0, 0, w, h)
 	g := glass()
 	if detached {
-		outline, tint := v.colors()
-		g = over(tint, glass())
 		rad := dp(gtx, composerRadius)
-		if !dark {
-			shadow(gtx, r, rad, []boxShadow{{0, 1, 2, 0, alpha(rgb(0), 0x0d)}})
-		}
+		shadow(gtx, r, rad, composerShadow())
 		fill(gtx, g, r, rad)
-		strokeRect(gtx, over(outline, g), r, rad, float32(max(1, dp(gtx, 1))))
+		strokeRect(gtx, over(composerOutline(), g), r, rad, float32(max(1, dp(gtx, 1))))
 	} else {
-		g = attachedGlass(gtx, r, joined, v)
+		g = attachedGlass(gtx, r, joined, false)
 	}
 	defer op.Offset(image.Pt(padX, padY)).Push(gtx.Ops).Pop()
 	rw := w - 2*padX
-	col := P.MutedForeground
-	if v == bannerError {
-		col = P.Error
-	}
 	func() {
 		off := op.Offset(image.Pt((rowH-dp(gtx, 12))/2, (rowH-dp(gtx, 12))/2)).Push(gtx.Ops)
 		defer off.Pop()
-		LucideW(icon, col, 12)(gtx)
+		LucideW(icon, P.MutedForeground, 12)(gtx)
 	}()
-	actions := 0
-	if dismiss != "" {
-		actions = dp(gtx, 48)
-		corner := dp(gtx, 12)
-		if joined {
-			corner = dp(gtx, 8)
-		}
-		bottom := dp(gtx, 8)
-		if detached {
-			bottom = dp(gtx, 12)
-		}
-		off := op.Offset(image.Pt(rw-rowH, 0)).Push(gtx.Ops)
-		th.bannerDismiss(gtx, dismiss, g, corner, bottom)
-		off.Pop()
-	}
 	tg := gtx
-	tg.Constraints = layout.Constraints{Max: image.Pt(max(0, rw-rowH-dp(gtx, 4)-actions), rowH)}
-	m := op.Record(gtx.Ops)
-	td := th.Text(tg, Txt{Size: 12, LineH: 24.0 / 12, Font: UI(font.Medium), Color: bodyText(), MaxLines: 1}, title)
-	call := m.Stop()
+	tg.Constraints = layout.Constraints{Max: image.Pt(max(0, rw-rowH-dp(gtx, 4)), rowH)}
+	td := record(tg, func(gtx C) D {
+		return th.Text(gtx, Txt{Size: 12, LineH: 24.0 / 12, Font: UI(font.Medium), Color: bodyText(), MaxLines: 1}, title)
+	})
 	off := op.Offset(image.Pt(rowH+dp(gtx, 4), (rowH-td.Size.Y)/2)).Push(gtx.Ops)
-	call.Add(gtx.Ops)
+	td.call.Add(gtx.Ops)
 	off.Pop()
 	return D{Size: r.Max}
 }
 
 // bannerDismiss is a banner's ghost icon-xs dismiss: 24dp, the x at 14,
-// rounded 8 but for its top-right corner, which follows the card's.
+// rounded 8 but for its top-right corner, which follows the card's. With
+// no id (a mockup) it's drawn and takes no clicks.
 func (th *Theme) bannerDismiss(gtx C, id string, on color.NRGBA, corner, bottom int) {
-	c, _ := th.events(gtx, id)
+	hovered := false
+	if id != "" {
+		c, _ := th.events(gtx, id)
+		hovered = c.Hovered()
+	}
 	sz := dp(gtx, 24)
 	col := P.ContrastMutedForeground
-	if c.Hovered() {
+	if hovered {
 		rad := dp(gtx, 8)
 		paint.FillShape(gtx.Ops, over(P.Accent, on), clip.RRect{Rect: image.Rect(0, 0, sz, sz), NW: rad, NE: corner, SE: bottom, SW: rad}.Op(gtx.Ops))
 		col = P.Foreground
@@ -415,56 +474,122 @@ func (th *Theme) bannerDismiss(gtx C, id string, on color.NRGBA, corner, bottom 
 	off := op.Offset(image.Pt((sz-dp(gtx, 14))/2, (sz-dp(gtx, 14))/2)).Push(gtx.Ops)
 	LucideW("x", col, 14)(gtx)
 	off.Pop()
-	th.hit(gtx, id, image.Pt(sz, sz))
+	if id != "" {
+		th.hit(gtx, id, image.Pt(sz, sz))
+	}
 }
 
 // heroNotices are a new thread's notices, detached under its composer:
 // 16dp below it, 4 apart.
 func (th *Theme) heroNotices(gtx C, s *Scene) D {
-	if s.Error == "" && s.Notice == "" {
+	if s.Notice == "" {
 		return D{}
 	}
-	var kids []layout.FlexChild
-	add := func(v bannerVariant, icon, text, dismiss string) {
-		if len(kids) > 0 {
-			kids = append(kids, rigid(Spacer(0, 4)))
-		}
-		kids = append(kids, rigid(func(gtx C) D { return th.noticeCard(gtx, s, v, icon, text, dismiss, false, true) }))
+	return pad(16, 0, 0, 0).Layout(gtx, func(gtx C) D { return th.noticeCard(gtx, "info", s.Notice, false, true) })
+}
+
+// threadError is T3's ThreadErrorBanner in the chat's banner lane
+// (ChatBannerLane.tsx), over the top of the conversation, 12dp down and
+// centred in a lane w wide, at most 768 and 16dp in from each side: the
+// error Alert on alert glass, rounded 12, padded 12 14, the alert icon
+// and the 14/20 error in --error-foreground at 80%, its dismiss at the end.
+func (th *Theme) threadError(gtx C, s *Scene, w int) {
+	if s.Error == "" {
+		return
 	}
-	if s.Error != "" {
-		add(bannerError, "circle-alert", s.Error, liveID(s, "error"))
+	most := min(dp(gtx, 768), w-dp(gtx, 32))
+	padX, padY := dp(gtx, 14), dp(gtx, 12)
+	// alert-glass[data-variant=error]: --background at 80% over the page,
+	// --error at 4% over that.
+	surface := over(alpha(P.Error, 0x0a), over(alpha(P.Background, 0xcc), P.Background))
+	id := liveID(s, "error")
+	room := most - 2*padX - 2*max(1, dp(gtx, 1)) - dp(gtx, 16+8) - dp(gtx, 24+8)
+	tg := gtx
+	tg.Constraints = layout.Constraints{Max: image.Pt(max(0, room), 1<<20)}
+	text := record(tg, func(gtx C) D {
+		return th.Text(gtx, Txt{Size: 14, LineH: 20.0 / 14, Color: over(alpha(P.ErrorForeground, 0xcc), surface)}, s.Error)
+	})
+	inner := dp(gtx, 16+8) + text.Size.X + dp(gtx, 8+24)
+	px := max(1, dp(gtx, 1))
+	bw := inner + 2*padX + 2*px
+	// With an action the row is 24 tall and the first line 2dp down.
+	top := dp(gtx, 2)
+	bh := max(text.Size.Y+top, dp(gtx, 24)) + 2*padY + 2*px
+	at := image.Pt((gtx.Constraints.Max.X-bw)/2, dp(gtx, 12))
+	defer op.Offset(at).Push(gtx.Ops).Pop()
+	r := image.Rect(0, 0, bw, bh)
+	rad := dp(gtx, 12)
+	fill(gtx, surface, r, rad)
+	strokeRect(gtx, over(alpha(P.Error, 0x52), surface), r, rad, float32(px))
+	o := op.Offset(image.Pt(px+padX, px+padY+top)).Push(gtx.Ops)
+	func() {
+		defer op.Offset(image.Pt(0, (dp(gtx, 20)-dp(gtx, 16))/2)).Push(gtx.Ops).Pop()
+		LucideW("circle-alert", P.Error, 16)(gtx)
+	}()
+	func() {
+		defer op.Offset(image.Pt(dp(gtx, 16+8), 0)).Push(gtx.Ops).Pop()
+		text.call.Add(gtx.Ops)
+	}()
+	o.Pop()
+	defer op.Offset(image.Pt(bw-px-padX-dp(gtx, 24), px+padY)).Push(gtx.Ops).Pop()
+	th.bannerDismiss(gtx, id, surface, dp(gtx, 8), dp(gtx, 8))
+	if id != "" {
+		th.tipAt(gtx, id, "Dismiss error", image.Pt(dp(gtx, 24), dp(gtx, 24)), true, 0)
 	}
-	if s.Notice != "" {
-		add(bannerDefault, "info", s.Notice, "")
-	}
-	return pad(16, 0, 0, 0).Layout(gtx, func(gtx C) D { return Col(gtx, kids...) })
 }
 
 // questionDrawer is the agent's question on show (ComposerPendingUserInputPanel.tsx):
 // a header row that folds it away, then the question and its options,
-// each with its digit.
+// each with its digit, in a scroll area at most min(384, 40% of the
+// window) tall (ComposerBanner.Scroll).
 func (th *Theme) questionDrawer(gtx C, s *Scene, joined bool) D {
 	w := gtx.Constraints.Max.X
 	q := s.Questions[min(s.Question, len(s.Questions)-1)]
 	folded := th.in.composer.qFolded == q.Header+"\x00"+q.Text
-	m := op.Record(gtx.Ops)
-	body := pad(4, 4, 4, 4).Layout(gtx, func(gtx C) D {
-		gtx.Constraints.Min.X = gtx.Constraints.Max.X
-		return Col(gtx,
-			rigid(func(gtx C) D { return th.questionHeader(gtx, s, q, folded) }),
-			rigid(func(gtx C) D {
-				if folded {
-					return D{}
-				}
-				return th.questionBody(gtx, s, q)
-			}),
-		)
-	})
-	call := m.Stop()
-	r := image.Rect(0, 0, w, body.Size.Y+dp(gtx, tuck))
-	attachedGlass(gtx, r, joined, bannerDefault)
-	call.Add(gtx.Ops)
+	inner := w - dp(gtx, 8)
+	ig := gtx
+	ig.Constraints = layout.Constraints{Min: image.Pt(inner, 0), Max: image.Pt(inner, 1<<20)}
+	head := record(ig, func(gtx C) D { return th.questionHeader(gtx, s, q, folded) })
+	h := dp(gtx, 4) + head.Size.Y
+	var body recording
+	view := 0
+	if !folded {
+		body = record(ig, func(gtx C) D { return th.questionBody(gtx, s, q) })
+		view = min(body.Size.Y, dp(gtx, 384))
+		if th.in.window.Y > 0 {
+			view = min(view, th.in.window.Y*40/100)
+		}
+	}
+	h += view + dp(gtx, 4)
+	r := image.Rect(0, 0, w, h+dp(gtx, tuck))
+	attachedGlass(gtx, r, joined, false)
+	defer op.Offset(image.Pt(dp(gtx, 4), dp(gtx, 4))).Push(gtx.Ops).Pop()
+	head.call.Add(gtx.Ops)
+	if !folded {
+		defer op.Offset(image.Pt(0, head.Size.Y)).Push(gtx.Ops).Pop()
+		y := th.vscroll(gtx, "question", image.Pt(inner, view), body.Size.Y, body.call)
+		th.scrollFade(gtx, image.Pt(inner, view), y, body.Size.Y-view-y, glass())
+	}
 	return D{Size: r.Max}
+}
+
+// scrollFade is ScrollArea's scrollFade: the content fades into the
+// surface over up to 24dp at an edge it can scroll past, as far as it can
+// (02-primitives port note 16).
+func (th *Theme) scrollFade(gtx C, size image.Point, above, below int, surface color.NRGBA) {
+	band := func(y0, dir, depth int) {
+		if depth <= 0 {
+			return
+		}
+		n := min(depth, dp(gtx, 24))
+		for i := 0; i < n; i++ {
+			a := float64(n-i) / float64(n)
+			y := y0 + dir*i
+			fill(gtx, alpha(surface, uint8(math.Round(a*a*255))), image.Rect(0, y, size.X, y+1), 0)
+		}
+	}
+	band(0, 1, above)
+	band(size.Y-1, -1, below)
 }
 
 // questionHeader is the drawer's toggle row: 36dp, padded 6 16, the
@@ -740,10 +865,10 @@ func (th *Theme) typing(gtx C) bool {
 	return false
 }
 
-// queue is the messages waiting behind the run (QueuedRunsControl.tsx):
-// each a dashed, unfilled bubble at the end of the lane with Send now and
-// remove under it, 12 apart and 16 over the composer. Past three, the
-// first two show and a button shows the rest.
+// queue is the messages waiting behind the run (QueuedRunsControl.tsx),
+// at the foot of the timeline: each a dashed, unfilled bubble at the end
+// of the lane with its actions under it, 12 apart, 16 over what follows.
+// Past three, the first two show and a button shows the rest.
 func (th *Theme) queue(gtx C, s *Scene) D {
 	if len(s.Queue) == 0 {
 		return D{}
@@ -754,12 +879,11 @@ func (th *Theme) queue(gtx C, s *Scene) D {
 		rows = rows[:2]
 	}
 	var kids []layout.FlexChild
-	for i, text := range rows {
-		i, text := i, text
+	for i, q := range rows {
 		if i > 0 {
 			kids = append(kids, rigid(Spacer(0, 12)))
 		}
-		kids = append(kids, rigid(func(gtx C) D { return th.queuedRow(gtx, s, i, text) }))
+		kids = append(kids, rigid(func(gtx C) D { return th.queuedRow(gtx, s, i, q) }))
 	}
 	if len(s.Queue) > 3 {
 		kids = append(kids, rigid(Spacer(0, 8)), rigid(func(gtx C) D {
@@ -770,21 +894,13 @@ func (th *Theme) queue(gtx C, s *Scene) D {
 			return layout.E.Layout(gtx, func(gtx C) D {
 				return pad(0, 4, 0, 0).Layout(gtx, func(gtx C) D {
 					t := Txt{Size: 12, LineH: 16.0 / 12}
-					m := op.Record(gtx.Ops)
-					d := th.inlineButton(gtx, "", label, t, false)
-					call := m.Stop()
-					size := image.Pt(d.Size.X+dp(gtx, 2+14), d.Size.Y)
+					rec := record(gtx, func(gtx C) D { return th.inlineLabel(gtx, label, t, toneMuted, false) })
+					size := image.Pt(rec.Size.X+dp(gtx, 2+14), rec.Size.Y)
 					clicked, hovered := th.localClick(gtx, "queue.all", size)
 					if clicked {
 						th.in.composer.queueAll = !th.in.composer.queueAll
 					}
-					if hovered {
-						t.Color = P.Foreground
-						d = th.inlineButton(gtx, "", label, t, false)
-						underline(gtx, P.Foreground, d, 2, t.Size)
-					} else {
-						call.Add(gtx.Ops)
-					}
+					d := th.inlineLabel(gtx, label, t, toneMuted, hovered)
 					icon, col := "chevron-down", P.MutedForeground
 					if !more {
 						icon = "chevron-up"
@@ -808,69 +924,125 @@ func (th *Theme) queue(gtx C, s *Scene) D {
 
 // queuedRow is one queued message: the bubble, at most 80% of the lane,
 // rounded 16 with a dashed border at muted 40%, its text in muted 14/20;
-// then 4 under it, its actions.
-func (th *Theme) queuedRow(gtx C, s *Scene, i int, text string) D {
+// then 4 under it, its actions 2 apart: Send now, then edit and remove,
+// or while it's in the composer, that and Cancel.
+func (th *Theme) queuedRow(gtx C, s *Scene, i int, q QueuedMessage) D {
 	w := gtx.Constraints.Max.X
 	gtx.Constraints.Min = image.Point{}
-	m := op.Record(gtx.Ops)
 	bg := gtx
 	bg.Constraints = layout.Constraints{Max: image.Pt(w*8/10-dp(gtx, 24), gtx.Constraints.Max.Y)}
-	td := th.cssText(bg, Txt{Size: 14, LineH: 20.0 / 14, Color: P.MutedForeground}, text)
-	call := m.Stop()
-	bw, bh := td.Size.X+dp(gtx, 24), td.Size.Y+dp(gtx, 16)
+	text := record(bg, func(gtx C) D {
+		return th.cssText(gtx, Txt{Size: 14, LineH: 20.0 / 14, Color: P.MutedForeground}, q.Text)
+	})
+	bw, bh := text.Size.X+dp(gtx, 24), text.Size.Y+dp(gtx, 16)
 	func() {
 		defer op.Offset(image.Pt(w-bw, 0)).Push(gtx.Ops).Pop()
 		dashedRRect(gtx, over(alpha(P.MutedForeground, 0x66), P.Background), image.Rect(0, 0, bw, bh), dp(gtx, 16))
 		defer op.Offset(image.Pt(dp(gtx, 12), dp(gtx, 8))).Push(gtx.Ops).Pop()
-		call.Add(gtx.Ops)
+		text.call.Add(gtx.Ops)
 	}()
-	y := bh + dp(gtx, 4)
-	am := op.Record(gtx.Ops)
-	ad := layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-		rigid(th.T3Button(liveID(s, "queue:"+strconv.Itoa(i)+":steer"), Button{Variant: BtnGhostMuted, Size: BtnSizeXs, Icon: "arrow-up", Label: "Send now"})),
-		rigid(Spacer(2, 0)),
-		rigid(th.T3Button(liveID(s, "queue:"+strconv.Itoa(i)+":cancel"), Button{Variant: BtnGhostMuted, Size: BtnSizeIconXs, Icon: "x"})),
-	)
-	acts := am.Stop()
-	off := op.Offset(image.Pt(w-ad.Size.X-dp(gtx, 4), y)).Push(gtx.Ops)
-	acts.Add(gtx.Ops)
-	off.Pop()
-	if id := liveID(s, "queue:"+strconv.Itoa(i)+":steer"); id != "" {
-		tip := "Send into the current turn"
-		if s.State != ThreadRunning {
-			tip = "Start a turn with this message"
-		}
-		th.tipAt(gtx, id, tip, image.Pt(ad.Size.X, ad.Size.Y), true, 0)
+	type action struct {
+		id, tip string
+		b       Button
+		note    string // text in its place
 	}
-	return D{Size: image.Pt(w, y+ad.Size.Y)}
+	id := func(what string) string { return liveID(s, "queue:"+strconv.Itoa(i)+":"+what) }
+	steer := "Send into the current turn"
+	if s.State != ThreadRunning {
+		steer = "Start a turn with this message"
+	}
+	if i == 0 {
+		steer += " (" + ShortcutShift("Enter") + ")"
+	}
+	var acts []action
+	if !q.Editing {
+		acts = append(acts, action{id: id("steer"), tip: steer, b: Button{Variant: BtnGhostMuted, Size: BtnSizeXs, Icon: "arrow-up", Label: "Send now"}})
+	}
+	if q.Editing {
+		acts = append(acts, action{note: "Editing in the composer"}, action{id: id("cancel-edit"), b: Button{Variant: BtnGhost, Size: BtnSizeXs, Label: "Cancel"}})
+	} else {
+		edit := "Edit in the composer"
+		if i == len(s.Queue)-1 {
+			edit += " (" + AltKey("Up") + ")"
+		}
+		acts = append(acts,
+			action{id: id("edit"), tip: edit, b: Button{Variant: BtnGhostMuted, Size: BtnSizeIconXs, Icon: "pencil"}},
+			action{id: id("cancel"), tip: "Remove from queue", b: Button{Variant: BtnGhostMuted, Size: BtnSizeIconXs, Icon: "x"}})
+	}
+	var recs []recording
+	var ids, tips []string
+	aw := 0
+	for j, a := range acts {
+		var r recording
+		if a.note != "" {
+			r = record(gtx, func(gtx C) D {
+				return pad(4, 4, 4, 4).Layout(gtx, func(gtx C) D {
+					return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: P.Foreground, MaxLines: 1}, a.note)
+				})
+			})
+		} else {
+			r = record(gtx, th.T3Button(a.id, a.b))
+		}
+		if j > 0 {
+			aw += dp(gtx, 2)
+		}
+		aw += r.Size.X
+		recs, ids, tips = append(recs, r), append(ids, a.id), append(tips, a.tip)
+	}
+	y := bh + dp(gtx, 4)
+	x := w - aw - dp(gtx, 4)
+	ah := 0
+	for j, r := range recs {
+		func() {
+			defer op.Offset(image.Pt(x, y)).Push(gtx.Ops).Pop()
+			r.call.Add(gtx.Ops)
+			if ids[j] != "" {
+				th.tipAt(gtx, ids[j], tips[j], r.Size, true, 0)
+			}
+		}()
+		x += r.Size.X + dp(gtx, 2)
+		ah = max(ah, r.Size.Y)
+	}
+	return D{Size: image.Pt(w, y+ah)}
 }
 
-// inlineButton is T3's InlineButton (button.tsx), click target id: medium
-// text, muted until the pointer's on it, then foreground and underlined
-// 2dp under the baseline. The picker tone is foreground throughout and
-// underlines 4dp under while open. t gives the size, and the colour when
-// there's no target.
-func (th *Theme) inlineButton(gtx C, id, label string, t Txt, picker bool) D {
+// inlineTone is an InlineButton's tone (button.tsx).
+type inlineTone int
+
+const (
+	toneMuted   inlineTone = iota // muted; on hover foreground, underlined 2dp under
+	toneDefault                   // foreground, underlined 2dp under on hover
+	tonePicker                    // foreground, underlined 4dp under on hover and while open
+)
+
+// inlineButton is T3's InlineButton, click target id: medium text in its
+// tone, at t's size.
+func (th *Theme) inlineButton(gtx C, id, label string, t Txt, tone inlineTone) D {
 	hovered := false
 	if id != "" {
 		c, _ := th.events(gtx, id)
 		hovered = c.Hovered()
 	}
-	t.Font, t.MaxLines = UI(font.Medium), 1
-	if id != "" {
-		t.Color = P.MutedForeground
-		if picker || hovered {
-			t.Color = P.Foreground
-		}
-	} else if t.Color.A == 0 {
-		t.Color = P.MutedForeground
-	}
-	d := th.Text(gtx, t, label)
-	if hovered && !picker {
-		underline(gtx, t.Color, d, 2, t.Size)
-	}
+	d := th.inlineLabel(gtx, label, t, tone, hovered)
 	if id != "" {
 		th.hit(gtx, id, d.Size)
+	}
+	return d
+}
+
+// inlineLabel draws an InlineButton's text, lit as hovered (or open) says.
+func (th *Theme) inlineLabel(gtx C, label string, t Txt, tone inlineTone, hovered bool) D {
+	t.Font, t.MaxLines, t.Color = UI(font.Medium), 1, P.MutedForeground
+	if tone != toneMuted || hovered {
+		t.Color = P.Foreground
+	}
+	d := th.Text(gtx, t, label)
+	if hovered {
+		offset := float32(2)
+		if tone == tonePicker {
+			offset = 4
+		}
+		underline(gtx, t.Color, d, offset, t.Size)
 	}
 	return d
 }
@@ -895,6 +1067,21 @@ type composerUI struct {
 	history  bool    // the arrows may walk the prompt history: no pictures, no question
 	recalled string  // the prompt the history last put in
 	thumbs   []Thumb // the pictures, for their chips
+	// suggestion: the empty prompt shows the provider's guess, which Tab
+	// takes and Escape dismisses; queue is how many messages are queued.
+	suggestion bool
+	queue      int
+	focused    bool        // the prompt had the focus last frame
+	size       image.Point // and was this big
+	held       bool        // ⌘ or Ctrl is down: the send button queues
+	// previewMode is the permissions segment under the pointer, plus one.
+	previewMode  int
+	approvalMenu string // the approval whose More menu is open
+	// The @ menu and the stash list: whether they showed this frame and
+	// the last, and their highlight and rows then, to keep it in view.
+	menuShown, menuWas, stashShown, stashWas bool
+	menuSel, stashSel                        int
+	menuKey                                  string
 }
 
 // localClick makes a size-sized area a target for ui state alone: it
@@ -974,8 +1161,8 @@ func dashedRRect(gtx C, col color.NRGBA, r image.Rectangle, rad int) {
 }
 
 // stripGlass is the context strip's surface-glass: --background at 80%
-// over the canvas.
-func stripGlass() color.NRGBA { return over(alpha(P.Background, 0xcc), P.Background) }
+// over what it blurs (composerBackdrop).
+func stripGlass() color.NRGBA { return over(alpha(P.Background, 0xcc), composerBackdrop()) }
 
 // contextStrip is the row under a new thread's card (BranchToolbar.tsx):
 // page-coloured glass, padded 8 8 0, its permissions chip at the end.
@@ -996,54 +1183,70 @@ func (th *Theme) contextStrip(gtx C, s *Scene, access *image.Rectangle) D {
 
 // commandMenu is the @, / and $ menu (ComposerCommandMenu.tsx): an
 // attached surface 22dp in from the card's sides, rising from 17dp under
-// its top edge, holding up to 288dp of 28dp rows padded 8; with no rows,
-// the line saying why.
+// its top edge. Its list of 28dp rows, padded 8, is at most 288dp tall
+// with its padding and scrolls past that, the highlighted row kept in
+// view with 24dp under it (scroll-pb-6); with no rows, the line saying
+// why.
 func (th *Theme) commandMenu(gtx C, s *Scene, w int) {
 	inset := dp(gtx, drawerInset)
 	cw := w - 2*inset
-	m := op.Record(gtx.Ops)
 	g := gtx
-	g.Constraints = layout.Constraints{Min: image.Pt(cw, 0), Max: image.Pt(cw, dp(gtx, 288))}
-	var ld D
+	g.Constraints = layout.Constraints{Min: image.Pt(cw, 0), Max: image.Pt(cw, 1<<20)}
+	ui := &th.in.composer
+	var list recording
+	view := 0
 	if len(s.Suggest) == 0 {
-		ld = pad(14, 20, 28-float32(tuck), 20).Layout(g, func(gtx C) D {
-			gtx.Constraints.Min.X = gtx.Constraints.Max.X
-			return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: P.SecondaryLabel}, s.SuggestEmpty)
+		list = record(g, func(gtx C) D {
+			return pad(14, 20, 28-float32(tuck), 20).Layout(gtx, func(gtx C) D {
+				gtx.Constraints.Min.X = gtx.Constraints.Max.X
+				return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: P.SecondaryLabel}, s.SuggestEmpty)
+			})
 		})
+		view = list.Size.Y
 	} else {
-		ld = pad(8, 8, 8, 8).Layout(g, func(gtx C) D {
-			gtx.Constraints.Min.X = gtx.Constraints.Max.X
-			var kids []layout.FlexChild
-			for i, it := range s.Suggest {
-				i, it := i, it
-				kids = append(kids, rigid(func(gtx C) D { return th.commandItem(gtx, s, i, it) }))
-			}
-			return Col(gtx, kids...)
+		list = record(g, func(gtx C) D {
+			return pad(8, 8, 8, 8).Layout(gtx, func(gtx C) D {
+				gtx.Constraints.Min.X = gtx.Constraints.Max.X
+				var kids []layout.FlexChild
+				for i, it := range s.Suggest {
+					kids = append(kids, rigid(func(gtx C) D { return th.commandItem(gtx, s, i, it) }))
+				}
+				return Col(gtx, kids...)
+			})
 		})
+		view = min(list.Size.Y, dp(gtx, 288))
+		// A new menu starts at its top; a highlight the keys moved scrolls
+		// into view.
+		key := s.Suggest[0].Prefix + s.Suggest[0].Label + "\x00" + strconv.Itoa(len(s.Suggest))
+		if !ui.menuWas || ui.menuKey != key {
+			th.scrollArea("suggest").y = 0
+		}
+		if !ui.menuWas || ui.menuSel != s.SuggestSel || ui.menuKey != key {
+			top := dp(gtx, 8) + s.SuggestSel*dp(gtx, 28)
+			th.scrollTo("suggest", top-dp(gtx, 8), top+dp(gtx, 28)+dp(gtx, 24), view)
+		}
+		ui.menuKey, ui.menuSel = key, s.SuggestSel
 	}
-	call := m.Stop()
-	h := ld.Size.Y + dp(gtx, tuck)
+	ui.menuShown = true
+	h := view + dp(gtx, tuck)
 	defer op.Offset(image.Pt(inset, dp(gtx, tuck)-h)).Push(gtx.Ops).Pop()
-	r := image.Rect(0, 0, cw, h)
-	attachedGlass(gtx, r, false, bannerDefault)
-	call.Add(gtx.Ops)
+	attachedGlass(gtx, image.Rect(0, 0, cw, h), false, true)
+	if len(s.Suggest) == 0 {
+		list.call.Add(gtx.Ops)
+		return
+	}
+	th.vscroll(gtx, "suggest", image.Pt(cw, view), list.Size.Y, list.call)
 }
 
 // commandItem is one row: 28dp, padded 6 8, rounded 8; its icon, the
 // 12/16 medium label (at most 45%), the muted description and a skill's
-// source badge. The highlighted row is filled with --accent; the pointer
-// moves the highlight.
+// source badge with its icon. The highlighted row is filled with
+// --accent; a pointer moving over a row moves the highlight to it.
 func (th *Theme) commandItem(gtx C, s *Scene, i int, it Suggestion) D {
 	w := gtx.Constraints.Max.X
 	gtx.Constraints.Min = image.Point{}
 	h := dp(gtx, 28)
 	id := liveID(s, "suggest:"+strconv.Itoa(i))
-	if id != "" {
-		c, _ := th.events(gtx, id)
-		if c.Hovered() && i != s.SuggestSel {
-			th.push(Action{ID: "suggest", Kind: "hover", Text: strconv.Itoa(i)})
-		}
-	}
 	g := glass()
 	text := bodyText()
 	if i == s.SuggestSel {
@@ -1063,42 +1266,39 @@ func (th *Theme) commandItem(gtx C, s *Scene, i int, it Suggestion) D {
 	if it.Prefix != "" {
 		pt := t
 		pt.Color = P.SecondaryLabel
-		m := op.Record(gtx.Ops)
-		pd := th.Text(gtx, pt, it.Prefix)
-		call := m.Stop()
+		pd := record(gtx, func(gtx C) D { return th.Text(gtx, pt, it.Prefix) })
 		off := op.Offset(image.Pt(lx, (h-pd.Size.Y)/2)).Push(gtx.Ops)
-		call.Add(gtx.Ops)
+		pd.call.Add(gtx.Ops)
 		off.Pop()
 		lx += pd.Size.X
 	}
 	lg := gtx
 	lg.Constraints = layout.Constraints{Max: image.Pt(max(0, room*45/100-(lx-x)), h)}
-	m := op.Record(gtx.Ops)
-	ld := th.Text(lg, t, it.Label)
-	call := m.Stop()
+	ld := record(lg, func(gtx C) D { return th.Text(gtx, t, it.Label) })
 	off := op.Offset(image.Pt(lx, (h-ld.Size.Y)/2)).Push(gtx.Ops)
-	call.Add(gtx.Ops)
+	ld.call.Add(gtx.Ops)
 	off.Pop()
 	dx := lx + ld.Size.X + dp(gtx, 8)
 	badge := 0
 	if it.Badge != "" {
-		bm := op.Record(gtx.Ops)
-		bd := th.T3Badge(BadgeSecondary, "", it.Badge, g)(gtx)
-		bc := bm.Stop()
+		bd := record(gtx, th.T3Badge(BadgeSecondary, it.BadgeIcon, it.Badge, g))
 		badge = bd.Size.X + dp(gtx, 8)
 		bo := op.Offset(image.Pt(w-dp(gtx, 8)-bd.Size.X, (h-bd.Size.Y)/2)).Push(gtx.Ops)
-		bc.Add(gtx.Ops)
+		bd.call.Add(gtx.Ops)
 		bo.Pop()
 	}
 	dg := gtx
 	dg.Constraints = layout.Constraints{Max: image.Pt(max(0, w-dp(gtx, 8)-badge-dx), h)}
-	m = op.Record(gtx.Ops)
-	dd := th.Text(dg, Txt{Size: 12, LineH: 16.0 / 12, Color: P.SecondaryLabel, MaxLines: 1}, it.Desc)
-	call = m.Stop()
+	dd := record(dg, func(gtx C) D {
+		return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: P.SecondaryLabel, MaxLines: 1}, it.Desc)
+	})
 	do := op.Offset(image.Pt(dx, (h-dd.Size.Y)/2)).Push(gtx.Ops)
-	call.Add(gtx.Ops)
+	dd.call.Add(gtx.Ops)
 	do.Pop()
 	if id != "" {
+		if th.pointerMoved(gtx, id, image.Pt(w, h)) && i != s.SuggestSel {
+			th.push(Action{ID: "suggest", Kind: "hover", Text: strconv.Itoa(i)})
+		}
 		th.hit(gtx, id, image.Pt(w, h))
 	}
 	return D{Size: image.Pt(w, h)}

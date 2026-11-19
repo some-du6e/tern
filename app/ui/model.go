@@ -1,5 +1,7 @@
 package ui
 
+import "time"
+
 // The view model. Every field maps to something the T3 protocol sends (see
 // ../docs): shell threads, turn items, runs, runtime requests. The mockups
 // fill it with fixtures; the client will fill it from the socket.
@@ -57,6 +59,7 @@ const (
 	ItemError    // error
 	ItemTodo     // todo_list
 	ItemThinking // the live "Thinking" row while a run has no reasoning item
+	ItemApproval // an approval waiting on the user, with its answers
 )
 
 type ToolKind int
@@ -91,6 +94,27 @@ type Item struct {
 	Attached int
 	Chips    []string // the labels of the pictures ChipText(1), ChipText(2), … in Text
 	Thumbs   []Thumb  // the attached pictures, as they load
+	Approval *PendingApproval
+}
+
+// PendingApproval is an approval waiting on the user, as the timeline
+// shows it (TimelinePendingApprovalRow.tsx).
+type PendingApproval struct {
+	ID     string // the request: click targets "approval:<decision>:<ID>"
+	Kind   string // command, file-change, file-read, permission, mcp-elicitation
+	Detail string
+	App    string
+	Reason string
+	Live   bool // the provider can still take an answer
+	// Responding: an answer is on its way, so the answers are off.
+	Responding bool
+	// Options are its answers; none means T3's defaults.
+	Options []ApprovalOption
+}
+
+// ApprovalOption is one answer to an approval.
+type ApprovalOption struct {
+	Decision, Label, Warning string
 }
 
 // Question is one of an agent's questions (ComposerPendingUserInputPanel.tsx).
@@ -102,6 +126,8 @@ type Question struct {
 	Chosen   []bool   // which options are picked
 	MultiSel bool
 	NoCustom bool // only an option answers it, nothing typed
+	// Typed: an answer was typed for it while it was on show.
+	Typed bool
 }
 
 type FileChange struct {
@@ -166,6 +192,30 @@ type TraitChoice struct {
 	Label, Desc string
 	Danger      bool // red, for things like Delete
 	Off         bool // shown but can't be picked now
+	Default     bool // the option's default, which the picker's column names
+}
+
+// Permissions is the open permissions menu (ComposerPermissionsSection):
+// the modes the provider supports, in T3's order, and the thread's.
+type Permissions struct {
+	Modes []RuntimeMode
+	Sel   int
+}
+
+// StopPhase is how far a click on Stop has got (ComposerPrimaryActions.tsx).
+type StopPhase int
+
+const (
+	StopIdle     StopPhase = iota
+	StopPending            // clicked: "Stopping…", off
+	StopLanded             // the run can't be stopped any more: "Stopped", off
+	StopTimedOut           // 10s and it hasn't landed: on again
+)
+
+// QueuedMessage is a message queued behind the run (QueuedRunsControl.tsx).
+type QueuedMessage struct {
+	Text    string
+	Editing bool // it's in the composer, being edited
 }
 
 // Stashed is a prompt in the composer's stash (ComposerStashMenu.tsx).
@@ -173,7 +223,7 @@ type Stashed struct {
 	Snippet string  // its text, cut at 90; "(2 images)" without any
 	Thumbs  []Thumb // its pictures
 	Dropped int     // pictures too big to keep
-	Age     string  // "4m", "2h"
+	Age     string  // "just now", "4m ago"
 }
 
 // Suggestion is a row of the composer's @, / and $ menu (ComposerCommandMenu.tsx).
@@ -183,6 +233,9 @@ type Suggestion struct {
 	Label  string
 	Desc   string
 	Badge  string // a skill's source: "Personal", "Project", "System"
+	// BadgeIcon is the badge's lucide icon: blocks, folder, user-round,
+	// settings or package.
+	BadgeIcon string
 }
 
 type SignIn struct {
@@ -242,7 +295,7 @@ type Scene struct {
 	Error                    string       // shown as a dismissable banner
 	Notice                   string       // a quiet status line over the composer, like "Sending…"
 	Empty                    string       // shown instead of messages when no thread is open
-	Access                   *Traits      // the access-mode menu, open over the lock
+	Access                   *Permissions // the permissions menu, open over its chip
 	Account                  *Traits      // the account menu, open over the sidebar footer
 	Projects                 *Traits      // the new-thread project menu, one group per machine
 	Context                  *Traits      // a thread's right-click menu, at the click
@@ -271,26 +324,31 @@ type Scene struct {
 	CanScratch   bool   // the hero offers "or start without a project"
 	ProjectsHero bool   // the Projects menu opens under the heading's project name
 	Placeholder  string
-	Thumbs       []Thumb // the composer's pictures, as tiles over the prompt
-	Provider     string  // "Claude", "Codex", "Gemini": picks the logo
-	Model        string  // the model's short name, on the trigger
-	Effort       string  // the trigger's effort word, "" for none
-	Fast         bool    // the trigger's bolt, for Fast mode
-	Window       string  // the trigger's context window, like "1M"
-	Runtime      string  // the runtime mode: "full-access", "approval-required", …
-	RuntimeChip  bool    // the footer shows the permissions chip: the mode isn't the default
-	Sending      bool    // a send is on its way: the send button spins
-	Queue        []string
-	Questions    []Question
-	Question     int  // the question on show
-	Answering    bool // the answers are on their way
-	Dismissible  bool // the questions can be dismissed unanswered
-	Suggest      []Suggestion
-	SuggestSel   int
-	SuggestEmpty string    // the menu's line while it has no items: still searching, or nothing matched
-	Stash        []Stashed // the stashed prompts, newest first
-	StashOpen    bool      // the stash's drawer is open
-	StashSel     int       // its highlighted row
+	Suggestion   string          // the provider's guess at the next prompt, on offer: the placeholder, which Tab takes
+	Thumbs       []Thumb         // the composer's pictures, as tiles over the prompt
+	Provider     string          // "Claude", "Codex", "Gemini": picks the logo
+	Model        string          // the model's short name, on the trigger
+	Effort       string          // the trigger's effort word, "" for none
+	Fast         bool            // the trigger's bolt, for Fast mode
+	Window       string          // the trigger's context window, like "1M"
+	Runtime      string          // the runtime mode: "full-access", "approval-required", …
+	RuntimeChip  bool            // the footer shows the permissions chip: the mode isn't the default
+	Sending      bool            // a send is on its way: the send button spins
+	Stop         StopPhase       // where a click on Stop has got to
+	Queue        []QueuedMessage // the messages waiting behind the run, at the foot of the timeline
+	// EditingQueued: the composer holds a queued message, and a send updates it.
+	EditingQueued bool
+	Questions     []Question
+	Question      int  // the question on show
+	Answering     bool // the answers are on their way
+	Dismissible   bool // the questions can be dismissed unanswered
+	Suggest       []Suggestion
+	SuggestSel    int
+	SuggestEmpty  string    // the menu's line while it has no items: still searching, or nothing matched
+	Stash         []Stashed // the stashed prompts, newest first
+	StashOpen     bool      // the stash's drawer is open
+	StashSel      int       // its highlighted row
+	Stashed       time.Time // when a prompt was last stashed: the tab pulses for 1.4s
 
 	Changes []FileChange
 	Run     *RunInfo

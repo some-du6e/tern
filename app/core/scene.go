@@ -327,6 +327,7 @@ func (a *App) build(now time.Time) *ui.Scene {
 	if a.draft == "" && a.openID == "" {
 		a.newDraftLocked()
 	}
+	a.guardRequests(now)
 	switch {
 	case a.draft != "":
 		a.draftScene(s)
@@ -661,10 +662,21 @@ func (a *App) items(s *ui.Scene, t *t3.Thread, v *threadView) {
 	folds, hide := a.foldRuns(t, v, list)
 	working := threadState(t) == ui.ThreadRunning
 	thinking := false
+	// A pending approval shows at its request's row, else after the rest.
+	approvals := a.shownApprovals()
+	placed := map[string]bool{}
 	for _, it := range list {
 		k := rowKey(it)
 		if f, ok := folds[k]; ok {
 			s.Items = append(s.Items, f)
+		}
+		if it.Type == "approval_request" && !hide[k] {
+			for _, ap := range approvals {
+				if ap.id == it.RequestID && !placed[ap.id] {
+					placed[ap.id] = true
+					s.Items = append(s.Items, a.approvalRow(ap))
+				}
+			}
 		}
 		if hidden[it.Type] || hide[k] {
 			continue
@@ -729,8 +741,14 @@ func (a *App) items(s *ui.Scene, t *t3.Thread, v *threadView) {
 			s.Items = append(s.Items, ti)
 		}
 	}
-	// Claude's reply text arrives in whole blocks, so show that a run is alive.
-	if working && !thinking {
+	for _, ap := range approvals {
+		if !placed[ap.id] {
+			s.Items = append(s.Items, a.approvalRow(ap))
+		}
+	}
+	// Claude's reply text arrives in whole blocks, so show that a run is
+	// alive, unless it's waiting on an approval.
+	if working && !thinking && len(approvals) == 0 {
 		s.Items = append(s.Items, ui.Item{Kind: ui.ItemThinking, Live: true})
 	}
 	s.MoreAbove = v.more
@@ -848,42 +866,38 @@ func (a *App) foldRuns(t *t3.Thread, v *threadView, list []*t3.TurnItem) (map[st
 // pending approval shows in the timeline, as T3's does; the composer only
 // says a send declines it (composerScene).
 func (a *App) pending(s *ui.Scene, t *t3.Thread, v *threadView) {
-	if req := t.PendingRuntimeRequest; req != nil {
-		var asked *t3.TurnItem
-		for _, it := range v.items {
-			if it.RequestID == req.ID {
-				asked = it
+	if req, asked := a.asked(); asked != nil {
+		a.syncQuestions(req)
+		picked := a.answers[req]
+		for qi, q := range asked.Questions {
+			custom := q.AllowCustomAnswer == nil || *q.AllowCustomAnswer
+			uq := ui.Question{Header: q.Header, Text: q.Question, MultiSel: q.MultiSelect, NoCustom: !custom,
+				Typed: custom && qi != a.comp.question && ui.TrimText(a.comp.custom[qi]) != ""}
+			for oi, o := range q.Options {
+				uq.Options = append(uq.Options, o.Label)
+				uq.Descs = append(uq.Descs, o.Description)
+				uq.Chosen = append(uq.Chosen, picked[qi*100+oi])
 			}
+			s.Questions = append(s.Questions, uq)
 		}
-		if asked != nil && len(asked.Questions) > 0 {
-			picked := a.answers[req.ID]
-			for qi, q := range asked.Questions {
-				uq := ui.Question{Header: q.Header, Text: q.Question, MultiSel: q.MultiSelect,
-					NoCustom: q.AllowCustomAnswer != nil && !*q.AllowCustomAnswer}
-				for oi, o := range q.Options {
-					uq.Options = append(uq.Options, o.Label)
-					uq.Descs = append(uq.Descs, o.Description)
-					uq.Chosen = append(uq.Chosen, picked[qi*100+oi])
-				}
-				s.Questions = append(s.Questions, uq)
-			}
-			s.Dismissible = asked.ResponseMode == "message"
-		}
+		r, known := v.requests[req]
+		s.Dismissible = asked.ResponseMode == "message" || (known && r.ResponseCapability.Type == "message")
+		s.Answering = a.answering(req)
 	}
-	var queued []t3.Run
-	for _, r := range v.runs {
-		if r.Status == "queued" {
-			queued = append(queued, r)
-		}
-	}
-	sort.Slice(queued, func(i, j int) bool { return queued[i].QueuePosition < queued[j].QueuePosition })
-	for _, r := range queued {
+	editing := false
+	for _, r := range a.queuedRuns() {
 		text := t3.StripContext(v.messages[r.UserMessageID].Text)
 		if text == "" {
 			text = "Queued message"
 		}
-		s.Queue = append(s.Queue, firstLine(text))
+		editing = editing || r.ID == a.comp.editing
+		s.Queue = append(s.Queue, ui.QueuedMessage{Text: firstLine(text), Editing: r.ID == a.comp.editing})
 	}
+	if !editing {
+		// It left the queue: it started, or went.
+		a.comp.editing = ""
+	}
+	s.EditingQueued = a.comp.editing != ""
 }
 
 func (a *App) queuedRuns() []t3.Run {
@@ -1011,7 +1025,7 @@ func optionValue(sel t3.ModelSelection, d t3.OptionDescriptor) any {
 }
 
 func (a *App) composerScene(s *ui.Scene, key string) {
-	for _, p := range a.images[key] {
+	for _, p := range a.images[a.imageKey()] {
 		s.Thumbs = append(s.Thumbs, p.thumb)
 	}
 	c := a.choiceFor(key)
@@ -1036,24 +1050,25 @@ func (a *App) composerScene(s *ui.Scene, key string) {
 	if a.picker != nil {
 		s.Picker = a.pickerScene(c)
 	}
-	if a.traitsOpen && m != nil {
+	if a.picker != nil && m != nil {
+		// The picker's effort column: the model's options.
 		s.Traits = traits(c.sel, m)
 	}
 	if a.accessOpen {
-		g := ui.Trait{Label: "Permissions"}
-		for i, rm := range a.runtimeModes(c) {
-			g.Choices = append(g.Choices, ui.TraitChoice{Label: rm.Label, Desc: rm.Desc})
+		modes := a.runtimeModes(c)
+		s.Access = &ui.Permissions{Modes: modes, Sel: -1}
+		for i, rm := range modes {
 			if rm.ID == c.runtime {
-				g.Sel = i
+				s.Access.Sel = i
 			}
 		}
-		s.Access = &ui.Traits{Groups: []ui.Trait{g}}
 	}
+	s.Stop = a.stopPhase(time.Now())
 	for _, it := range a.comp.items {
 		s.Suggest = append(s.Suggest, it.Suggestion)
 	}
 	s.SuggestSel, s.SuggestEmpty = a.comp.sel, a.menuEmpty()
-	a.stashScene(s)
+	a.stashScene(s, time.Now())
 
 	req, qs := a.questions()
 	var q *t3.Question
@@ -1062,9 +1077,15 @@ func (a *App) composerScene(s *ui.Scene, key string) {
 		q = &qs[min(a.comp.question, len(qs)-1)]
 		s.Question = min(a.comp.question, len(qs)-1)
 	}
-	t := a.curThread()
-	approval := a.draft == "" && t != nil && t.PendingRuntimeRequest != nil && t.PendingRuntimeRequest.Kind != "user_input"
-	s.Placeholder = placeholder(approval, q, a.cfg() != nil && len(a.pickerTabs()) == 0)
+	var shown *approval
+	if aps := a.shownApprovals(); len(aps) > 0 {
+		shown = &aps[0]
+	}
+	noProvider := a.cfg() != nil && len(a.pickerTabs()) == 0
+	if a.draft == "" {
+		s.Suggestion = a.offeredSuggestion(a.curThread(), a.view, shown != nil || q != nil || noProvider)
+	}
+	s.Placeholder = placeholder(shown, q, noProvider, s.Suggestion)
 }
 
 // defaultRuntime is the server's default permission mode.
@@ -1102,7 +1123,7 @@ func traits(sel t3.ModelSelection, m *t3.Model) *ui.Traits {
 		case "select":
 			g := ui.Trait{Label: d.Label, Sel: -1}
 			for j, o := range d.Options {
-				g.Choices = append(g.Choices, ui.TraitChoice{Label: o.Label, Desc: o.Description})
+				g.Choices = append(g.Choices, ui.TraitChoice{Label: o.Label, Desc: o.Description, Default: o.IsDefault})
 				if o.ID == v {
 					g.Sel = j
 				}

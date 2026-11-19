@@ -6,6 +6,7 @@ package ui
 import (
 	"image"
 	"image/color"
+	"math"
 
 	"gioui.org/io/system"
 	"gioui.org/op/clip"
@@ -31,6 +32,34 @@ func over(c, bg color.NRGBA) color.NRGBA {
 	a := float32(c.A) / 255
 	mix := func(x, y uint8) uint8 { return uint8(float32(x)*a + float32(y)*(1-a) + 0.5) }
 	return color.NRGBA{R: mix(c.R, bg.R), G: mix(c.G, bg.G), B: mix(c.B, bg.B), A: 0xff}
+}
+
+// linear is an sRGB channel in linear light, 0 to 1.
+func linear(v uint8) float64 {
+	s := float64(v) / 255
+	if s <= 0.04045 {
+		return s / 12.92
+	}
+	return math.Pow((s+0.055)/1.055, 2.4)
+}
+
+// gioAlpha is the alpha at which Gio, blending c in linear light over
+// from, paints to, the colour a browser composites over from: for
+// translucent paint over an unknown surface that's mostly from. It
+// solves the channel where c and from differ most.
+func gioAlpha(c, from, to color.NRGBA) uint8 {
+	type ch struct{ c, f, t uint8 }
+	best, d := ch{}, -1.0
+	for _, x := range []ch{{c.R, from.R, to.R}, {c.G, from.G, to.G}, {c.B, from.B, to.B}} {
+		if dd := math.Abs(linear(x.f) - linear(x.c)); dd > d {
+			best, d = x, dd
+		}
+	}
+	if d < 1e-6 {
+		return 0
+	}
+	a := (linear(best.f) - linear(best.t)) / (linear(best.f) - linear(best.c))
+	return uint8(math.Max(0, math.Min(1, a))*255 + 0.5)
 }
 
 // The theme. P is T3's palette for the light or dark theme the system is in;

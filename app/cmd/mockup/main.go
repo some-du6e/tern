@@ -51,6 +51,10 @@ func main() {
 		{"c3-composer-busy", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, busyScene()) }},
 		{"c4-composer-answers", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, answersScene()) }},
 		{"c4b-composer-stash", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, stashScene()) }},
+		{"c3b-composer-queue-edit", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, queueEditScene()) }},
+		{"c9-composer-permissions", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, permissionsScene()) }},
+		{"c10-composer-suggestion", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, suggestionScene()) }},
+		{"c5b-new-thread-stash", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, heroStashScene()) }},
 		{"c5-new-thread-hero", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, heroScene()) }},
 		{"c6-new-thread-scratch", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, scratchScene()) }},
 		{"c7-composer-dark", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions {

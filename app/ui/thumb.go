@@ -21,9 +21,12 @@ const thumbPx = 128
 
 // Thumb is a picture, shrunk once for its tile and chip.
 type Thumb struct {
-	N  int // its chip's number, 1 to 9, when the text holds ChipRune(N); 0 for a tile alone
-	op paint.ImageOp
-	ok bool
+	N    int    // its chip's number when the text holds ChipRune(N); 0 for a tile alone
+	Name string // the file's name
+	Size int    // and its size in bytes
+	op   paint.ImageOp
+	ok   bool
+	data []byte // the file, for the picture at full size
 }
 
 // NewThumb decodes an image file's bytes and crops it to a square
@@ -31,18 +34,18 @@ type Thumb struct {
 func NewThumb(data []byte) Thumb {
 	src, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
-		return Thumb{}
+		return Thumb{Size: len(data)}
 	}
 	b := src.Bounds()
 	side := min(b.Dx(), b.Dy())
 	if side == 0 {
-		return Thumb{}
+		return Thumb{Size: len(data)}
 	}
 	// The middle square, like a photo grid (object-cover).
 	sq := image.Rect(0, 0, side, side).Add(b.Min).Add(image.Pt((b.Dx()-side)/2, (b.Dy()-side)/2))
 	dst := image.NewRGBA(image.Rect(0, 0, thumbPx, thumbPx))
 	draw.ApproxBiLinear.Scale(dst, dst.Bounds(), src, sq, draw.Src, nil)
-	return Thumb{op: paint.NewImageOp(dst), ok: true}
+	return Thumb{Size: len(data), op: paint.NewImageOp(dst), ok: true, data: data}
 }
 
 // drawThumb paints t sizePx square at the origin, rounded rad, or does

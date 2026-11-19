@@ -12,12 +12,12 @@ import (
 	"github.com/some-du6e/tern/app/ui"
 )
 
-// maxImages is how many pictures one message carries.
-const maxImages = 8
+// maxImages is how many pictures one message carries (chatAttachment.ts).
+const maxImages = ui.MaxChips
 
 type pastedImage struct {
 	id string // the composer's own id, which names its context record
-	n  int    // its number in the composer: ChipText(n) in the text
+	n  int    // its number in the composer: a chip of ChipRune(n) in the text
 	// pending is true until the paste lands in the composer; chip, that it
 	// went in as a chip, not just a tile.
 	pending, chip bool
@@ -32,7 +32,7 @@ var readClipboard = clip.Images
 // message, anything else pastes as text.
 func (a *App) paste(th *ui.Theme) {
 	a.mu.Lock()
-	key := a.composerKey()
+	key := a.imageKey()
 	a.mu.Unlock()
 	if key == "" {
 		th.PasteText("composer")
@@ -53,6 +53,7 @@ func (a *App) pasted(key string, imgs []clip.Image, err error) {
 	thumbs := make([]ui.Thumb, len(imgs))
 	for i, im := range imgs {
 		thumbs[i] = ui.NewThumb(im.Data)
+		thumbs[i].Name = im.Name
 	}
 	a.mu.Lock()
 	if err != nil {
@@ -81,7 +82,7 @@ func (a *App) pasted(key string, imgs []clip.Image, err error) {
 	// tile alone and goes at the end.
 	a.onUI(func(th *ui.Theme) {
 		a.mu.Lock()
-		here := a.composerKey() == key
+		here := a.imageKey() == key
 		text := drafts[key]
 		if here {
 			text = th.EditorText("composer")
@@ -93,7 +94,7 @@ func (a *App) pasted(key string, imgs []clip.Image, err error) {
 			if p.pending && slices.Contains(added, p.id) {
 				p.pending, p.chip = false, chip
 				if chip {
-					markers += p.marker()
+					markers += th.ImageChip(p.n, p.img.Name, len(p.img.Data))
 				} else {
 					p.thumb.N = 0
 				}
@@ -105,8 +106,11 @@ func (a *App) pasted(key string, imgs []clip.Image, err error) {
 			a.changed()
 		case here:
 			th.InsertText("composer", markers)
-		default:
+		case !strings.Contains(key, "\x00"):
+			// Not a question's: the thread's draft keeps them.
 			saveDraft(key, drafts[key]+markers)
+		default:
+			a.changed()
 		}
 	})
 }
@@ -122,7 +126,7 @@ func (a *App) freeNumber(key string) int {
 	for _, p := range a.images[key] {
 		used[p.n] = true
 	}
-	for n := 1; n <= 9; n++ {
+	for n := 1; n <= maxImages; n++ {
 		if !used[n] {
 			a.trash[key] = slices.DeleteFunc(a.trash[key], func(p pastedImage) bool { return p.n == n })
 			return n
@@ -131,22 +135,21 @@ func (a *App) freeNumber(key string) int {
 	return 0
 }
 
-func (p pastedImage) marker() string { return ui.ChipText(p.n) }
-func (p pastedImage) label() string  { return ui.ImageLabel(p.n) }
-
 // syncImages keeps the pictures in step with the composer's text: deleting
 // a picture's chip drops it, and undo bringing the chip back restores it.
-// A tile without a chip stays until it's removed.
+// A tile without a chip stays until it's removed. Call with the lock held.
 func (a *App) syncImages(text string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	key := a.composerKey()
+	key := a.imageKey()
 	if key == "" || len(a.images[key])+len(a.trash[key]) == 0 {
 		return
 	}
+	chips := map[int]bool{}
+	for _, n := range ui.Chips(text) {
+		chips[n] = true
+	}
 	var keep []pastedImage
 	for _, p := range a.images[key] {
-		if p.pending || !p.chip || strings.Contains(text, p.marker()) {
+		if p.pending || !p.chip || chips[p.n] {
 			keep = append(keep, p)
 		} else {
 			a.trash[key] = append(a.trash[key], p)
@@ -154,7 +157,7 @@ func (a *App) syncImages(text string) {
 	}
 	var trash []pastedImage
 	for _, p := range a.trash[key] {
-		if strings.Contains(text, p.marker()) && len(keep) < maxImages {
+		if chips[p.n] && len(keep) < maxImages {
 			keep = append(keep, p)
 		} else {
 			trash = append(trash, p)
@@ -174,7 +177,7 @@ func (a *App) syncImages(text string) {
 func (a *App) unpaste(th *ui.Theme, arg string) {
 	i, err := strconv.Atoi(arg)
 	a.mu.Lock()
-	key := a.composerKey()
+	key := a.imageKey()
 	imgs := a.images[key]
 	if err != nil || i < 0 || i >= len(imgs) {
 		a.mu.Unlock()
@@ -204,7 +207,7 @@ func upload(conn *t3.Conn, imgs []pastedImage) ([]any, []t3.ImageRecord, error) 
 			return nil, nil, errors.New("couldn't upload " + p.img.Name + ": " + err.Error())
 		}
 		out = append(out, at)
-		recs = append(recs, t3.NewImageRecord(p.id, p.label(), at))
+		recs = append(recs, t3.NewImageRecord(p.id, p.img.Name, at))
 	}
 	return out, recs, nil
 }
@@ -217,19 +220,37 @@ func message(body string, imgs []pastedImage, recs []t3.ImageRecord, inline bool
 	if len(recs) == 0 {
 		return map[string]any{"text": body}
 	}
-	var rest []t3.ImageRecord
-	for i, r := range recs {
-		if m := imgs[i].marker(); strings.Contains(body, m) {
-			body = strings.Replace(body, m, r.Token(), 1)
-		} else {
-			rest = append(rest, r)
-		}
-	}
+	body, rest := withTokens(body, imgs, recs)
 	text := t3.WithImages(body, rest)
 	if !inline {
 		return map[string]any{"text": t3.ProjectImages(text, recs)}
 	}
 	return map[string]any{"text": text, "context": map[string]any{"version": 1, "records": recs}}
+}
+
+// withTokens puts each picture's token where its chip is in text, and
+// returns the records of the pictures with no chip there.
+func withTokens(text string, imgs []pastedImage, recs []t3.ImageRecord) (string, []t3.ImageRecord) {
+	byN := map[int]t3.ImageRecord{}
+	for i, p := range imgs {
+		byN[p.n] = recs[i]
+	}
+	used := map[int]bool{}
+	text = ui.ReplaceChips(text, func(n int) string {
+		r, ok := byN[n]
+		if !ok || used[n] {
+			return ""
+		}
+		used[n] = true
+		return r.Token()
+	})
+	var rest []t3.ImageRecord
+	for i, p := range imgs {
+		if !used[p.n] {
+			rest = append(rest, recs[i])
+		}
+	}
+	return text, rest
 }
 
 // mergeMap copies src's keys into dst and returns dst.

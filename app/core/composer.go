@@ -1,6 +1,7 @@
 package core
 
 import (
+	"errors"
 	"path"
 	"regexp"
 	"sort"
@@ -20,21 +21,35 @@ import (
 
 // composerState is the composer's menu, history and questions.
 type composerState struct {
-	trigger   *trigger   // the @, / or $ word at the caret, while its menu is open
-	dismissed string     // the trigger Escape closed, until its word changes
-	items     []menuItem // the menu's rows
-	sel       int        // its highlighted row
-	searching string     // the path search on its way, by query
-	paths     map[string][]t3.Entry
+	trigger   *trigger       // the @, / or $ word at the caret, while its menu is open
+	dismissed *trigger       // the trigger Escape closed: one of its kind at its place stays shut
+	items     []menuItem     // the menu's rows
+	sel       int            // its highlighted row
+	searching string         // the path search on its way, by query
+	found     pathSearch     // the last search's results
+	seen      [2]string      // the prompt and caret the menu was worked out for
 	pos       int            // one past the recalled prompt's place in the thread's prompts; 0 while none is
 	request   string         // the request the questions below are for
 	question  int            // the question on show
 	custom    map[int]string // what was typed for each question
-	sending   bool           // a send is on its way
-	scratch   string         // the scratch project a draft moved to, until the shell has it
-	stash     []stashEntry   // the prompts put aside, newest first
-	stashOpen bool           // their list is open
-	stashSel  int            // its highlighted row
+	// responding is the requests whose answers are on their way.
+	responding map[string]bool
+	sending    bool         // a send is on its way
+	scratch    string       // the scratch project a draft moved to, until the shell has it
+	stash      []stashEntry // the prompts put aside, newest first
+	stashOpen  bool         // their list is open
+	stashSel   int          // its highlighted row
+	stashed    time.Time    // when a prompt was last put aside, for the tab's pulse
+	// editing is the queued run whose message is in the composer, and
+	// editSaved the draft it took the place of.
+	editing, editSaved string
+}
+
+// pathSearch is what projects.searchEntries found for a query in a
+// workspace.
+type pathSearch struct {
+	cwd, query string
+	entries    []t3.Entry
 }
 
 // trigger is a word that opens a menu: its kind, what follows the sign,
@@ -43,10 +58,6 @@ type trigger struct {
 	kind       string // "slash", "skill" or "path"
 	query      string
 	start, end int
-}
-
-func (t *trigger) key(text []rune) string {
-	return t.kind + ":" + strconv.Itoa(t.start) + ":" + string(text[t.start:t.end])
 }
 
 func isSpace(r rune) bool { return r == ' ' || r == '\n' || r == '\t' || r == '\r' }
@@ -194,23 +205,24 @@ func skillLabel(s t3.Skill) string {
 	return s.Name
 }
 
-// skillSource is resolveProviderSkillSourceKind's label for the badge.
-func skillSource(s t3.Skill) string {
+// skillSource is resolveProviderSkillSourceKind's label and icon for the
+// badge (ComposerCommandMenu.tsx).
+func skillSource(s t3.Skill) (label, icon string) {
 	p := strings.ReplaceAll(s.Path, "\\", "/")
 	if strings.Contains(p, "/.codex/plugins/") || strings.Contains(p, "/.agents/plugins/") {
-		return "App"
+		return "App", "blocks"
 	}
 	switch strings.ToLower(strings.TrimSpace(s.Scope)) {
 	case "repo", "repository":
-		return "Repo"
+		return "Repo", "folder"
 	case "project", "workspace", "local":
-		return "Project"
+		return "Project", "folder"
 	case "user", "personal":
-		return "Personal"
+		return "Personal", "user-round"
 	case "system":
-		return "System"
+		return "System", "settings"
 	}
-	return "Provider"
+	return "Provider", "package"
 }
 
 // scoreSkill is scoreProviderSkill: its name first, then its label,
@@ -310,7 +322,8 @@ func slashItems(p *t3.Provider, t *trigger, before string) []menuItem {
 		}
 	}
 	for _, s := range skills {
-		it := menuItem{Suggestion: ui.Suggestion{Prefix: "/skill:", Label: skillLabel(s), Desc: skillDesc(s, ""), Badge: skillSource(s)}, insert: "$" + s.Name + " ", tie: "2\x00" + s.Name}
+		badge, icon := skillSource(s)
+		it := menuItem{Suggestion: ui.Suggestion{Prefix: "/skill:", Label: skillLabel(s), Desc: skillDesc(s, ""), Badge: badge, BadgeIcon: icon}, insert: "$" + s.Name + " ", tie: "2\x00" + s.Name}
 		if q != "" {
 			sq := strings.TrimPrefix(q, "skill:")
 			sc, ok := 0, q == "skill"
@@ -342,7 +355,8 @@ func skillItems(p *t3.Provider, t *trigger) []menuItem {
 	q := strings.ToLower(strings.TrimSpace(strings.TrimLeftFunc(t.query, func(r rune) bool { return unicode.Is(unicode.Sc, r) })))
 	var out []menuItem
 	for _, s := range invocable(p.Skills) {
-		it := menuItem{Suggestion: ui.Suggestion{Label: skillLabel(s), Desc: skillDesc(s, "Run provider skill"), Badge: skillSource(s) + " Skill"}, insert: "$" + s.Name + " ", tie: s.Name}
+		badge, icon := skillSource(s)
+		it := menuItem{Suggestion: ui.Suggestion{Label: skillLabel(s), Desc: skillDesc(s, "Run provider skill"), Badge: badge + " Skill", BadgeIcon: icon}, insert: "$" + s.Name + " ", tie: s.Name}
 		if q != "" {
 			sc, ok := scoreSkill(s, q)
 			if !ok {
@@ -371,37 +385,189 @@ func pathItems(entries []t3.Entry) []menuItem {
 		if dir == "." {
 			dir = ""
 		}
-		out = append(out, menuItem{Suggestion: ui.Suggestion{Icon: icon, Label: name, Desc: dir}, insert: "[" + name + "](" + escapeLink(e.Path) + ") "})
+		out = append(out, menuItem{Suggestion: ui.Suggestion{Icon: icon, Label: name, Desc: dir}, insert: fileLink(e.Path) + " "})
 	}
 	return out
 }
 
-// escapeLink percent-encodes what would end a Markdown link's target.
-func escapeLink(p string) string {
-	return strings.NewReplacer(" ", "%20", "(", "%28", ")", "%29").Replace(p)
+// fileLink is serializeComposerFileLink (shared/composerTrigger.ts): a
+// Markdown link labelled with the path's basename, \ [ and ] escaped, to
+// the path as encodeURI writes it with ( ) # ? and \ encoded too.
+func fileLink(p string) string {
+	base := p[strings.LastIndexAny(p, `/\`)+1:]
+	label := strings.NewReplacer(`\`, `\\`, "[", `\[`, "]", `\]`).Replace(base)
+	return "[" + label + "](" + encodeURI(p) + ")"
+}
+
+// encodeURI is JavaScript's encodeURI followed by T3's own escapes: every
+// UTF-8 byte but letters, digits and ;,/:@&=+$-_.!~*' as %XX.
+func encodeURI(s string) string {
+	const keep = ";,/:@&=+$-_.!~*'"
+	var b strings.Builder
+	for _, c := range []byte(s) {
+		if 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || strings.IndexByte(keep, c) >= 0 {
+			b.WriteByte(c)
+			continue
+		}
+		b.WriteString("%" + strings.ToUpper(strconv.FormatInt(int64(c)|0x100, 16)[1:]))
+	}
+	return b.String()
 }
 
 // ---------- the prompt history ----------
 
+var (
+	reviewComment = regexp.MustCompile(`<review_comment\b[^>]*>[\s\S]*?</review_comment>`)
+	// legacyContext is a context block at the end; RE2 has no backreference,
+	// so recallable checks the closing tag names the opening one.
+	legacyContext  = regexp.MustCompile(`\n*<(terminal_context|element_context|preview_annotation)>\n([\s\S]*?)\n</(terminal_context|element_context|preview_annotation)>\s*$`)
+	legacyHeader   = regexp.MustCompile(`(?m)^- (.+):$`)
+	previewOpening = regexp.MustCompile(`(?m)^<preview_annotation>\s*$`)
+	previewFields  = regexp.MustCompile(`(?m)^(?:Id|Page|Comment|Targets): `)
+	terminalLines  = regexp.MustCompile(`^(.+?) lines? (\d+(?:-\d+)?)$`)
+	automationNote = regexp.MustCompile(`^\[Triggered by schedule task: [^\r\n]+\]\r?\n\r?\n`)
+	automationID   = regexp.MustCompile(`^scheduled-task-message:(.+):\d+:(?:scheduled|manual)$`)
+)
+
+// T3's own prompts, which no one typed: the one that starts a turn for
+// attachments alone (composerContextReferences.ts) and a plan's go-ahead
+// (proposedPlan.ts).
+const (
+	bootstrapPrompt = "[User attached one or more files without additional text. Respond using the conversation context and the attached files.]"
+	planPrompt      = "PLEASE IMPLEMENT THIS PLAN:\n"
+)
+
 // recallable is recallableComposerPrompt (composerPromptHistory.ts): a
 // sent message as the composer would bring it back, without the
-// Ultrathink prefix or its pictures' references.
+// Ultrathink prefix, the review comments and legacy context blocks at its
+// end or its inline references, whose records are gone; T3's own prompts
+// come back as nothing.
 func recallable(text string) string {
 	p := strings.TrimSpace(text)
 	p = strings.TrimPrefix(p, "Ultrathink:\n")
-	p = t3.ReplaceImages(p, func(string) string { return "" })
-	return strings.TrimSpace(p)
+	for p != "" {
+		if q := trimReviewComments(p); q != p {
+			p = q
+			continue
+		}
+		m := legacyContext.FindStringSubmatchIndex(p)
+		if m == nil || p[m[2]:m[3]] != p[m[6]:m[7]] {
+			break
+		}
+		kind, body := p[m[2]:m[3]], p[m[4]:m[5]]
+		if kind == "preview_annotation" && previewOpening.MatchString(body) && !previewFields.MatchString(body) {
+			break
+		}
+		var headers []string
+		for _, h := range legacyHeader.FindAllStringSubmatch(body, -1) {
+			headers = append(headers, h[1])
+		}
+		if kind != "preview_annotation" && len(headers) == 0 {
+			break
+		}
+		p = strings.TrimRight(p[:m[0]], " \t\r\n")
+		if kind == "terminal_context" {
+			p = stripTerminalLabels(p, headers)
+		}
+	}
+	refs := t3.ContextRefs(p)
+	for i := len(refs) - 1; i >= 0; i-- {
+		start, end := refs[i][0], refs[i][1]
+		switch {
+		case end < len(p) && p[end] == ' ':
+			end++
+		case start > 0 && p[start-1] == ' ':
+			start--
+		}
+		p = p[:start] + p[end:]
+	}
+	p = strings.TrimSpace(p)
+	if p == bootstrapPrompt || strings.HasPrefix(p, planPrompt) {
+		return ""
+	}
+	return p
+}
+
+// trimReviewComments drops the review comment blocks that end p.
+func trimReviewComments(p string) string {
+	cut := len(p)
+	blocks := reviewComment.FindAllStringIndex(p, -1)
+	for i := len(blocks) - 1; i >= 0; i-- {
+		if strings.TrimSpace(p[blocks[i][1]:cut]) != "" {
+			break
+		}
+		cut = blocks[i][0]
+	}
+	if cut == len(p) {
+		return p
+	}
+	return strings.TrimRight(p[:cut], " \t\r\n")
+}
+
+// stripTerminalLabels drops the inline @terminal:lines labels a legacy
+// terminal block's headers name, with a space beside each.
+func stripTerminalLabels(p string, headers []string) string {
+	word := func(c byte) bool {
+		return c == '_' || c == '@' || c == '.' || c == '-' || '0' <= c && c <= '9' || 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z'
+	}
+	for _, h := range headers {
+		m := terminalLines.FindStringSubmatch(h)
+		if m == nil {
+			continue
+		}
+		label := "@" + strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(m[1]))), "-") + ":" + m[2]
+		for from := 0; from < len(p); {
+			i := strings.Index(p[from:], label)
+			if i < 0 {
+				break
+			}
+			start, end := from+i, from+i+len(label)
+			if (start > 0 && word(p[start-1])) || (end < len(p) && (p[end] == '-' || '0' <= p[end] && p[end] <= '9')) {
+				from = start + 1
+				continue
+			}
+			switch {
+			case end < len(p) && p[end] == ' ':
+				end++
+			case start > 0 && p[start-1] == ' ':
+				start--
+			}
+			p = p[:start] + p[end:]
+			break
+		}
+	}
+	return p
+}
+
+// typedByUser reports whether a user message is the user's own: not an
+// automation's, another agent's or a guest's (resolveUserMessagePresentation).
+func typedByUser(m t3.Message, text string) bool {
+	if m.Context != nil && len(m.Context.Guest) > 0 && string(m.Context.Guest) != "null" {
+		return false
+	}
+	if m.ScheduledTaskID != "" || m.CreatedBy == "agent" {
+		return false
+	}
+	return !(automationNote.MatchString(text) && automationID.MatchString(m.ID))
 }
 
 // promptHistory is what the thread's user typed, oldest first, a prompt
-// sent twice in a row once.
+// sent twice in a row once (buildComposerPromptHistoryEntries).
 func promptHistory(v *threadView) []string {
 	var out []string
 	for _, it := range v.sorted() {
 		if it.Type != "user_message" {
 			continue
 		}
-		p := recallable(it.Text)
+		m := v.messages[it.MessageID]
+		text := it.Text
+		if text == "" {
+			text = m.Text
+		}
+		if it.ScheduledTaskID != "" || !typedByUser(m, text) {
+			continue
+		}
+		p := recallable(text)
 		if p == "" || (len(out) > 0 && out[len(out)-1] == p) {
 			continue
 		}
@@ -557,11 +723,15 @@ func effortSuffix(sel t3.ModelSelection, m *t3.Model) (word string, fast bool, w
 // ---------- the placeholder ----------
 
 // placeholder is T3's, first that applies (ChatComposer.tsx, §5.2): an
-// approval waiting turns a send into its decline; a question asks for an
-// answer; without a provider there's nothing to send to.
-func placeholder(approval bool, q *t3.Question, noProvider bool) string {
+// approval waiting turns a send into its decline, or its feedback where
+// it takes some; a question asks for an answer; without a provider
+// there's nothing to send to; else the provider's guess at the next
+// prompt, when there's one on offer (the composer adds its Tab key).
+func placeholder(approval *approval, q *t3.Question, noProvider bool, suggestion string) string {
 	switch {
-	case approval:
+	case approval != nil && approval.feedback:
+		return "Send feedback to decline this request"
+	case approval != nil:
 		return "Send a message to decline and redirect the agent"
 	case q != nil && q.AllowCustomAnswer != nil && !*q.AllowCustomAnswer:
 		return "Choose an option above"
@@ -571,6 +741,8 @@ func placeholder(approval bool, q *t3.Question, noProvider bool) string {
 		return "Type your own answer, or leave this blank to use the selected option"
 	case noProvider:
 		return "Enable a provider in Settings to send a message"
+	case suggestion != "":
+		return suggestion
 	}
 	return "Ask anything. @ files, $ skills, / commands"
 }
@@ -580,26 +752,37 @@ func placeholder(approval bool, q *t3.Question, noProvider bool) string {
 // composerChanged follows the prompt: typing ends a walk through the
 // history, and the word at the caret opens, updates or closes the menu.
 func (a *App) composerChanged(th *ui.Theme, text string) {
-	a.syncImages(text)
-	runes := []rune(text)
+	caret := th.EditorCaret("composer")
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	c := &a.comp
+	// A keystroke reports both its change and its caret: work it out once.
+	seen := [2]string{text, strconv.Itoa(caret)}
+	if seen == c.seen {
+		return
+	}
+	c.seen = seen
+	a.syncImages(text)
+	runes := []rune(text)
 	if c.pos > 0 {
 		if h := a.history(); c.pos > len(h) || h[c.pos-1] != text {
 			c.pos = 0
 		}
 	}
-	t := detectTrigger(runes, th.EditorCaret("composer"))
-	if t != nil && t.key(runes) == c.dismissed {
+	t := detectTrigger(runes, caret)
+	// Escape shuts a trigger's kind at its place until the caret leaves it
+	// (useComposerTriggerState.ts).
+	if d := c.dismissed; t != nil && d != nil && t.kind == d.kind && t.start == d.start {
 		t = nil
+	} else {
+		c.dismissed = nil
 	}
 	if t == nil || c.trigger == nil || t.kind != c.trigger.kind || t.query != c.trigger.query {
 		c.sel = 0
 	}
 	c.trigger = t
 	if t == nil {
-		c.items = nil
+		c.items, c.found = nil, pathSearch{}
 		return
 	}
 	p := a.provider(a.choiceFor(a.composerKey()).sel.InstanceID)
@@ -610,15 +793,25 @@ func (a *App) composerChanged(th *ui.Theme, text string) {
 		c.items = skillItems(p, t)
 	case "path":
 		c.items = nil
-		if q := strings.TrimSpace(t.query); q != "" {
-			if entries, ok := c.paths[a.workspace()+"\x00"+q]; ok {
-				c.items = pathItems(entries)
-			} else {
-				a.searchPaths(q)
-			}
+		switch q := pathQuery(t); {
+		case q == "":
+		case c.found.query == q && c.found.cwd == a.workspace():
+			c.items = pathItems(c.found.entries)
+		case c.searching != q:
+			a.searchPaths(q)
 		}
 	}
 	c.sel = min(c.sel, max(0, len(c.items)-1))
+}
+
+// pathQuery is what an @ word searches for: trimmed, and 256 characters at
+// most, which is all the server takes (contracts project.ts).
+func pathQuery(t *trigger) string {
+	q := strings.TrimSpace(t.query)
+	if r := []rune(q); len(r) > 256 {
+		q = string(r[:256])
+	}
+	return q
 }
 
 // menuEmpty is the menu's line while it has no rows: still looking, or
@@ -656,9 +849,9 @@ func (a *App) workspace() string {
 	return e.projects[t.ProjectID].WorkspaceRoot
 }
 
-// searchPaths asks the environment for the paths matching q, after T3's
-// 120ms pause (queries.ts: 80 at most), and fills the menu if the word's
-// still the same when they come. Call with the lock held.
+// searchPaths asks the environment for the paths matching q once the word
+// has settled for T3's 120ms (queries.ts: 80 at most), and fills the menu
+// if the word's still the same when they come. Call with the lock held.
 func (a *App) searchPaths(q string) {
 	cwd := a.workspace()
 	e := a.cur()
@@ -683,15 +876,10 @@ func (a *App) searchPaths(q string) {
 		if a.comp.searching == q {
 			a.comp.searching = ""
 		}
-		if err == nil {
-			if a.comp.paths == nil {
-				a.comp.paths = map[string][]t3.Entry{}
-			}
-			a.comp.paths[cwd+"\x00"+q] = res.Entries
-			if t := a.comp.trigger; t != nil && t.kind == "path" && strings.TrimSpace(t.query) == q {
-				a.comp.items = pathItems(res.Entries)
-				a.comp.sel = 0
-			}
+		if t := a.comp.trigger; err == nil && t != nil && t.kind == "path" && pathQuery(t) == q && a.workspace() == cwd {
+			a.comp.found = pathSearch{cwd: cwd, query: q, entries: res.Entries}
+			a.comp.items = pathItems(res.Entries)
+			a.comp.sel = 0
 		}
 		a.mu.Unlock()
 		a.changed()
@@ -699,7 +887,8 @@ func (a *App) searchPaths(q string) {
 }
 
 // menuKey is the menu's keys: the arrows move the highlight around,
-// Enter and Tab pick it, Escape closes the menu until the word changes.
+// Enter and Tab pick it, Escape closes the menu while the caret stays in
+// that word.
 func (a *App) menuKey(th *ui.Theme, name string) {
 	a.mu.Lock()
 	c := &a.comp
@@ -715,10 +904,7 @@ func (a *App) menuKey(th *ui.Theme, name string) {
 		}
 		a.mu.Unlock()
 	case "⎋":
-		if c.trigger != nil {
-			c.dismissed = c.trigger.key([]rune(th.EditorText("composer")))
-		}
-		c.trigger, c.items = nil, nil
+		c.dismissed, c.trigger, c.items, c.found = c.trigger, nil, nil, pathSearch{}
 		a.mu.Unlock()
 	default:
 		sel := c.sel
@@ -791,7 +977,7 @@ func (a *App) attach() {
 		return
 	}
 	a.mu.Lock()
-	key := a.composerKey()
+	key := a.imageKey()
 	a.mu.Unlock()
 	go func() {
 		imgs, err := a.ChooseImages()
@@ -868,12 +1054,14 @@ func (a *App) moveQuestion(th *ui.Theme, step int) {
 
 // answerAll is Submit (and Enter): once the question on show has its
 // answer, on to the next; at the last, the answers, each what was typed
-// for it or else its picked options' values (buildPendingUserInputAnswers).
+// for it or else its picked options' values (buildPendingUserInputAnswers),
+// with each question's pictures (attachmentsByQuestionId). The options
+// and the prompt are off until the server has them.
 func (a *App) answerAll(th *ui.Theme) {
 	a.mu.Lock()
 	req, qs := a.questions()
 	a.syncQuestions(req)
-	if req == "" || len(qs) == 0 {
+	if req == "" || len(qs) == 0 || a.answering(req) {
 		a.mu.Unlock()
 		return
 	}
@@ -892,16 +1080,113 @@ func (a *App) answerAll(th *ui.Theme) {
 		a.moveQuestion(th, 1)
 		return
 	}
+	pics := map[string][]pastedImage{}
+	for _, q := range qs {
+		if imgs := a.images[a.questionKey(req, q.ID)]; len(imgs) > 0 {
+			pics[q.ID] = imgs
+		}
+	}
+	var conn *t3.Conn
+	if e := a.cur(); e != nil {
+		conn = e.conn
+	}
+	_, thread := splitRef(a.openID)
+	typed := a.comp.custom[a.comp.question]
+	a.comp.responding[req] = true
+	a.guard.release()
 	a.mu.Unlock()
 	th.SetEditorText("composer", "")
-	a.respond(map[string]any{"answers": answers})
+	a.changed()
+	go func() {
+		err := respondAnswers(conn, thread, req, answers, pics)
+		a.mu.Lock()
+		delete(a.comp.responding, req)
+		if err != nil {
+			a.fail(err)
+		} else {
+			for _, q := range qs {
+				delete(a.images, a.questionKey(req, q.ID))
+			}
+		}
+		a.mu.Unlock()
+		a.changed()
+		if err != nil {
+			// Put the last answer back where it was typed.
+			a.onUI(func(th *ui.Theme) {
+				a.mu.Lock()
+				now, _ := a.questions()
+				a.mu.Unlock()
+				if now == req && th.EditorText("composer") == "" {
+					th.SetEditorText("composer", typed)
+				}
+			})
+		}
+	}()
+}
+
+// respondAnswers uploads each question's pictures, puts their tokens where
+// the answer typed for it has their chips, and sends the answers.
+func respondAnswers(conn *t3.Conn, thread, req string, answers map[string]any, pics map[string][]pastedImage) error {
+	if conn == nil || thread == "" {
+		return errors.New("not connected")
+	}
+	cmd := map[string]any{"type": "runtime-request.respond", "threadId": thread, "requestId": req, "answers": answers}
+	byQuestion := map[string]any{}
+	for id, imgs := range pics {
+		attachments, recs, err := upload(conn, imgs)
+		if err != nil {
+			return err
+		}
+		byQuestion[id] = attachments
+		if s, ok := answers[id].(string); ok {
+			answers[id], _ = withTokens(s, imgs, recs)
+		}
+	}
+	if len(byQuestion) > 0 {
+		cmd["attachmentsByQuestionId"] = byQuestion
+	}
+	return conn.Dispatch(cmd)
+}
+
+// answering reports whether req can't take answers now: they're on their
+// way, or the provider can no longer take them. Call with the lock held.
+func (a *App) answering(req string) bool {
+	if a.comp.responding[req] {
+		return true
+	}
+	if a.view != nil {
+		if r, ok := a.view.requests[req]; ok {
+			return r.ResponseCapability.Type == "not_resumable"
+		}
+	}
+	return false
+}
+
+// questionKey is where the pictures for question id of req go
+// (questionAttachmentDraftId). Call with the lock held.
+func (a *App) questionKey(req, id string) string {
+	return a.composerKey() + "\x00" + req + "\x00" + id
+}
+
+// imageKey is where the composer's pictures go: its own, or with a
+// question on show, that question's. Call with the lock held.
+func (a *App) imageKey() string {
+	req, qs := a.questions()
+	if req == "" || len(qs) == 0 {
+		return a.composerKey()
+	}
+	qi := a.comp.question
+	if a.comp.request != req {
+		qi = 0
+	}
+	return a.questionKey(req, qs[min(qi, len(qs)-1)].ID)
 }
 
 // answerFor is question qi's answer so far: what was typed for it, where
 // it takes typed answers, else its picked options' values (the first, for
 // a single choice). Call with the lock held.
 func (a *App) answerFor(req string, qi int, q t3.Question) (any, bool) {
-	if typed := strings.TrimSpace(a.comp.custom[qi]); typed != "" && (q.AllowCustomAnswer == nil || *q.AllowCustomAnswer) {
+	if typed := ui.TrimText(a.comp.custom[qi]); typed != "" && (q.AllowCustomAnswer == nil || *q.AllowCustomAnswer) {
 		return typed, true
 	}
 	var vals []string

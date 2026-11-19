@@ -119,6 +119,12 @@ func chooseImages(expl *explorer.Explorer) ([]clip.Image, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Every file picked gets closed, whatever stops the reading.
+	defer func() {
+		for _, f := range files {
+			f.Close()
+		}
+	}()
 	var out []clip.Image
 	for _, f := range files {
 		data, err := io.ReadAll(io.LimitReader(f, clip.MaxBytes+1))
@@ -126,7 +132,6 @@ func chooseImages(expl *explorer.Explorer) ([]clip.Image, error) {
 		if of, ok := f.(*os.File); ok {
 			name = filepath.Base(of.Name())
 		}
-		f.Close()
 		switch {
 		case err != nil:
 			return out, err
@@ -141,7 +146,7 @@ func chooseImages(expl *explorer.Explorer) ([]clip.Image, error) {
 // moving reports whether anything on screen animates. The sign-in screen
 // schedules its own frames.
 func moving(s *ui.Scene) bool {
-	if s.State == ui.ThreadRunning {
+	if s.State == ui.ThreadRunning || s.Sending {
 		return true
 	}
 	for _, r := range s.Active {

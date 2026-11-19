@@ -59,6 +59,7 @@ func (th *Theme) Desktop(gtx C, s *Scene) D {
 		th.shellKeys(gtx, s)
 	}
 	size := gtx.Constraints.Max
+	th.in.window = size
 	fill(gtx, P.Background, image.Rectangle{Max: size}, 0)
 
 	sw := th.sidebarPx(gtx, s, size.X)
@@ -95,6 +96,12 @@ func (th *Theme) Desktop(gtx C, s *Scene) D {
 		// A click anywhere outside an open menu closes it. The menus are
 		// deferred, so they sit above this.
 		th.hit(gtx, "menus.close", size)
+	}
+	if th.in.preview != nil {
+		// The image dialog goes over the deferred menus too (z 60).
+		m := op.Record(gtx.Ops)
+		th.imageDialog(gtx)
+		op.Defer(gtx.Ops, m.Stop())
 	}
 	return D{Size: size}
 }
@@ -506,6 +513,11 @@ func (th *Theme) canvas(gtx C, s *Scene) {
 			composer.Add(gtx.Ops)
 		}()
 	}
+	// The banner lane is over both (z 30): the thread's error.
+	in(0, size.Y, func(gtx C) D {
+		th.threadError(gtx, s, w)
+		return D{}
+	})
 	if cardLeft >= 0 {
 		defer op.Offset(image.Pt(cardX, dp(gtx, cardInset))).Push(gtx.Ops).Pop()
 		g := gtx

@@ -15,55 +15,74 @@ import (
 
 // A new thread's hero (DraftHeroHeadline.tsx, docs/ui/07-composer.md
 // §2.16): the composer and its context strip centred in the canvas, the
-// question 16dp over them and any notices 16dp under.
+// question 16dp over them (flush with the stash's tab when it shows) and
+// any notices 16dp under.
 
 // heroSize is the heading's type: text-3xl, 30/36, tracked tight
-// (−0.025em).
-const heroSize, heroLine, heroTrack = 30, 36, -0.025
+// (−0.025em); below 640 it's text-2xl, 24/32.
+const (
+	heroSize, heroLine, heroTrack = 30.0, 36.0, -0.025
+	heroSmall, heroSmallLine      = 24.0, 32.0
+)
 
-// hero lays out the new thread's canvas, the lane wide.
+// hero lays out the new thread's canvas, the lane wide; on a phone, in
+// its margins.
 func (th *Theme) hero(gtx C, s *Scene, compact bool) D {
 	size := gtx.Constraints.Max
+	if compact {
+		th.phoneMargins(gtx, true, func(gtx C) D {
+			gtx.Constraints.Min = gtx.Constraints.Max
+			return th.hero(gtx, s, false)
+		})
+		return D{Size: size}
+	}
 	w := size.X
-	m := op.Record(gtx.Ops)
 	sg := gtx
 	sg.Constraints = layout.Constraints{Min: image.Pt(w, 0), Max: image.Pt(w, size.Y)}
-	sd := th.composerStack(sg, s, true)
-	stack := m.Stop()
+	stack := record(sg, func(gtx C) D { return th.composerStack(gtx, s, true) })
 	// The 20dp spacer goes under the stack; T3 centres the two, or below
 	// 34rem of window drops them to the bottom.
-	h := sd.Size.Y + dp(gtx, 20)
+	h := stack.Size.Y + dp(gtx, 20)
 	top := max(0, (size.Y-h)/2)
-	if size.Y+dp(gtx, topBarH) < dp(gtx, 544) {
+	if th.in.window.Y < dp(gtx, 544) {
 		top = max(0, size.Y-h)
 	}
 
-	hm := op.Record(gtx.Ops)
 	hg := gtx
 	hg.Constraints = layout.Constraints{Min: image.Pt(w, 0), Max: image.Pt(w, size.Y)}
-	hd := th.heroHeadline(hg, s)
-	head := hm.Stop()
-	off := op.Offset(image.Pt(0, top-dp(gtx, 16)-hd.Size.Y)).Push(gtx.Ops)
-	head.Add(gtx.Ops)
+	head := record(hg, func(gtx C) D { return th.heroHeadline(gtx, s) })
+	// The headline's wrapper is pb-4, none while the stash's tab shows.
+	gap := dp(gtx, 16)
+	if len(s.Stash) > 0 {
+		gap = 0
+	}
+	off := op.Offset(image.Pt(0, top-gap-head.Size.Y)).Push(gtx.Ops)
+	head.call.Add(gtx.Ops)
 	off.Pop()
 
 	off = op.Offset(image.Pt(0, top)).Push(gtx.Ops)
-	stack.Add(gtx.Ops)
+	stack.call.Add(gtx.Ops)
 	off.Pop()
 
-	off = op.Offset(image.Pt(0, top+sd.Size.Y)).Push(gtx.Ops)
+	off = op.Offset(image.Pt(0, top+stack.Size.Y)).Push(gtx.Ops)
 	th.heroNotices(sg, s)
 	off.Pop()
 	return D{Size: size}
 }
 
 // heroHeadline is the h1, centred: "What should we build in <project>?"
-// on one line where it fits, else the question over the project; "What
-// should we work on?" without one; and under it, a 24dp line offering a
-// thread without a project, or for one, the project picker.
+// on one line where it fits in a window 1024 wide or more, else the
+// question over the project in 16/24; "What should we work on?" without
+// one. A window under 28rem tall drops the question's words. Under it, a
+// 24dp line offering a thread without a project, or for one, the project
+// picker.
 func (th *Theme) heroHeadline(gtx C, s *Scene) D {
 	w := gtx.Constraints.Max.X
 	t := Txt{Size: heroSize, LineH: heroLine / heroSize, Color: P.Foreground}
+	if th.in.window.X < dp(gtx, 640) {
+		t = Txt{Size: heroSmall, LineH: heroSmallLine / heroSmall, Color: P.Foreground}
+	}
+	short := th.in.window.Y < dp(gtx, 448)
 	name := t
 	name.Font = UI(font.Medium)
 	var kids []layout.FlexChild
@@ -79,28 +98,37 @@ func (th *Theme) heroHeadline(gtx C, s *Scene) D {
 	switch {
 	case s.Scratch:
 		kids = append(kids, centre(func(gtx C) D { return th.tracked(gtx, t, "What should we work on?") }))
-	case s.Hero == "":
-		kids = append(kids, centre(func(gtx C) D { return th.tracked(gtx, t, "Add a project to start") }))
 	default:
-		lead := th.trackedWidth(gtx, t, "What should we build in")
-		rest := th.trackedWidth(gtx, name, s.Hero) + th.trackedWidth(gtx, t, "?")
-		if lead+dp(gtx, 8)+rest <= w {
+		// The fit is measured at text-3xl whatever the window, as T3's
+		// measuring copy is.
+		big := Txt{Size: heroSize, LineH: heroLine / heroSize}
+		bigName := big
+		bigName.Font = UI(font.Medium)
+		lead := th.trackedWidth(gtx, big, "What should we build in")
+		rest := th.trackedWidth(gtx, bigName, s.Hero) + th.trackedWidth(gtx, big, "?")
+		switch {
+		case th.in.window.X >= dp(gtx, 1024) && lead+dp(gtx, 8)+rest <= w:
 			kids = append(kids, centre(func(gtx C) D {
-				return layout.Flex{Alignment: layout.Baseline}.Layout(gtx,
-					rigid(func(gtx C) D { return th.tracked(gtx, t, "What should we build in") }),
-					rigid(Spacer(8, 0)),
-					rigid(func(gtx C) D { return th.heroProject(gtx, s, name) }),
-					rigid(func(gtx C) D { return th.tracked(gtx, t, "?") }),
-				)
+				var row []layout.FlexChild
+				if !short {
+					row = append(row, rigid(func(gtx C) D { return th.tracked(gtx, t, "What should we build in") }), rigid(Spacer(8, 0)))
+				}
+				row = append(row, rigid(func(gtx C) D { return th.heroProject(gtx, s, name) }))
+				if !short {
+					row = append(row, rigid(func(gtx C) D { return th.tracked(gtx, t, "?") }))
+				}
+				return layout.Flex{Alignment: layout.Baseline}.Layout(gtx, row...)
 			}))
-		} else {
+		default:
 			// Stacked: the question, then the project in 16/24, 8 apart.
 			small := Txt{Size: 16, LineH: 24.0 / 16, Color: P.Foreground, Font: UI(font.Medium)}
-			kids = append(kids,
-				centre(func(gtx C) D { return th.tracked(gtx, t, "What should we build?") }),
-				rigid(Spacer(0, 8)),
-				centre(func(gtx C) D { return th.heroProject(gtx, s, small) }),
-			)
+			if !short {
+				kids = append(kids,
+					centre(func(gtx C) D { return th.tracked(gtx, t, "What should we build?") }),
+					rigid(Spacer(0, 8)),
+				)
+			}
+			kids = append(kids, centre(func(gtx C) D { return th.heroProject(gtx, s, small) }))
 		}
 	}
 	if s.Scratch || s.CanScratch {
@@ -110,9 +138,14 @@ func (th *Theme) heroHeadline(gtx C, s *Scene) D {
 					sub := Txt{Size: 14, LineH: 20.0 / 14}
 					if s.Scratch {
 						sub.Font, sub.Color = UI(font.Medium), P.Foreground
-						return th.heroProjectText(gtx, s, sub, "No project")
+						return th.heroProjectText(gtx, s, sub, "No project", false)
 					}
-					return th.inlineButton(gtx, liveID(s, "project.scratch"), "or start without a project", sub, false)
+					id := liveID(s, "project.scratch")
+					d := th.inlineButton(gtx, id, "or start without a project", sub, toneMuted)
+					if id != "" {
+						th.tipAt(gtx, id, ShortcutAlt("N"), d.Size, false, 0)
+					}
+					return d
 				})
 			})
 		}))
@@ -121,40 +154,39 @@ func (th *Theme) heroHeadline(gtx C, s *Scene) D {
 }
 
 // heroProject is the heading's project picker: T3's picker-tone
-// InlineButton, underlined 4dp under while its menu is open, with the
-// project menu hanging under it.
+// InlineButton, underlined 4dp under on hover and while its menu is open,
+// with the project menu hanging under it and the project's title for a
+// tooltip.
 func (th *Theme) heroProject(gtx C, s *Scene, t Txt) D {
-	return th.heroProjectText(gtx, s, t, s.Hero)
+	return th.heroProjectText(gtx, s, t, s.Hero, true)
 }
 
-func (th *Theme) heroProjectText(gtx C, s *Scene, t Txt, label string) D {
+func (th *Theme) heroProjectText(gtx C, s *Scene, t Txt, label string, tip bool) D {
 	id := liveID(s, "project.hero")
+	hovered := false
 	if id != "" {
-		th.events(gtx, id)
+		c, _ := th.events(gtx, id)
+		hovered = c.Hovered()
 	}
-	tr := float32(0)
-	if t.Size == heroSize {
-		tr = heroTrack
-	}
-	d := th.trackedTrack(gtx, t, label, tr)
+	d := th.tracked(gtx, t, label)
 	open := s.Projects != nil && s.ProjectsHero
-	if open {
+	if open || hovered {
 		underline(gtx, t.Color, d, 4, t.Size)
 	}
 	if id != "" {
 		th.hit(gtx, id, d.Size)
-		th.tipAt(gtx, id, label, d.Size, true, 0)
+		if tip {
+			th.tipAt(gtx, id, label, d.Size, true, 0)
+		}
 	}
 	if open {
 		// The picker opens centred under the name, 5dp down.
-		m := op.Record(gtx.Ops)
 		g := gtx
 		g.Constraints = layout.Constraints{Max: image.Pt(dp(gtx, 640), dp(gtx, 640))}
-		md := th.traitsMenu(g, s, "project", s.Projects)
-		menu := m.Stop()
-		m = op.Record(gtx.Ops)
-		op.Offset(image.Pt((d.Size.X-md.Size.X)/2, d.Size.Y+dp(gtx, 5))).Add(gtx.Ops)
-		menu.Add(gtx.Ops)
+		menu := record(g, func(gtx C) D { return th.traitsMenu(gtx, s, "project", s.Projects) })
+		m := op.Record(gtx.Ops)
+		op.Offset(image.Pt((d.Size.X-menu.Size.X)/2, d.Size.Y+dp(gtx, 5))).Add(gtx.Ops)
+		menu.call.Add(gtx.Ops)
 		op.Defer(gtx.Ops, m.Stop())
 	}
 	return d
@@ -164,7 +196,7 @@ func (th *Theme) heroProjectText(gtx C, s *Scene, t Txt, label string) D {
 // the heading's size.
 func (th *Theme) tracked(gtx C, t Txt, s string) D {
 	tr := float32(0)
-	if t.Size == heroSize {
+	if t.Size == heroSize || t.Size == heroSmall {
 		tr = heroTrack
 	}
 	return th.trackedTrack(gtx, t, s, tr)
@@ -172,10 +204,7 @@ func (th *Theme) tracked(gtx C, t Txt, s string) D {
 
 // trackedWidth is how wide tracked lays s out.
 func (th *Theme) trackedWidth(gtx C, t Txt, s string) int {
-	m := op.Record(gtx.Ops)
-	d := th.tracked(gtx, t, s)
-	m.Stop()
-	return d.Size.X
+	return record(gtx, func(gtx C) D { return th.tracked(gtx, t, s) }).Size.X
 }
 
 // trackedTrack is one line of t with CSS letter-spacing: track ems after

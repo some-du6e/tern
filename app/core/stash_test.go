@@ -26,8 +26,8 @@ func TestStash(t *testing.T) {
 	if th.EditorText("composer") != "" || len(s.Thumbs) != 0 {
 		t.Fatalf("after stashing: %q, %d pictures", th.EditorText("composer"), len(s.Thumbs))
 	}
-	if len(s.Stash) != 1 || s.Stash[0].Snippet != "first idea, spread out" || len(s.Stash[0].Thumbs) != 1 || s.Stash[0].Age != "now" {
-		t.Fatalf("stash = %+v", s.Stash)
+	if len(s.Stash) != 1 || s.Stash[0].Snippet != "first idea, spread out" || len(s.Stash[0].Thumbs) != 1 || s.Stash[0].Age != "just now" || s.Stashed.IsZero() {
+		t.Fatalf("stash = %+v, stashed at %v", s.Stash, s.Stashed)
 	}
 
 	// Nothing typed: the only entry comes back, picture and all.
@@ -57,18 +57,59 @@ func TestStash(t *testing.T) {
 		t.Fatalf("restored into a prompt: %q", got)
 	}
 
-	// The stash persists.
+	// The stash persists, written off the UI's path.
 	th.SetEditorText("composer", "kept")
 	stash()
+	a.stashSaving.Wait()
 	b, err := NewWithStore(a.store, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(b.comp.stash) != 1 || b.comp.stash[0].Prompt != "kept" {
-		t.Fatalf("reloaded: %+v", b.comp.stash)
+	b.envs, b.booted, b.signedIn = a.envs, true, true
+	b.openThread("swiss/t1")
+	if s := b.build(time.Now()); len(s.Stash) != 1 || s.Stash[0].Snippet != "kept" {
+		t.Fatalf("reloaded: %+v", s.Stash)
 	}
 	a.handle(th, ui.Action{ID: "stash.delete:0", Kind: "click"})
 	if s := a.build(time.Now()); len(s.Stash) != 0 {
 		t.Fatalf("after delete: %+v", s.Stash)
+	}
+}
+
+// An entry whose pictures don't fit in the composer stays stashed, and
+// says why, rather than come back without some of them.
+func TestStashRestoreKeepsPictures(t *testing.T) {
+	a := testApp(t)
+	a.openThread("swiss/t1")
+	th := ui.NewTheme()
+	shot := clip.Image{Name: "a.png", Mime: "image/png", Data: pngBytes(t)}
+	for i := 0; i < 4; i++ {
+		a.pasted(a.composerKey(), []clip.Image{shot}, nil)
+	}
+	a.handle(th, ui.Action{ID: "stash.save", Kind: "click"})
+	for i := 0; i < maxImages-2; i++ {
+		a.pasted(a.composerKey(), []clip.Image{shot}, nil)
+	}
+	a.handle(th, ui.Action{ID: "stash.restore:0", Kind: "click"})
+	s := a.build(time.Now())
+	if len(s.Stash) != 1 || len(s.Thumbs) != maxImages-2 || !strings.Contains(s.Error, "stays stashed") {
+		t.Fatalf("restoring 4 into %d: %d stashed, %d pictures, error %q", maxImages-2, len(s.Stash), len(s.Thumbs), s.Error)
+	}
+}
+
+// T3's relative times: "just now", then minutes, hours and days ago, and
+// never weeks (formatRelativeElapsed).
+func TestRelativeAge(t *testing.T) {
+	now := time.Now()
+	for _, c := range []struct {
+		ago  time.Duration
+		want string
+	}{
+		{10 * time.Second, "just now"}, {4 * time.Minute, "4m ago"}, {90 * time.Minute, "1h ago"},
+		{50 * time.Hour, "2d ago"}, {20 * 24 * time.Hour, "20d ago"},
+	} {
+		if got := relativeAge(now.Add(-c.ago), now); got != c.want {
+			t.Errorf("%v ago: %q, want %q", c.ago, got, c.want)
+		}
 	}
 }
