@@ -51,6 +51,9 @@ type diffState struct {
 	// that only the latest came.
 	commits     []t3.BranchCommit
 	commitsNote string
+	// The base ref picker's refs, and what's typed in its search.
+	refs     []ui.DiffBaseRef
+	refQuery string
 	// Each section's folds over the default, and the tree's closed
 	// folders.
 	folds      map[string]map[string]bool
@@ -320,6 +323,112 @@ func (a *App) fetchCommitsLocked(e *envState, t *t3.Thread, ds *diffState) {
 	}()
 }
 
+// fetchRefsLocked lists the refs the branch base can be, local and remote
+// (vcs.listRefs, as DiffPanel.tsx:556-588 asks), the head left out, the
+// search's query passed on.
+func (a *App) fetchRefsLocked(e *envState, t *t3.Thread, ds *diffState) {
+	if e == nil || e.conn == nil {
+		return
+	}
+	conn, dir, head, query := e.conn, cwd(e, t), compareRow(ds, t).Head, strings.TrimSpace(ds.refQuery)
+	go func() {
+		list := func(kind string) []vcsRef {
+			in := map[string]any{"cwd": dir, "refKind": kind, "includeMatchingRemoteRefs": true, "limit": 100}
+			if query != "" {
+				in["query"] = query
+			}
+			var out struct {
+				Refs []vcsRef `json:"refs"`
+			}
+			_ = conn.Call("vcs.listRefs", in, &out)
+			return out.Refs
+		}
+		var local []vcsRef
+		for _, r := range list("local") {
+			if r.Name != head {
+				local = append(local, r)
+			}
+		}
+		refs := pairRefs(local, list("remote"))
+		a.mu.Lock()
+		ds.refs = refs
+		a.mu.Unlock()
+		a.changed()
+	}()
+}
+
+// vcsRef is a ref as vcs.listRefs gives it.
+type vcsRef struct {
+	Name       string `json:"name"`
+	RemoteName string `json:"remoteName"`
+}
+
+// pairRefs makes the picker's choices (baseRefChoices.ts): each local
+// branch with its remote twin, origin's first, then the remote branches
+// left alone.
+func pairRefs(local, remote []vcsRef) []ui.DiffBaseRef {
+	used := map[int]bool{}
+	branch := func(r vcsRef) string {
+		if r.RemoteName != "" && strings.HasPrefix(r.Name, r.RemoteName+"/") {
+			return r.Name[len(r.RemoteName)+1:]
+		}
+		return r.Name
+	}
+	var out []ui.DiffBaseRef
+	for _, l := range local {
+		pick := -1
+		for i, r := range remote {
+			if used[i] || branch(r) != l.Name {
+				continue
+			}
+			if pick < 0 || r.RemoteName == "origin" && remote[pick].RemoteName != "origin" {
+				pick = i
+			}
+		}
+		c := ui.DiffBaseRef{Label: l.Name, Local: l.Name}
+		if pick >= 0 {
+			used[pick], c.Remote = true, remote[pick].Name
+		}
+		out = append(out, c)
+	}
+	for i, r := range remote {
+		if !used[i] {
+			out = append(out, ui.DiffBaseRef{Label: r.Name, Remote: r.Name})
+		}
+	}
+	return out
+}
+
+// shownRefs are the refs matching the search, by label or either name.
+func shownRefs(ds *diffState) []ui.DiffBaseRef {
+	q := strings.ToLower(strings.TrimSpace(ds.refQuery))
+	if q == "" {
+		return ds.refs
+	}
+	var out []ui.DiffBaseRef
+	for _, r := range ds.refs {
+		if strings.Contains(strings.ToLower(r.Label), q) || r.Local != "" && strings.Contains(strings.ToLower(r.Local), q) ||
+			r.Remote != "" && strings.Contains(strings.ToLower(r.Remote), q) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// diffRefSearch is a change in the base ref picker's search: the refs
+// are read again for it.
+func (a *App) diffRefSearch(query string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	e, t := a.thread(a.openID)
+	ds := a.diffs().threads[a.openID]
+	if t == nil || ds == nil || !ds.picker {
+		return
+	}
+	ds.refQuery = query
+	a.fetchRefsLocked(e, t, ds)
+}
+
 // diffPanelLocked is the open thread's Diff surface for the scene, nil
 // while its tab is closed. It starts fetching what its scope needs. Call
 // with the lock held.
@@ -432,7 +541,7 @@ func compareRow(ds *diffState, t *t3.Thread) *ui.DiffCompare {
 		}
 	}
 	if ds.picker {
-		c.Picker = &ui.DiffBasePicker{Automatic: ds.sel.BaseRef == "", Selected: ds.sel.BaseRef}
+		c.Picker = &ui.DiffBasePicker{Automatic: ds.sel.BaseRef == "", Selected: ds.sel.BaseRef, Refs: shownRefs(ds)}
 	}
 	return c
 }
@@ -624,9 +733,23 @@ func (a *App) diffAction(id string) bool {
 	case "diff.base":
 		if !item {
 			ds.picker, ds.menu = !ds.picker, false
+			if ds.picker {
+				ds.refQuery = ""
+				a.fetchRefsLocked(e, t, ds)
+			}
 			break
 		}
 		a.selectLocked(ds, diffSel{Kind: "branch", BaseRef: arg})
+	case "diff.baseswitch":
+		// A ref's switch picks its remote copy, or back its local one.
+		refs := shownRefs(ds)
+		if i, err := strconv.Atoi(arg); err == nil && i >= 0 && i < len(refs) {
+			ref := refs[i].Remote
+			if ds.sel.BaseRef == ref {
+				ref = refs[i].Local
+			}
+			a.selectLocked(ds, diffSel{Kind: "branch", BaseRef: ref})
+		}
 	case "diff.refresh":
 		ds.refreshing = true
 		a.fetchDiffLocked(e, t, ds, ts, true)

@@ -39,6 +39,9 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		a.search = act.Text
 		a.mu.Unlock()
 		return
+	case act.Kind == "change" && id == "diff.base.search":
+		a.diffRefSearch(act.Text)
+		return
 	case act.Kind == "change" && id == "picker.search":
 		a.mu.Lock()
 		if a.picker != nil {
