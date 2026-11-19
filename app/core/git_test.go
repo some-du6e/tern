@@ -10,7 +10,7 @@ import (
 	"github.com/some-du6e/tern/app/ui"
 )
 
-// liveApp is testApp with the swiss environment on a fake socket that
+// liveApp is testApp with the studio environment on a fake socket that
 // streams st as the open thread's Git status.
 func liveApp(t *testing.T, st *t3.VcsStatus, refs ...t3.VcsRef) (*App, *fakeEnv) {
 	t.Helper()
@@ -29,7 +29,7 @@ func liveApp(t *testing.T, st *t3.VcsStatus, refs ...t3.VcsRef) (*App, *fakeEnv)
 	f.on("orchestration.subscribeThread", func(f *fakeEnv, r fakeReq) {})
 	f.on("orchestration.dispatchCommand", func(f *fakeEnv, r fakeReq) { f.exit(r, map[string]any{"sequence": 1}) })
 	e.conn = f.dial(a)
-	a.openThread("swiss/t1")
+	a.openThread("studio/t1")
 	eventually(t, "the status and refs load", func() bool {
 		built(a, time.Now())
 		a.mu.Lock()
@@ -59,7 +59,7 @@ func TestQuickActionAsksOnTheDefaultBranch(t *testing.T) {
 	}
 	a.handle(th, ui.Action{ID: "confirm:continue", Kind: "click"})
 	r := f.wait("git.runStackedAction", 1)
-	if r.Payload["action"] != "commit_push" || r.Payload["cwd"] != "/root/code/goog" || r.Payload["threadId"] != "t1" || r.Payload["featureBranch"] != nil || r.Payload["actionId"] == "" {
+	if r.Payload["action"] != "commit_push" || r.Payload["cwd"] != "/home/dev/code/atlas" || r.Payload["threadId"] != "t1" || r.Payload["featureBranch"] != nil || r.Payload["actionId"] == "" {
 		t.Fatalf("payload %v", r.Payload)
 	}
 	if s := built(a, time.Now()); s.Confirm != nil {
@@ -121,7 +121,7 @@ func TestGitMenuActions(t *testing.T) {
 	if m == nil || m.For != "git" || len(m.Rows) != 3 || !m.Rows[0].Disabled || m.Rows[1].Label != "Push" || m.Rows[2].Label != "Create PR" {
 		t.Fatalf("menu %+v", m)
 	}
-	if r := f.wait("vcs.refreshStatus", 1); r.Payload["cwd"] != "/root/code/goog" {
+	if r := f.wait("vcs.refreshStatus", 1); r.Payload["cwd"] != "/home/dev/code/atlas" {
 		t.Fatalf("opening the menu should refresh the status: %v", r.Payload)
 	}
 	a.handle(th, ui.Action{ID: "card.git:1", Kind: "click"})
@@ -170,7 +170,7 @@ func TestPullAndInit(t *testing.T) {
 		f.exit(r, map[string]any{"status": "pulled", "refName": "feature", "upstreamRef": "origin/feature"})
 	})
 	a.handle(ui.NewTheme(), ui.Action{ID: "card.git", Kind: "click"})
-	if r := f.wait("vcs.pull", 1); r.Payload["cwd"] != "/root/code/goog" {
+	if r := f.wait("vcs.pull", 1); r.Payload["cwd"] != "/home/dev/code/atlas" {
 		t.Fatalf("pull payload %v", r.Payload)
 	}
 	eventually(t, "pulled", func() bool {
@@ -185,7 +185,7 @@ func TestPullAndInit(t *testing.T) {
 	}
 	a.handle(ui.NewTheme(), ui.Action{ID: "card.initgit", Kind: "click"})
 	r := f.wait("vcs.init", 1)
-	if r.Payload["cwd"] != "/root/code/goog" {
+	if r.Payload["cwd"] != "/home/dev/code/atlas" {
 		t.Fatalf("init payload %v", r.Payload)
 	}
 	if !built(a, time.Now()).Card.Initing {
@@ -219,7 +219,7 @@ func TestBranchPicker(t *testing.T) {
 		t.Fatalf("opening the picker should refresh the local status: %v", r.Payload)
 	}
 	a.handle(th, ui.Action{ID: "branch.search", Kind: "change", Text: "MAI"})
-	if r := f.wait("vcs.listRefs", 2); r.Payload["query"] != "MAI" || r.Payload["limit"] != 100.0 || r.Payload["cwd"] != "/root/code/goog" {
+	if r := f.wait("vcs.listRefs", 2); r.Payload["query"] != "MAI" || r.Payload["limit"] != 100.0 || r.Payload["cwd"] != "/home/dev/code/atlas" {
 		t.Fatalf("search payload %v", r.Payload)
 	}
 	eventually(t, "the search's refs", func() bool {
@@ -233,7 +233,7 @@ func TestBranchPicker(t *testing.T) {
 	}
 	a.handle(th, ui.Action{ID: "branch.ref:0", Kind: "click"})
 	r := f.wait("vcs.switchRef", 1)
-	if r.Payload["refName"] != "main" || r.Payload["cwd"] != "/root/code/goog" {
+	if r.Payload["refName"] != "main" || r.Payload["cwd"] != "/home/dev/code/atlas" {
 		t.Fatalf("switch payload %v", r.Payload)
 	}
 	if s := built(a, time.Now()); s.Card.Picker != nil || s.Card.Branch.Label != "main" || !s.Card.Branch.Disabled {
@@ -276,11 +276,11 @@ func TestBranchPickerWorktrees(t *testing.T) {
 	a.mu.Unlock()
 	sub := f.wait("orchestration.subscribeThread", 1)
 	f.chunk(sub, map[string]any{"kind": "snapshot", "projection": map[string]any{"thread": map[string]any{"id": "t1"}, "providerSessions": []any{map[string]any{"id": "ps-1"}}}})
+	// The thread's snapshot, which brings its session, has come once the
+	// thread stops loading.
 	eventually(t, "the worktree's refs and the thread's session", func() bool {
 		s := built(a, time.Now())
-		a.mu.Lock()
-		defer a.mu.Unlock()
-		return s.Card.Branch != nil && !s.Card.Branch.Disabled && a.view.sessions["ps-1"]
+		return s.Card.Branch != nil && !s.Card.Branch.Disabled && s.Empty == ""
 	})
 	th := ui.NewTheme()
 	a.handle(th, ui.Action{ID: "card.branch", Kind: "click"})
@@ -397,7 +397,7 @@ func TestOpenInEditorHere(t *testing.T) {
 		t.Fatalf("open in %+v", o)
 	}
 	a.handle(th, ui.Action{ID: "card.openin", Kind: "click"})
-	if r := f.wait("shell.openInEditor", 1); r.Payload["editor"] != "vscode" || r.Payload["cwd"] != "/root/code/goog" {
+	if r := f.wait("shell.openInEditor", 1); r.Payload["editor"] != "vscode" || r.Payload["cwd"] != "/home/dev/code/atlas" {
 		t.Fatalf("payload %v", r.Payload)
 	}
 	a.handle(th, ui.Action{ID: "card.editors", Kind: "click"})
@@ -420,34 +420,35 @@ func TestOpenInEditorElsewhere(t *testing.T) {
 	a.OpenURL = func(u string) error { opened = append(opened, u); return nil }
 	e := a.envs[0]
 	e.config = &t3.ServerConfig{RemoteOpenTargets: []t3.RemoteOpenTarget{{Kind: "tailscale", Host: "box.example.ts.net", Username: "dev"}}}
-	a.openThread("swiss/t1")
+	a.openThread("studio/t1")
 	s := built(a, time.Now())
 	if o := s.Card.OpenIn; o.Label != "Open in Cursor" || o.Disabled {
 		t.Fatalf("open in %+v", o)
 	}
 	a.handle(ui.NewTheme(), ui.Action{ID: "card.editors", Kind: "click"})
-	if m := built(a, time.Now()).Card.Menu; len(m.Rows) != 2 || m.Rows[1].Label != "Opens over SSH. Needs your key on swiss" {
+	if m := built(a, time.Now()).Card.Menu; len(m.Rows) != 2 || m.Rows[1].Label != "Opens over SSH. Needs your key on studio" {
 		t.Fatalf("menu %+v", m)
 	}
 	a.handle(ui.NewTheme(), ui.Action{ID: "card.openin", Kind: "click"})
-	if len(opened) != 1 || opened[0] != "cursor://vscode-remote/ssh-remote+dev%40box.example.ts.net/root/code/goog" {
+	if len(opened) != 1 || opened[0] != "cursor://vscode-remote/ssh-remote+dev%40box.example.ts.net/home/dev/code/atlas" {
 		t.Fatalf("opened %v", opened)
 	}
 	e.config.RemoteOpenTargets = nil
 	a.handle(ui.NewTheme(), ui.Action{ID: "card.editors", Kind: "click"})
 	s = built(a, time.Now())
-	if o := s.Card.OpenIn; !o.Disabled || s.Card.Menu.Rows[0].Label != "No SSH route to swiss" {
+	if o := s.Card.OpenIn; !o.Disabled || s.Card.Menu.Rows[0].Label != "No SSH route to studio" {
 		t.Fatalf("no route: %+v %+v", o, s.Card.Menu)
 	}
 }
 
 // Renaming commits the trimmed title with thread.metadata.update, refuses
-// an empty one and leaves an unchanged one alone; Escape cancels.
+// an empty one and leaves an unchanged one alone; Escape cancels, and so
+// does the focus moving to a button.
 func TestRenameThread(t *testing.T) {
 	a, f := liveApp(t, status(nil))
 	th := ui.NewTheme()
 	a.handle(th, ui.Action{ID: "header.title", Kind: "double"})
-	if s := built(a, time.Now()); !s.Header.Renaming || th.EditorText("header.title") != "On swiss" {
+	if s := built(a, time.Now()); !s.Header.Renaming || th.EditorText("header.title") != "On studio" {
 		t.Fatalf("renaming %v, %q", s.Header.Renaming, th.EditorText("header.title"))
 	}
 	a.handle(th, ui.Action{ID: "header.title", Kind: "submit", Text: "   "})
@@ -457,7 +458,12 @@ func TestRenameThread(t *testing.T) {
 	a.handle(th, ui.Action{ID: "header.title", Kind: "double"})
 	a.handle(th, ui.Action{ID: "header.title", Kind: "key", Text: "⎋"})
 	a.handle(th, ui.Action{ID: "header.title", Kind: "double"})
-	a.handle(th, ui.Action{ID: "header.title", Kind: "blur", Text: "On swiss"})
+	a.handle(th, ui.Action{ID: "header.title", Kind: "cancel", Text: "Something else"})
+	if s := built(a, time.Now()); s.Header.Renaming {
+		t.Fatal("a press on a button should end the rename")
+	}
+	a.handle(th, ui.Action{ID: "header.title", Kind: "double"})
+	a.handle(th, ui.Action{ID: "header.title", Kind: "blur", Text: "On studio"})
 	a.handle(th, ui.Action{ID: "header.title", Kind: "double"})
 	a.handle(th, ui.Action{ID: "header.title", Kind: "submit", Text: "  Fix the login page "})
 	d := f.wait("orchestration.dispatchCommand:thread.metadata.update", 1)
@@ -471,11 +477,13 @@ func TestRenameThread(t *testing.T) {
 }
 
 // The scripts split runs its script in a new terminal in the thread's
-// drawer, typed in once the shell's there, and remembers it.
+// drawer, typed in once the shell's there; one run from the menu becomes
+// the split's. A draft has no terminal to run one in yet, and says so
+// without making it the split's.
 func TestRunScript(t *testing.T) {
 	a, f := liveApp(t, status(nil))
-	a.envs[0].projects["p1"] = t3.Project{ID: "p1", Title: "goog", WorkspaceRoot: "/root/code/goog",
-		Scripts: []t3.ProjectScript{{ID: "dev", Name: "Dev", Command: "npm run dev", Icon: "play"}}}
+	a.envs[0].projects["p1"] = t3.Project{ID: "p1", Title: "atlas", WorkspaceRoot: "/home/dev/code/atlas",
+		Scripts: []t3.ProjectScript{{ID: "dev", Name: "Dev", Command: "npm run dev", Icon: "play"}, {ID: "test", Name: "Test", Command: "npm test", Icon: "test"}}}
 	f.on("terminal.attach", func(f *fakeEnv, r fakeReq) {
 		f.chunk(r, map[string]any{"type": "snapshot", "snapshot": map[string]any{"status": "running", "history": ""}})
 	})
@@ -483,15 +491,60 @@ func TestRunScript(t *testing.T) {
 	if sc := built(a, time.Now()).Card.Scripts; sc.Primary != "Dev" || sc.Icon != "play" {
 		t.Fatalf("scripts %+v", sc)
 	}
-	a.handle(ui.NewTheme(), ui.Action{ID: "card.script", Kind: "click"})
-	if r := f.wait("terminal.attach", 1); r.Payload["cwd"] != "/root/code/goog" || r.Payload["threadId"] != "t1" {
+	th := ui.NewTheme()
+	a.handle(th, ui.Action{ID: "card.script", Kind: "click"})
+	if r := f.wait("terminal.attach", 1); r.Payload["cwd"] != "/home/dev/code/atlas" || r.Payload["threadId"] != "t1" {
 		t.Fatalf("attach %v", r.Payload)
 	}
 	if w := f.wait("terminal.write", 1); w.Payload["data"] != " npm run dev\r" {
 		t.Fatalf("write %v", w.Payload)
 	}
-	if s := built(a, time.Now()); s.Term == nil || a.lastScripts["p1"] != "dev" {
-		t.Fatalf("drawer %v, last %q", s.Term != nil, a.lastScripts["p1"])
+	if s := built(a, time.Now()); s.Term == nil {
+		t.Fatal("the drawer should be open")
+	}
+	a.handle(th, ui.Action{ID: "card.scripts", Kind: "click"})
+	if m := built(a, time.Now()).Card.Menu; m == nil || len(m.Rows) != 2 || m.Rows[1].Label != "Test" || m.Rows[1].Icon != "flask-conical" {
+		t.Fatalf("scripts menu %+v", m)
+	}
+	a.handle(th, ui.Action{ID: "card.scripts:1", Kind: "click"})
+	if w := f.wait("terminal.write", 2); w.Payload["data"] != " npm test\r" {
+		t.Fatalf("write %v", w.Payload)
+	}
+	if sc := built(a, time.Now()).Card.Scripts; sc.Primary != "Test" || sc.Icon != "test" {
+		t.Fatalf("after Test: scripts %+v", sc)
+	}
+	a.handle(th, ui.Action{ID: "header.project", Kind: "click"})
+	a.handle(th, ui.Action{ID: "card.scripts", Kind: "click"})
+	a.handle(th, ui.Action{ID: "card.scripts:0", Kind: "click"})
+	s := built(a, time.Now())
+	if s.Header.Server || s.Error != `Failed to run script "Dev": a new thread has no terminal until its first message` || s.Card.Scripts.Primary != "Test" {
+		t.Fatalf("on a draft: error %q, scripts %+v", s.Error, s.Card.Scripts)
+	}
+}
+
+// A new worktree needs a ref to start from: with none the draft says so
+// and keeps its text, rather than launch in the project's own checkout
+// (planComposerTurn).
+func TestDraftNewWorktreeNeedsABase(t *testing.T) {
+	a, f := liveApp(t, status(func(s *t3.VcsStatus) { s.RefName = "" }))
+	th := ui.NewTheme()
+	a.handle(th, ui.Action{ID: "header.project", Kind: "click"})
+	a.handle(th, ui.Action{ID: "card.run", Kind: "click"})
+	a.handle(th, ui.Action{ID: "card.run:2", Kind: "click"})
+	if s := built(a, time.Now()); s.Card.Run.Workspace != "folder-git-2" || s.Card.Branch == nil || s.Card.Branch.Label != "Select ref" {
+		t.Fatalf("run %+v, branch %+v", s.Card.Run, s.Card.Branch)
+	}
+	a.mu.Lock()
+	a.choices["draft"] = &choice{sel: t3.ModelSelection{InstanceID: "claude", Model: "claude-opus"}}
+	a.mu.Unlock()
+	th.SetEditorText("composer", "Start on the parser")
+	a.handle(th, ui.Action{ID: "composer", Kind: "submit", Text: "Start on the parser"})
+	if s := built(a, time.Now()); s.Error != "Select a base branch before sending in New worktree mode." || th.EditorText("composer") != "Start on the parser" {
+		t.Fatalf("error %q, composer %q", s.Error, th.EditorText("composer"))
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := len(f.requests("orchestration.launchThread")); n != 0 {
+		t.Fatalf("%d launches", n)
 	}
 }
 

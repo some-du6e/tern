@@ -12,6 +12,7 @@ import (
 	"gioui.org/f32"
 	"gioui.org/font"
 	"gioui.org/io/clipboard"
+	"gioui.org/io/event"
 	"gioui.org/io/key"
 	"gioui.org/layout"
 	"gioui.org/op"
@@ -57,8 +58,12 @@ func (th *Theme) Desktop(gtx C, s *Scene) D {
 	}
 	if s.Live {
 		th.shellKeys(gtx, s)
+		if s.Menu != nil {
+			th.menuOutside(gtx)
+		}
 	}
 	size := gtx.Constraints.Max
+	th.in.winW = size.X
 	fill(gtx, P.Background, image.Rectangle{Max: size}, 0)
 
 	sw := th.sidebarPx(gtx, s, size.X)
@@ -88,21 +93,24 @@ func (th *Theme) Desktop(gtx C, s *Scene) D {
 	if s.Diff != nil {
 		th.diffWindow(gtx, s.Diff)
 	}
-	if s.Context != nil {
-		th.contextMenu(gtx, size, s)
-	}
 	if m := s.Card; m != nil && m.Menu != nil && m.Menu.AtPointer {
-		// The card's own menu and its rows' copy menus open at the click.
-		w := dp(gtx, 232)
-		if m.Menu.For != "items" {
-			w = dp(gtx, 180)
-		}
-		th.menuAtPointer(gtx, size, func(gtx C) D { return th.cardMenu(gtx, m.Menu, w) })
+		// The card's own menu opens at the click.
+		th.menuAtPointer(gtx, size, func(gtx C) D { return th.cardMenu(gtx, m.Menu, dp(gtx, 232)) })
+	} else if m == nil || m.Menu == nil {
+		th.in.cardMenu.open = "" // the next menu starts afresh
 	}
 	if s.Live && menuOpen(s) {
-		// A click anywhere outside an open menu closes it. The menus are
-		// deferred, so they sit above this.
+		// A click anywhere outside an open menu closes it, and goes no
+		// further. The menus are deferred, so they sit above this.
 		th.hit(gtx, "menus.close", size)
+	}
+	if s.Menu != nil {
+		th.contextMenu(gtx, size, s)
+		if s.Live {
+			th.watchOutside(gtx, size)
+		}
+	} else {
+		th.in.menu.open = false
 	}
 	if s.Confirm != nil {
 		th.confirmDialog(gtx, s.Confirm, size)
@@ -113,12 +121,13 @@ func (th *Theme) Desktop(gtx C, s *Scene) D {
 	return D{Size: size}
 }
 
-// menuOpen reports whether a menu or popover is up, for a click outside
-// or Escape to close.
+// menuOpen reports whether a menu or popover is up that a click outside
+// closes, swallowing the click, or Escape. The thread's actions menu lets
+// the click through, and takes its own keys.
 func menuOpen(s *Scene) bool {
 	card := s.Card != nil && (s.Card.Menu != nil || s.Card.Picker != nil || checksOpen(s.Card))
 	return s.Picker != nil || s.Traits != nil || s.Access != nil || s.Account != nil || s.Machines != nil ||
-		s.Projects != nil || s.Context != nil || s.Details || card
+		s.Projects != nil || s.Details || card
 }
 
 // checksOpen reports whether a pull request row's checks popover is open.
@@ -137,15 +146,22 @@ func checksOpen(d *ThreadDetails) bool {
 // shellKeys handles T3's shell shortcuts (keybindings.ts): mod+B the
 // sidebar, mod+J the terminal, mod+Alt+B the right panel, mod+Shift+B the
 // thread details, mod+O Open in editor; and Escape, which closes the open
-// menu or popover, or answers the dialog's Abort.
+// menu or popover a level at a time, or answers the dialog's Abort.
 func (th *Theme) shellKeys(gtx C, s *Scene) {
+	filters := []event.Filter{
+		key.Filter{Name: "B", Required: key.ModShortcut, Optional: key.ModShift | key.ModAlt},
+		key.Filter{Name: "J", Required: key.ModShortcut},
+		key.Filter{Name: "O", Required: key.ModShortcut},
+	}
+	// Gio hands a key to the first handler that asks for it, and this one
+	// asks first: Escape is the shell's only while it has something to
+	// close and the focus isn't on a field, terminal or menu of its own.
+	if (s.Confirm != nil || s.Alert != nil || menuOpen(s)) && !th.focusTakesEscape(gtx) {
+		filters = append(filters, key.Filter{Name: key.NameEscape})
+	}
+	shift, alt := key.ModShift, key.ModAlt
 	for {
-		ev, ok := gtx.Event(
-			key.Filter{Name: "B", Required: key.ModShortcut, Optional: key.ModShift | key.ModAlt},
-			key.Filter{Name: "J", Required: key.ModShortcut},
-			key.Filter{Name: "O", Required: key.ModShortcut},
-			key.Filter{Name: key.NameEscape},
-		)
+		ev, ok := gtx.Event(filters...)
 		if !ok {
 			return
 		}
@@ -153,27 +169,39 @@ func (th *Theme) shellKeys(gtx C, s *Scene) {
 		if !ok || ke.State != key.Press {
 			continue
 		}
+		mods := ke.Modifiers & (shift | alt)
 		switch {
 		case ke.Name == key.NameEscape && s.Confirm != nil:
 			th.push(Action{ID: "confirm:abort", Kind: "click"})
 		case ke.Name == key.NameEscape && s.Alert != nil:
 			th.push(Action{ID: "alert:cancel", Kind: "click"})
-		case ke.Name == key.NameEscape && menuOpen(s):
-			th.push(Action{ID: "menus.close", Kind: "click"})
-		case ke.Name == "J" && hasProject(s):
+		case ke.Name == key.NameEscape:
+			th.push(Action{ID: "menus.escape", Kind: "click"})
+		case ke.Name == "J" && panels(s):
 			th.push(Action{ID: "terminal.toggle", Kind: "click"})
 		case ke.Name == "O" && s.Card != nil && s.Card.OpenIn != nil && !s.Card.OpenIn.Disabled:
 			th.push(Action{ID: "card.openin", Kind: "click"})
-		case ke.Name == "B" && ke.Modifiers.Contain(key.ModShift) && s.Card != nil:
+		case ke.Name == "B" && mods == shift && s.Card != nil:
 			// The keyboard's open shows the card's first row focused.
 			th.in.keyFocus = true
 			th.push(th.detailsAction())
-		case ke.Name == "B" && ke.Modifiers.Contain(key.ModAlt) && hasProject(s):
+		case ke.Name == "B" && mods == alt && panels(s):
 			th.push(Action{ID: "browser.toggle", Kind: "click"})
-		case ke.Name == "B" && !ke.Modifiers.Contain(key.ModShift|key.ModAlt):
+		case ke.Name == "B" && mods == 0:
 			th.push(Action{ID: "sidebar.toggle", Kind: "click"})
 		}
 	}
+}
+
+// focusTakesEscape reports whether the focus is on something with its own
+// Escape: a text field, the terminal, the browser panel or a menu.
+func (th *Theme) focusTakesEscape(gtx C) bool {
+	for _, ed := range th.in.editors {
+		if gtx.Focused(ed) {
+			return true
+		}
+	}
+	return gtx.Focused(&th.in.term) || gtx.Focused(&th.in.browser) || gtx.Focused(&th.in.menu.tag) || gtx.Focused(&th.in.cardMenu.tag)
 }
 
 // detailsAction toggles the details card where it fits, else its popover.
@@ -332,9 +360,9 @@ type titleButton struct {
 	pressed  bool
 	disabled bool
 	muted    bool // the sidebar trigger's grey icon (ghost variant)
-	// tipAlign keeps the tooltip in the window by the edges: -1 lines it up
-	// with the button's left, 1 its right, as T3's collision shift does.
-	tipAlign int
+	// x is the button's left edge in the window, for its tooltip to stay
+	// 5dp inside it.
+	x int
 }
 
 func (th *Theme) titleButtonW(id, tip string, b titleButton) W {
@@ -376,7 +404,7 @@ func (th *Theme) titleButtonW(id, tip string, b titleButton) W {
 			th.hit(gtx, id, r.Max)
 		}
 		if tip != "" {
-			th.tipAt(gtx, id, tip, r.Max, false, b.tipAlign)
+			th.tipInside(gtx, id, tip, r.Max, b.x, th.in.winW)
 		}
 		return D{Size: r.Max}
 	}
@@ -385,13 +413,14 @@ func (th *Theme) titleButtonW(id, tip string, b titleButton) W {
 // sidebarTrigger is the window-level sidebar toggle, just right of the
 // Mac's traffic lights (or 13dp in), centred in the 52dp top bar.
 func (th *Theme) sidebarTrigger(gtx C, s *Scene, visible bool) {
-	defer op.Offset(image.Pt(dp(gtx, th.ControlsLeft+1), dp(gtx, 12))).Push(gtx.Ops).Pop()
+	x := dp(gtx, th.ControlsLeft+1)
+	defer op.Offset(image.Pt(x, dp(gtx, 12))).Push(gtx.Ops).Pop()
 	icon := "panel-left"
 	if visible {
 		icon = "panel-left-close"
 	}
 	th.titleButtonW("sidebar.toggle", "Toggle main sidebar ("+Shortcut("B")+")",
-		titleButton{icon: icon, onArt: visible, muted: true, tipAlign: -1})(gtx)
+		titleButton{icon: icon, onArt: visible, muted: true, x: x})(gtx)
 }
 
 // titlebarControls are the panel toggles fixed at the top right: thread
@@ -405,31 +434,33 @@ func (th *Theme) titlebarControls(gtx C, s *Scene, size image.Point, panelOpen b
 	var ctls []ctl
 	if !panelOpen {
 		ctls = append(ctls, ctl{th.detailsID(), "Toggle thread details (" + ShortcutShift("B") + ")",
-			titleButton{icon: "square-menu", pressed: th.detailsShown(s), disabled: s.Card == nil, tipAlign: 1}})
+			titleButton{icon: "square-menu", pressed: th.detailsShown(s), disabled: s.Card == nil}})
 	}
-	none := !hasProject(s)
+	none := !panels(s)
 	term, right := "Toggle terminal drawer ("+Shortcut("J")+")", "Toggle right panel ("+ShortcutAlt("B")+")"
 	if none {
 		term, right = "Terminal drawer is unavailable", "Right panel is unavailable"
 	}
 	ctls = append(ctls,
-		ctl{"terminal.toggle", term, titleButton{icon: "panel-bottom", pressed: s.Term != nil, disabled: none, tipAlign: 1}},
-		ctl{"browser.toggle", right, titleButton{icon: "panel-right", pressed: s.Web != nil, disabled: none, tipAlign: 1}},
+		ctl{"terminal.toggle", term, titleButton{icon: "panel-bottom", pressed: s.Term != nil, disabled: none}},
+		ctl{"browser.toggle", right, titleButton{icon: "panel-right", pressed: s.Web != nil, disabled: none}},
 	)
 	n := len(ctls)
 	gap := dp(gtx, 4)
 	x := size.X - dp(gtx, 13) - n*dp(gtx, controlSize) - (n-1)*gap
 	for _, c := range ctls {
 		off := op.Offset(image.Pt(x, dp(gtx, 12))).Push(gtx.Ops)
+		c.b.x = x
 		th.titleButtonW(c.id, c.tip, c.b)(gtx)
 		off.Pop()
 		x += dp(gtx, controlSize) + gap
 	}
 }
 
-// hasProject reports whether the open thread or draft is in a project:
-// without one T3 has no terminal or right panel to open.
-func hasProject(s *Scene) bool { return s.Header != nil && s.Header.Project != "" }
+// panels reports whether the terminal drawer and the right panel can
+// open: T3's open in any project. tern's belong to a thread on the server,
+// so a draft has neither until its first message.
+func panels(s *Scene) bool { return s.Header != nil && s.Header.Project != "" && s.Header.Server }
 
 // detailsShown reports whether the details card or its popover is up.
 func (th *Theme) detailsShown(s *Scene) bool {
@@ -499,9 +530,10 @@ func (th *Theme) chatColumn(gtx C, s *Scene, x int, panelOpen, narrow bool) {
 		})
 		if panelOpen {
 			// The details toggle moves into the header while the panel is open.
-			defer op.Offset(image.Pt(size.X-dp(gtx, 12+controlSize), dp(gtx, 12))).Push(gtx.Ops).Pop()
+			bx := size.X - dp(gtx, 12+controlSize)
+			defer op.Offset(image.Pt(bx, dp(gtx, 12))).Push(gtx.Ops).Pop()
 			th.titleButtonW(th.detailsID(), "Toggle thread details ("+ShortcutShift("B")+")",
-				titleButton{icon: "square-menu", pressed: th.detailsShown(s), disabled: s.Card == nil, tipAlign: 1})(gtx)
+				titleButton{icon: "square-menu", pressed: th.detailsShown(s), disabled: s.Card == nil, x: x + bx})(gtx)
 		}
 	}()
 	if drawer > 0 {

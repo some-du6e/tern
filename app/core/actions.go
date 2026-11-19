@@ -14,6 +14,11 @@ import (
 // Handle applies one frame's input. It runs on the UI goroutine, so it may
 // read and write editors; network work goes to goroutines.
 func (a *App) Handle(th *ui.Theme, actions []ui.Action) {
+	if len(actions) > 0 {
+		a.mu.Lock()
+		a.lastInput = time.Now()
+		a.mu.Unlock()
+	}
 	for _, act := range actions {
 		a.handle(th, act)
 	}
@@ -74,7 +79,7 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		a.answer(th)
 		return
 	case act.Kind == "key" && act.Text == "⎋":
-		a.closeMenus()
+		a.escape(th)
 		return
 	case act.Kind == "middle":
 		return
@@ -148,7 +153,7 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 				// The model menu is per environment, so start it afresh,
 				// and the new project's workspace with it.
 				a.draftEnv, a.draft = gs[gi].e.id(), gs[gi].ids[ci]
-				a.draftWorktree, a.draftBase = false, ""
+				a.draftWorktree, a.draftBase, a.draftPath, a.draftBranch = false, "", "", ""
 				delete(a.choices, "draft")
 			}
 		}
@@ -168,6 +173,8 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 			// The details popover hands the focus back to the composer.
 			th.Focus("composer")
 		}
+	case "menus.escape":
+		a.escape(th)
 	case "browser.toggle":
 		a.toggleBrowser()
 		a.mu.Lock()
@@ -261,8 +268,7 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		a.mu.Unlock()
 		_ = a.store.Put("sidebar-hidden", hidden)
 	case "ctx":
-		_, j := split2(arg)
-		a.threadMenu(th, j)
+		a.menuPick(th, arg)
 	case "stop":
 		a.stop()
 	case "more":
@@ -386,97 +392,55 @@ func (a *App) closeMenus() {
 func (a *App) closeMenusLocked() {
 	a.picker, a.traitsOpen, a.accessOpen, a.projectsOpen, a.accountOpen = nil, false, false, false, false
 	a.detailsOpen, a.machinesOpen = false, false
-	a.ctxRef, a.ctxConfirm = "", false
+	a.ctxRef, a.ctxConfirm, a.ctxFrom, a.ctxCopy = "", false, "", ""
 	a.cardMenu, a.branchPicker, a.checksOpen = "", nil, ""
 }
 
-// ctxItem is one entry in a thread's right-click menu.
-type ctxItem struct {
-	verb, label, desc string
-	danger, off       bool
-}
+// cardTriggers are the controls the card's menus open from, which Escape
+// hands the focus back to.
+var cardTriggers = map[string]string{"run": "card.run", "openin": "card.editors", "scripts": "card.scripts", "git": "card.gitmenu"}
 
-// threadItems is the right-click menu for t, like the web sidebar's. Archive
-// and Delete wait until a run stops, as T3's do.
-func (a *App) threadItems(t *t3.Thread) []ctxItem {
-	var out []ctxItem
-	if t.PinnedAt != "" {
-		out = append(out, ctxItem{verb: "unpin", label: "Unpin"})
-	} else {
-		out = append(out, ctxItem{verb: "pin", label: "Pin"})
-	}
-	switch {
-	case later(t.SnoozedUntil):
-		out = append(out, ctxItem{verb: "unsnooze", label: "Wake up"})
-	case t.SettledAt != "":
-		out = append(out, ctxItem{verb: "unsettle", label: "Unsettle"})
-	default:
-		out = append(out, ctxItem{verb: "settle", label: "Settle", desc: "Move it to the done pile"})
-	}
-	out = append(out, ctxItem{verb: "unread", label: "Mark unread"})
-	busy := threadState(t) == ui.ThreadRunning
-	why := ""
-	if busy {
-		why = "Stop the run first"
-	}
-	out = append(out, ctxItem{verb: "archive", label: "Archive", desc: why, off: busy})
-	del := ctxItem{verb: "delete", label: "Delete", desc: why, danger: true, off: busy}
-	if a.ctxConfirm && !busy {
-		del.label, del.desc = "Click again to delete", "The thread and its history go for good"
-	}
-	return append(out, del)
-}
-
-// threadMenu runs entry j of the open right-click menu.
-func (a *App) threadMenu(th *ui.Theme, j int) {
+// escape closes the innermost menu or popover, as Escape does in T3
+// (02-primitives.md port note 9): the thread's menu, a menu off the
+// details card, its branch picker or a checks popover hand the focus back
+// to the control that opened them; then the details popover, which hands
+// it to the composer; then the composer's own menus.
+func (a *App) escape(th *ui.Theme) {
 	a.mu.Lock()
-	e, t := a.thread(a.ctxRef)
-	if t == nil {
-		a.closeMenusLocked()
-		a.mu.Unlock()
-		return
-	}
-	items := a.threadItems(t)
-	if j < 0 || j >= len(items) || items[j].off {
-		a.mu.Unlock()
-		return
-	}
-	verb, r := items[j].verb, a.ctxRef
-	if verb == "delete" && !a.ctxConfirm {
-		a.ctxConfirm = true
-		a.mu.Unlock()
-		return
-	}
-	a.closeMenusLocked()
-	conn := e.conn
-	a.mu.Unlock()
-	if conn == nil {
-		a.mu.Lock()
-		a.fail(errors.New(e.env.Label + " isn't connected"))
-		a.mu.Unlock()
-		return
-	}
-	cmd := map[string]any{"threadId": t.ID}
-	switch verb {
-	case "pin", "unpin", "settle", "archive", "delete":
-		cmd["type"] = "thread." + verb
-	case "unsettle", "unsnooze":
-		cmd["type"], cmd["reason"] = "thread."+verb, "user"
-	case "unread":
-		cmd["type"] = "thread.mark-unread"
-	}
-	if verb == "archive" || verb == "delete" {
-		// It's leaving the inbox, so close its tab too.
-		a.closeTab(th, r)
-	}
-	go func() {
-		if err := conn.Dispatch(cmd); err != nil {
-			a.mu.Lock()
-			a.fail(err)
-			a.mu.Unlock()
-			a.changed()
+	refocus, composer := "", false
+	switch {
+	case a.ctxRef != "" || a.ctxCopy != "":
+		refocus = a.ctxFrom
+		a.ctxRef, a.ctxConfirm, a.ctxFrom, a.ctxCopy = "", false, "", ""
+	case a.cardMenu != "":
+		if !a.cardAtPointer {
+			refocus = cardTriggers[a.cardMenu]
+			if a.cardMenu == "items" {
+				refocus = "card.choose"
+			}
 		}
-	}()
+		a.cardMenu = ""
+	case a.branchPicker != nil:
+		refocus, a.branchPicker = "card.branch", nil
+	case a.checksOpen != "":
+		for i := range a.cardPRs() {
+			if e, _, ref, _ := a.shownPR(i); ref != nil && prKeyOf(e.id(), *ref) == a.checksOpen {
+				refocus = "card.checks:" + strconv.Itoa(i)
+			}
+		}
+		a.checksOpen = ""
+	case a.detailsOpen:
+		a.detailsOpen, composer = false, true
+	default:
+		a.closeMenusLocked()
+	}
+	a.mu.Unlock()
+	switch {
+	case refocus != "":
+		th.FocusTarget(refocus)
+	case composer:
+		th.Focus("composer")
+	}
 }
 
 // switchTo keeps each thread's unsent text: it saves the composer, runs the
@@ -592,7 +556,7 @@ func (a *App) newDraftLocked() bool {
 	}
 	a.closeThreadLocked()
 	a.draftEnv, a.draft = env.id(), project
-	a.draftWorktree, a.draftBase = false, ""
+	a.draftWorktree, a.draftBase, a.draftPath, a.draftBranch = false, "", "", ""
 	delete(a.choices, "draft")
 	return true
 }
@@ -940,7 +904,16 @@ func (a *App) send(th *ui.Theme, queue bool) {
 	sel, body := a.sendable(c.sel, text)
 	runtime := c.runtime
 	draft := a.draft
-	strategy := a.draftStrategyLocked()
+	var strategy map[string]any
+	if draft != "" {
+		var err error
+		if strategy, err = a.draftStrategyLocked(); err != nil {
+			// The text stays in the composer.
+			a.fail(err)
+			a.mu.Unlock()
+			return
+		}
+	}
 	t := a.curThread()
 	smart := e.config != nil && e.config.Environment.Capabilities.ServerResolvedCommandContext
 	inline := e.config != nil && e.config.Environment.Capabilities.InlineMessageContext

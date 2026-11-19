@@ -105,7 +105,7 @@ func (a *App) checkout() (*envState, *t3.Thread, t3.Project, *vcsState) {
 	if e == nil {
 		return nil, nil, p, nil
 	}
-	return e, t, p, a.vcs[vcsKey(e.id(), gitCwd(t, p))]
+	return e, t, p, a.vcs[vcsKey(e.id(), gitCwd(a.worktreeOf(t), p))]
 }
 
 // refreshStatus has the server read the checkout's status again
@@ -139,19 +139,31 @@ func (a *App) refreshStatus(localOnly bool) {
 }
 
 // draftStrategyLocked is where the draft's thread will work
-// (orchestration.launchThread's workspaceStrategy): the project's checkout,
-// or a new worktree from the ref the branch row names. Call with the lock
-// held.
-func (a *App) draftStrategyLocked() map[string]any {
+// (orchestration.launchThread's workspaceStrategy): a new worktree from
+// the ref the branch row names, a worktree the draft took over (the
+// previous one, or a "New thread on" thread's), or the project's checkout,
+// on the branch it was given if any. New worktree mode without a ref to
+// start from refuses to send rather than run in the checkout
+// (planComposerTurn). Call with the lock held.
+func (a *App) draftStrategyLocked() (map[string]any, error) {
 	_, _, _, v := a.checkout()
-	if a.draft == "" || !a.draftWorktree || v == nil {
-		return map[string]any{"type": "root"}
+	var s map[string]any
+	switch {
+	case a.draftWorktree:
+		base := a.branchOf(nil, v)
+		if base == "" {
+			return nil, errors.New("Select a base branch before sending in New worktree mode.")
+		}
+		return map[string]any{"type": "worktree", "baseRef": base}, nil
+	case a.draftPath != "":
+		s = map[string]any{"type": "existing_worktree", "worktreePath": a.draftPath}
+	default:
+		s = map[string]any{"type": "root"}
 	}
-	base := a.branchOf(nil, v)
-	if base == "" {
-		return map[string]any{"type": "root"}
+	if a.draftBranch != "" {
+		s["branch"] = a.draftBranch
 	}
-	return map[string]any{"type": "worktree", "baseRef": base}
+	return s, nil
 }
 
 // failf shows "what: err" in the error banner, from any goroutine.
@@ -593,7 +605,7 @@ func (a *App) openInEditor(editor string) {
 		return
 	}
 	mode, target := remoteOpen(e)
-	cwd, conn, open := gitCwd(t, p), e.conn, a.OpenURL
+	cwd, conn, open := gitCwd(a.worktreeOf(t), p), e.conn, a.OpenURL
 	a.lastEditor = editor
 	if mode == openRemote {
 		a.hintSeen = true
@@ -618,29 +630,33 @@ func (a *App) openInEditor(editor string) {
 }
 
 // runScript runs one of the project's scripts in a new terminal in the
-// thread's drawer, and remembers it as the project's primary.
+// thread's drawer, and remembers it as the project's primary. A draft has
+// no terminal until its first message, so it says it can't yet.
 func (a *App) runScript(sc t3.ProjectScript, projectID string) {
+	what := `Failed to run script "` + sc.Name + `"`
 	a.mu.Lock()
+	if a.openID == "" {
+		a.mu.Unlock()
+		a.failf(what, errors.New("a new thread has no terminal until its first message"))
+		return
+	}
 	a.lastScripts[projectID] = sc.ID
 	last := map[string]string{}
 	for k, v := range a.lastScripts {
 		last[k] = v
 	}
 	d := a.drawers[a.openID]
-	if d == nil && a.openID != "" {
+	if d == nil {
 		d = &drawer{}
 		a.drawers[a.openID] = d
 	}
-	var err error
-	if d != nil {
-		d.open = true
-		// The leading space keeps it out of the shell's history.
-		err = a.newTerminalLocked(d, " "+sc.Command+"\r")
-	}
+	d.open = true
+	// The leading space keeps it out of the shell's history.
+	err := a.newTerminalLocked(d, " "+sc.Command+"\r")
 	a.mu.Unlock()
 	_ = a.store.Put("last-scripts", last)
 	if err != nil {
-		a.failf(`Failed to run script "`+sc.Name+`"`, err)
+		a.failf(what, err)
 	}
 	a.changed()
 }

@@ -1,7 +1,6 @@
 package core
 
 import (
-	"errors"
 	"strings"
 
 	"github.com/some-du6e/tern/app/t3"
@@ -16,26 +15,17 @@ func (a *App) handleHeader(th *ui.Theme, act ui.Action) bool {
 	case id == "header.title" && act.Kind == "submit", id == "header.title" && act.Kind == "blur":
 		a.renameThread(act.Text)
 		return true
-	case id == "header.title" && act.Kind == "key":
-		// Escape leaves the title as it was.
+	case id == "header.title" && (act.Kind == "key" || act.Kind == "cancel"):
+		// Escape, or the focus moving to a button, leaves the title as it was.
 		a.mu.Lock()
 		a.renaming = ""
 		a.mu.Unlock()
 		return true
 	case id == "header.title" && act.Kind == "double":
 		a.mu.Lock()
-		_, t := a.thread(a.openID)
-		if t == nil {
-			a.mu.Unlock()
-			return true
-		}
-		a.closeMenusLocked()
-		a.renaming = a.openID
-		title := t.Title
+		r := a.openID
 		a.mu.Unlock()
-		th.SetEditorText("header.title", title)
-		th.SelectAll("header.title")
-		th.Focus("header.title")
+		a.startRename(th, r)
 		return true
 	case strings.HasPrefix(id, "header") && act.Kind == "context":
 		// A right-click anywhere in the header opens the thread's menu there.
@@ -47,13 +37,18 @@ func (a *App) handleHeader(th *ui.Theme, act ui.Action) bool {
 		a.mu.Unlock()
 		return true
 	case strings.HasPrefix(id, "card") && act.Kind == "context":
-		// One on the card opens its own menu at the pointer; the machine and
-		// branch rows offer to copy their path and branch instead.
+		// One on the card opens its own menu at the pointer; the run
+		// context row (its icons too) and the branch row offer to copy
+		// their path and branch instead, in the in-page menu.
 		a.mu.Lock()
 		a.closeCardMenusLocked()
-		a.cardMenu, a.cardAtPointer = map[string]string{"card.run": "copypath", "card.runlocked": "copypath", "card.branch": "copybranch"}[id], true
-		if a.cardMenu == "" {
-			a.cardMenu = "items"
+		switch id {
+		case "card.run", "card.runlocked", "card.machine", "card.workspace":
+			a.ctxCopy = "path"
+		case "card.branch":
+			a.ctxCopy = "branch"
+		default:
+			a.cardMenu, a.cardAtPointer = "items", true
 		}
 		a.mu.Unlock()
 		return true
@@ -69,6 +64,10 @@ func (a *App) handleHeader(th *ui.Theme, act ui.Action) bool {
 		if search && newRefName(act.Text) != "" {
 			a.findRefs(false)
 		}
+		return true
+	case id == "branch.search" && act.Kind == "key" && act.Text == "⎋":
+		// Escape closes the picker and gives the branch row the focus back.
+		a.escape(th)
 		return true
 	case id == "branch.search" && act.Kind == "key":
 		// The arrows move the highlight, round from either end.
@@ -168,13 +167,13 @@ func (a *App) handleHeader(th *ui.Theme, act ui.Action) bool {
 	case "header.unshare":
 		a.stopGuestShare()
 	case "header.title":
-		// The title drops the thread's menu under itself; a second click
-		// closes it.
+		// The title drops the thread's menu under itself, and Escape gives
+		// the title back the focus. A press outside the menu has closed it
+		// by now, so a second click opens it again where it was.
 		a.mu.Lock()
-		open := a.ctxRef != a.openID
 		a.closeMenusLocked()
-		if open && a.openID != "" {
-			a.ctxRef = a.openID
+		if a.openID != "" {
+			a.ctxRef, a.ctxFrom = a.openID, "header.title"
 			th.MenuFrom("header.title")
 		}
 		a.mu.Unlock()
@@ -265,20 +264,30 @@ func (a *App) closeCardMenusLocked() {
 }
 
 // cardMenuPick runs row i of the card's menu: a draft's workspace, the
-// preferred editor, a script, or a Git action.
+// preferred editor, a script, or a Git action. The items menu's checkboxes
+// leave it open, as T3's do.
 func (a *App) cardMenuPick(th *ui.Theme, menu string, i int) {
 	a.mu.Lock()
-	e, t, p, v := a.checkout()
-	a.cardMenu = ""
+	e, _, p, v := a.checkout()
+	if menu != "items" {
+		a.cardMenu = ""
+	}
 	if e == nil {
 		a.mu.Unlock()
 		return
 	}
 	switch menu {
 	case "run":
-		// Row 0 is the Workspace label.
-		if i == 1 || i == 2 {
-			a.draftWorktree, a.draftBase = i == 2, ""
+		// Row 0 is the Workspace label; then the current checkout (or the
+		// worktree the draft already has), a new worktree and the previous
+		// worktree.
+		switch prev := a.previousWorktree(e, p); {
+		case i == 1:
+			a.draftWorktree, a.draftBase = false, ""
+		case i == 2:
+			a.draftWorktree, a.draftBase, a.draftPath, a.draftBranch = true, "", "", ""
+		case i == 3 && prev != nil:
+			a.draftWorktree, a.draftBase, a.draftPath, a.draftBranch = false, "", prev.WorktreePath, prev.Branch
 		}
 		a.mu.Unlock()
 		th.Focus("composer")
@@ -330,15 +339,6 @@ func (a *App) cardMenuPick(th *ui.Theme, menu string, i int) {
 		}
 		a.mu.Unlock()
 		_ = a.store.Put("details-items", hidden)
-	case "copypath", "copybranch":
-		text := a.workspacePath(t, p)
-		if menu == "copybranch" {
-			text = a.branchOf(t, v)
-		}
-		a.mu.Unlock()
-		if text != "" {
-			th.WriteClipboard(text)
-		}
 	default:
 		a.mu.Unlock()
 	}
@@ -347,14 +347,10 @@ func (a *App) cardMenuPick(th *ui.Theme, menu string, i int) {
 // runPrimaryScript runs the script the scripts split shows.
 func (a *App) runPrimaryScript() {
 	a.mu.Lock()
-	_, t, p, _ := a.checkout()
+	_, _, p, _ := a.checkout()
 	ps := primaryScript(p.Scripts, a.lastScripts[p.ID])
 	a.mu.Unlock()
-	switch {
-	case ps == nil:
-	case t == nil:
-		a.failf(`Failed to run script "`+ps.Name+`"`, errors.New("a new thread has no terminal until its first message"))
-	default:
+	if ps != nil {
 		a.runScript(*ps, p.ID)
 	}
 }
@@ -439,6 +435,6 @@ func (a *App) draftIn(envID, project string) {
 	defer a.mu.Unlock()
 	a.closeThreadLocked()
 	a.draftEnv, a.draft = envID, project
-	a.draftWorktree, a.draftBase = false, ""
+	a.draftWorktree, a.draftBase, a.draftPath, a.draftBranch = false, "", "", ""
 	delete(a.choices, "draft")
 }

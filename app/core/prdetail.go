@@ -112,14 +112,18 @@ func projectFor(e *envState, l *t3.PullRequestLink, lend bool) *t3.Project {
 }
 
 // prRefOf is the reference row it of thread t's card reads its pull
-// request by (ThreadDetailsPrRow.tsx), nil without one: a link's own host,
-// repository and number, in the project checked out from that repository,
-// for the shown row else the thread's own, for the others any on its
-// host; the branch's pull request by number in the thread's project's
-// repository. Call with the lock held.
+// request by (ThreadDetailsPrRow.tsx), nil without one: the server's
+// fallback by the reference it names; a link's own host, repository and
+// number, in the project checked out from that repository, for the shown
+// row else the thread's own, for the others any on its host; the branch's
+// pull request by number in the thread's project's repository. Call with
+// the lock held.
 func prRefOf(e *envState, p t3.Project, it prItem, shown bool) *t3.PullRequestRef {
 	if e.config == nil {
 		return nil
+	}
+	if it.fallback != nil {
+		return it.fallback
 	}
 	if l := it.link; l != nil {
 		q := projectFor(e, l, !shown)
@@ -155,29 +159,36 @@ func checksInterval(checks []t3.PullRequestCheck) time.Duration {
 // prDetailEvery is how often an open pull request's detail is read again.
 const prDetailEvery = 10 * time.Minute
 
+// prIdle is how long without a click or a key the card's pull requests
+// keep being read again (useLiveRefresh).
+const prIdle = 6 * time.Minute
+
 // loadPRLocked has the card's read of the pull request at ref under key
 // up to date, as T3's queries keep it: the detail at once, again every ten
 // minutes while open; then the checks, again while they run, when the
 // server can read them alone. Each answer asks for a frame when the next
-// read is due. Call with the lock held.
-func (a *App) loadPRLocked(e *envState, key string, ref t3.PullRequestRef, now time.Time) *prLoad {
+// read is due. Off screen (visible false) nothing is read, and once nobody
+// has touched tern for prIdle only what hasn't been read yet is. Call with
+// the lock held.
+func (a *App) loadPRLocked(e *envState, key string, ref t3.PullRequestRef, now time.Time, visible bool) *prLoad {
 	l := a.prLoads[key]
 	if l == nil {
 		l = &prLoad{}
 		a.prLoads[key] = l
 	}
 	conn := e.conn
-	if conn == nil {
+	if conn == nil || !visible {
 		return l
 	}
+	again := now.Sub(a.lastInput) < prIdle
 	open := l.detail == nil || l.detail.State == "open"
-	if !l.loading && (l.loadedAt.IsZero() || (open && now.Sub(l.loadedAt) >= prDetailEvery)) {
+	if !l.loading && (l.loadedAt.IsZero() || (again && open && now.Sub(l.loadedAt) >= prDetailEvery)) {
 		l.loading = true
 		go a.readPRDetail(conn, l, ref)
 	}
 	checks := e.config != nil && e.config.Environment.Capabilities.PullRequestChecks
 	if d := withNewerChecks(l); checks && d != nil && !l.loading && !l.checking &&
-		(l.checkedAt.IsZero() || (d.State == "open" && !l.noChecks && now.Sub(l.checkedAt) >= checksInterval(withNewerChecks(l).Checks))) {
+		(l.checkedAt.IsZero() || (again && d.State == "open" && !l.noChecks && now.Sub(l.checkedAt) >= checksInterval(withNewerChecks(l).Checks))) {
 		l.checking = true
 		go a.readPRChecks(conn, l, ref)
 	}
@@ -637,17 +648,14 @@ func (a *App) toggleChecks(i int) {
 // openCheck opens the open popover's check i in the browser.
 func (a *App) openCheck(i int) {
 	a.mu.Lock()
-	var url string
+	var link string
 	if l := a.prLoads[a.checksOpen]; l != nil && l.detail != nil {
 		if shown, _ := popupChecks(withNewerChecks(l).Checks, a.checksAll); i >= 0 && i < len(shown) {
-			url = shown[i].URL
+			link = shown[i].URL
 		}
 	}
-	open := a.OpenURL
 	a.mu.Unlock()
-	if url != "" && open != nil {
-		if err := open(url); err != nil {
-			a.failf("Unable to open check details", err)
-		}
+	if link != "" {
+		a.openWeb("Unable to open check details", link)
 	}
 }

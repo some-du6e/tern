@@ -182,10 +182,12 @@ type crumbs struct {
 
 // layoutCrumbs fits h's crumbs and title into w (WorkspaceBreadcrumb.tsx,
 // docs/ui/05-header.md §3.1): the project crumb's text caps at 160dp, the
-// parent never shrinks but folds to "..." once the crumbs, uncut, would
-// overflow (ChatHeader.tsx:120–158), and the title grows from nothing into
-// what's left, down to its 40dp minimum; only then does the project crumb
-// give way.
+// parent never shrinks, and the title grows from nothing into what's left,
+// down to its 40dp minimum; only then does the project crumb give way.
+// The parent folds to "..." once the crumbs would overflow, as T3 measures
+// them (ChatHeader.tsx:120–158): the project crumb as wide as it lays out,
+// the parent and the title (its chevron, not the "From" badge after it)
+// at their full widths.
 func (th *Theme) layoutCrumbs(gtx C, h *ChatHeader, title string, w int, narrow bool) crumbs {
 	l := crumbs{gap: dp(gtx, 12), sep: th.textW(gtx, Txt{Size: 14, LineH: 20.0 / 14}, "/")}
 	if narrow {
@@ -203,9 +205,6 @@ func (th *Theme) layoutCrumbs(gtx C, h *ChatHeader, title string, w int, narrow 
 	if h.Server {
 		full += dp(gtx, 4+crumbIcon)
 	}
-	if h.Origin != "" && !h.Renaming {
-		full += th.badgeSize(gtx, BadgeSizeSm, "From "+h.Origin).X
-	}
 	items, fixed := 1, 0
 	if h.Project != "" {
 		items, fixed = items+2, fixed+l.sep
@@ -214,7 +213,9 @@ func (th *Theme) layoutCrumbs(gtx C, h *ChatHeader, title string, w int, narrow 
 		items, fixed = items+2, fixed+l.sep
 	}
 	gaps := (items - 1) * l.gap
-	if h.Parent != "" && l.project+fixed+l.parent+full+gaps > w {
+	// The project crumb as the list lays it out with the parent whole.
+	shown := min(l.project, max(0, w-gaps-fixed-l.parent-dp(gtx, titleMin)))
+	if h.Parent != "" && shown+fixed+l.parent+full+gaps > w {
 		l.collapsed, l.parent = true, ellipsis
 	}
 	fixed += l.parent
@@ -233,6 +234,7 @@ func (th *Theme) layoutCrumbs(gtx C, h *ChatHeader, title string, w int, narrow 
 func (th *Theme) headerRow(gtx C, s *Scene, narrow bool) D {
 	return FixedH(gtx, topBarH, func(gtx C) D {
 		size := image.Pt(gtx.Constraints.Max.X, gtx.Constraints.Min.Y)
+		th.in.winW = size.X
 		fill(gtx, P.Background, image.Rectangle{Max: size}, 0)
 		left, end := th.contentLeft(), float32(20)
 		if narrow {
@@ -357,8 +359,9 @@ func (th *Theme) originBadge(gtx C, origin string, x, box int) {
 
 // renameField is the title's rename editor, w wide from at: 20dp tall,
 // transparent, inside a 1dp ring at half strength that goes full while it
-// has the focus. Enter commits, Escape cancels, and a press outside it
-// commits, as blurring T3's input does.
+// has the focus, its text on the title's baseline. Enter commits, Escape
+// cancels, and a press outside it blurs T3's input: that commits, except
+// on a button, which cancels (ChatHeader.tsx:329–339).
 func (th *Theme) renameField(gtx C, at image.Point, w int, win image.Point) {
 	const id = "header.title"
 	hgt := dp(gtx, 20)
@@ -372,11 +375,24 @@ func (th *Theme) renameField(gtx C, at image.Point, w int, win image.Point) {
 	}
 	g := gtx
 	g.Constraints = layout.Exact(r.Max)
-	th.editor(g, id, Txt{Size: 14, LineH: 20.0 / 14, Font: UI(font.Medium), Color: P.Foreground}, "")
+	m := op.Record(gtx.Ops)
+	d := th.editor(g, id, Txt{Size: 14, LineH: 20.0 / 14, Font: UI(font.Medium), Color: P.Foreground}, "")
+	call := m.Stop()
+	// The editor's line box puts its baseline a dp above the title's,
+	// whose caps centre on the row; move it down to it.
+	base := hgt/2 + int(capEm*float32(gtx.Sp(14))/2+0.5)
+	func() {
+		defer op.Offset(image.Pt(0, base-(d.Size.Y-d.Baseline))).Push(gtx.Ops).Pop()
+		call.Add(gtx.Ops)
+	}()
 	strokeRect(gtx, over(ring, P.Background), r, dp(gtx, 4), float32(max(1, dp(gtx, 1))))
 	if th.in.pressed && !th.in.pressAt.In(r.Add(win).Add(image.Pt(at.X, at.Y-hgt/2))) {
 		th.in.pressed = false
-		th.push(Action{ID: id, Kind: "blur", Text: ed.Text()})
+		kind := "blur"
+		if th.in.pressButton {
+			kind = "cancel"
+		}
+		th.push(Action{ID: id, Kind: kind, Text: ed.Text()})
 	}
 }
 

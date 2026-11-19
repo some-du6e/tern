@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/color"
 	"strconv"
+	"time"
 
 	"gioui.org/f32"
 	"gioui.org/font"
@@ -260,7 +261,7 @@ func (th *Theme) checksTrigger(gtx C, i int, c *ChecksMeta) image.Point {
 			th.capText(gtx, count, c.Count, size.Y/2)
 		}
 	})
-	if c.Popup != nil {
+	if c.Popup != nil && !th.in.measuring {
 		th.deferBelow(gtx, image.Pt(0, size.Y+dp(gtx, 4)), func(gtx C) D {
 			m := op.Record(gtx.Ops)
 			d := th.checksPopup(gtx, c.Popup)
@@ -385,7 +386,8 @@ func (th *Theme) checkLine(gtx C, i int, c CheckRow, w int) D {
 		defer op.Offset(image.Pt(0, (h-s)/2)).Push(gtx.Ops).Pop()
 		if icon == "pending" {
 			T3Spinner(checkTone(icon, P.Popover), 14, float64(gtx.Now.UnixMilli()%1000)/1000)(gtx)
-			gtx.Execute(op.InvalidateCmd{})
+			// About 30 frames a second, as the window paces its spinners.
+			gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(33 * time.Millisecond)})
 			return
 		}
 		LucideW(checkIcons[icon], checkTone(icon, P.Popover), 14)(gtx)

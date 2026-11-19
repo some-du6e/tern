@@ -63,8 +63,10 @@ func TestTitlebarControls(t *testing.T) {
 }
 
 // Without a project the terminal toggle (at 1367, 12) is off: a click does
-// nothing, but resting on it still brings up its tooltip under it, held
-// to its right edge (PanelLayoutControls.tsx). In a project it toggles.
+// nothing, but resting on it still brings up its tooltip under it, centred
+// on it and moved to keep 5dp inside the window, its right edge at 1435 as
+// T3's (§3.2). In a thread in a project it toggles; a draft, which has no
+// terminal until its first message, keeps it off.
 func TestTerminalToggleNeedsProject(t *testing.T) {
 	defer SetDark(false)
 	SetDark(true)
@@ -72,25 +74,50 @@ func TestTerminalToggleNeedsProject(t *testing.T) {
 	l := newLive(image.Pt(1440, 900), nil)
 	l.draw = func(gtx C) { l.th.Desktop(gtx, s) }
 	l.frame(0)
-	l.click(1367+14, 12+14)
-	for _, a := range l.frame(10 * time.Millisecond) {
-		if a.ID == "terminal.toggle" {
-			t.Fatalf("the toggle acted without a project: %+v", a)
+	toggled := func() bool {
+		l.click(1367+14, 12+14)
+		for _, a := range l.frame(10 * time.Millisecond) {
+			if a.ID == "terminal.toggle" {
+				return true
+			}
 		}
+		return false
+	}
+	if toggled() {
+		t.Fatal("the toggle acted without a project")
 	}
 	l.move(1367+14, 12+14)
 	l.frame(0)
 	l.frame(800 * time.Millisecond)
-	wantPixel(t, l.pixels(t), image.Pt(1367+28-5, 12+28+4+8), P.Popover, "the unavailable toggle's tooltip")
+	img := l.pixels(t)
+	y := 12 + 28 + 4 + 13
+	wantPixel(t, img, image.Pt(1435-3, y), P.Popover, "the tooltip's right end, 5dp in")
+	wantPixel(t, img, image.Pt(1435+4, y), P.Background, "past it, the window's edge")
 
 	s.Header.Project = "atlas"
-	l.frame(0)
-	l.click(1367+14, 12+14)
-	acts := l.frame(10 * time.Millisecond)
-	for _, a := range acts {
-		if a.ID == "terminal.toggle" {
-			return
-		}
+	l.frame(time.Second)
+	if !toggled() {
+		t.Fatal("in a thread in a project the toggle should toggle")
 	}
-	t.Fatalf("in a project the toggle should toggle: %+v", acts)
+	s.Header.Server = false
+	l.frame(time.Second)
+	if toggled() {
+		t.Fatal("a draft's toggle acted")
+	}
+}
+
+// The panel toggles' tooltips are centred on them and kept 5dp inside the
+// window (§3.2): the details toggle's right edge lands at 1435, as T3's.
+func TestTitlebarTooltipsInside(t *testing.T) {
+	s := &Scene{Live: true, Title: "A thread", Header: &ChatHeader{Server: true, Project: "atlas"}, Card: &ThreadDetails{}}
+	l := newLive(image.Pt(1440, 900), nil)
+	l.draw = func(gtx C) { l.th.Desktop(gtx, s) }
+	l.frame(0)
+	l.move(1335+14, 12+14)
+	l.frame(0)
+	l.frame(800 * time.Millisecond)
+	img := l.pixels(t)
+	y := 12 + 28 + 4 + 13
+	wantPixel(t, img, image.Pt(1435-3, y), P.Popover, "the details tooltip's right end")
+	wantPixel(t, img, image.Pt(1435+4, y), P.Background, "the window past it")
 }

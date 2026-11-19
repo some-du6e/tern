@@ -1,6 +1,8 @@
 package core
 
 import (
+	"errors"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -293,10 +295,11 @@ func otherPRs(links []t3.PullRequestLink, cur *t3.PullRequestLink) []t3.PullRequ
 }
 
 // prItem is one of the card's pull request rows: the link it stands for
-// (nil for the branch's own pull request), what's known of it, and where
-// it opens.
+// (nil for the branch's own pull request), the reference the server's
+// fallback names it by, what's known of it, and where it opens.
 type prItem struct {
 	link         *t3.PullRequestLink
+	fallback     *t3.PullRequestRef
 	number       int
 	url          string
 	state, title string // "" until the pull request is read
@@ -305,16 +308,31 @@ type prItem struct {
 }
 
 // prItems are the thread's pull request rows (useThreadDisplayedPullRequest):
-// the current link, read from its snapshot, or with no link the open pull
-// request Git found on the thread's branch (branchPR); then its other
-// links. Call with the lock held.
+// the current link, read from its snapshot; with none, the one the server
+// names for the thread (useLinkedThreadPullRequest's fallback: a server
+// without links names its one linked pull request, any server the open one
+// on the thread's branch), read from its host; else the open pull request
+// Git found on the thread's branch (branchPR); then its other links. Call
+// with the lock held.
 func prItems(e *envState, t *t3.Thread, branchPR *t3.VcsChangeRequest) []prItem {
 	if t == nil {
 		return nil
 	}
+	links := e.config != nil
 	var cur *t3.PullRequestLink
-	if e.config != nil {
+	if links {
 		cur = currentPR(t.PullRequests)
+	}
+	fallback := t.BranchPullRequest
+	if !links && t.LinkedPullRequest != nil {
+		fallback = t.LinkedPullRequest
+	}
+	if cur == nil && fallback != nil && fallback.Number > 0 && fallback.URL != "" {
+		ref := &t3.PullRequestRef{ProjectID: fallback.ProjectID, Repository: fallback.Repository, Number: fallback.Number}
+		if u, err := url.Parse(fallback.URL); err == nil {
+			ref.Host = u.Hostname()
+		}
+		return []prItem{{fallback: ref, number: fallback.Number, url: fallback.URL}}
 	}
 	link := func(l *t3.PullRequestLink) prItem {
 		it := prItem{link: l, number: l.Number, url: l.URL, watching: l.Watch != nil}
@@ -352,7 +370,7 @@ func (a *App) cardPRs() []prItem {
 // none (resolveDisplayedThreadPr): only while the checkout, as the branch
 // row names it, is on the thread's own branch. Call with the lock held.
 func (a *App) branchPR(e *envState, t *t3.Thread, p t3.Project, v *vcsState) *t3.VcsChangeRequest {
-	if v == nil || v.status == nil || !v.status.IsRepo || gitCwd(t, p) == "" || e.config == nil || isScratch(p, e.config) {
+	if v == nil || v.status == nil || !v.status.IsRepo || gitCwd(t.WorktreePath, p) == "" || e.config == nil || isScratch(p, e.config) {
 		return nil
 	}
 	st := v.status
@@ -376,9 +394,18 @@ var prStateLabels = map[string]string{"open": "Open", "draft": "Draft", "closed"
 
 // prsScene is the card's pull request rows in project p: the shown one,
 // then, while expanded, the others "Show N more" folds. Each reads its
-// pull request's detail, which gives it its state and, with something to
-// say under its title, its detailed form. Call with the lock held.
-func (a *App) prsScene(e *envState, p t3.Project, items []prItem, terms changeTerms, now time.Time) *ui.PullRequests {
+// pull request's detail while the card can be seen, which gives it its
+// state and, with something to say under its title, its detailed form;
+// what the card no longer shows is forgotten. Call with the lock held.
+func (a *App) prsScene(e *envState, p t3.Project, items []prItem, terms changeTerms, now time.Time, visible bool) *ui.PullRequests {
+	shown := map[string]bool{}
+	defer func() {
+		for k := range a.prLoads {
+			if !shown[k] {
+				delete(a.prLoads, k)
+			}
+		}
+	}()
 	if len(items) == 0 {
 		return nil
 	}
@@ -390,9 +417,13 @@ func (a *App) prsScene(e *envState, p t3.Project, items []prItem, terms changeTe
 		var detail *ui.PullRequestDetailRow
 		if ref := prRefOf(e, p, it, i == 0); ref != nil {
 			key := prKeyOf(e.id(), *ref)
-			if l := a.loadPRLocked(e, key, *ref, now); l.detail != nil {
+			shown[key] = true
+			if l := a.loadPRLocked(e, key, *ref, now, visible); l.detail != nil {
 				d := withNewerChecks(l)
 				it.state, it.draft = d.State, d.IsDraft
+				if it.title == "" {
+					it.title = d.Title
+				}
 				detail = a.detailRow(key, l, it.number, it.watching)
 			}
 		}
@@ -415,13 +446,30 @@ func (a *App) prsScene(e *envState, p t3.Project, items []prItem, terms changeTe
 func (a *App) openPR(i int) {
 	a.mu.Lock()
 	items := a.cardPRs()
+	a.mu.Unlock()
+	if i >= 0 && i < len(items) {
+		a.openWeb("Couldn't open "+items[i].url, items[i].url)
+	}
+}
+
+// openWeb opens a link the server handed on, a pull request's or a check's,
+// in this computer's browser, only when it's http or https with a host:
+// whoever made it chose it, and the OS would open a file, a share or an
+// option-like "-a…" too (T3's parseSafeExternalUrl). what heads a failure.
+func (a *App) openWeb(what, link string) {
+	a.mu.Lock()
 	open := a.OpenURL
 	a.mu.Unlock()
-	if i < 0 || i >= len(items) || open == nil {
+	if open == nil {
 		return
 	}
-	if err := open(items[i].url); err != nil {
-		a.failf("Couldn't open "+items[i].url, err)
+	u, err := url.Parse(link)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		a.failf(what, errors.New("only web links open"))
+		return
+	}
+	if err := open(u.String()); err != nil {
+		a.failf(what, err)
 	}
 }
 

@@ -286,8 +286,13 @@ func TestCardDrawn(t *testing.T) {
 		wantPixel(t, img, image.Pt(1148+140, 64+4), fill, "card fill")
 		wantPixel(t, img, image.Pt(1148, 64+60), over(alpha(P.ContrastForeground, 0x1a), fill), "card border")
 		wantPixel(t, img, image.Pt(1148-4, 64+60), P.Background, "canvas beside the card")
-		// The rule above Version Control: 1 + 8 + 96 + 10 down.
-		wantPixel(t, img, image.Pt(1148+140, 64+1+114), over(alpha(P.Border, uint8(int(P.Border.A)*65/100)), fill), "section rule")
+		// The rule above Version Control, 1 + 8 + 96 + 10 down: border at
+		// 65% as Chrome rounds it, #e4e4e7a6 painting #ededef (#1a1a1a dark).
+		rule := rgb(0xededef)
+		if d {
+			rule = rgb(0x1a1a1a)
+		}
+		wantExact(t, img, image.Pt(1148+140, 64+1+114), rule, "section rule")
 		// Hover the Changes row, the last: 1 + 114 + 1 + 8 + 64 down.
 		changes := image.Pt(1148+1+8, 64+1+114+1+8+64)
 		l.move(float32(changes.X+100), float32(changes.Y+16))
@@ -300,9 +305,10 @@ func TestCardDrawn(t *testing.T) {
 }
 
 // The keyboard's ring on a row is T3's inset box shadow (§3.6): inside the
-// row's transparent 1dp border, 1dp of --background, then 2dp of --ring.
-// Opened from the keyboard, the card focuses its first control, here Open
-// in (the started thread's machine row isn't one), its middle at y 121.
+// row's transparent 1dp border, 1dp of --background, then 2dp of --ring,
+// fading in over 150ms (transition-[box-shadow]). Opened from the
+// keyboard, the card focuses its first control, here Open in (the started
+// thread's machine row isn't one), its middle at y 121.
 func TestCardFocusRing(t *testing.T) {
 	s := cardScene()
 	l := newLive(image.Pt(1440, 900), nil)
@@ -310,12 +316,19 @@ func TestCardFocusRing(t *testing.T) {
 	l.frame(0)
 	l.th.in.keyFocus = true
 	l.th.FocusCard()
-	for range 3 {
-		l.frame(0)
-	}
-	img := l.pixels(t)
+	l.frame(0)
+	l.frame(0)
 	fill := over(alpha(P.Popover, 0xd5), P.Background)
 	x := 1148 + 1 + 8
+	if got := l.pixels(t).RGBAAt(x+2, 121); !nearPixel(got, fill) {
+		t.Errorf("the ring as the focus lands is #%02x%02x%02x, want it still to fade in", got.R, got.G, got.B)
+	}
+	l.frame(75 * time.Millisecond)
+	if got := l.pixels(t).RGBAAt(x+2, 121); nearPixel(got, fill) || nearPixel(got, P.Ring) {
+		t.Errorf("the ring half way is #%02x%02x%02x, want it between the card and --ring", got.R, got.G, got.B)
+	}
+	l.frame(100 * time.Millisecond)
+	img := l.pixels(t)
 	wantPixel(t, img, image.Pt(x, 121), fill, "the row's border, clear")
 	wantPixel(t, img, image.Pt(x+1, 121), P.Background, "the --background band")
 	wantPixel(t, img, image.Pt(x+2, 121), P.Ring, "the ring")
@@ -339,7 +352,7 @@ func TestSelectRowHalves(t *testing.T) {
 	row := over(rowTint(), fill)
 	wantPixel(t, img, image.Pt(branch.X+4, branch.Y+16), row, "the row's fill")
 	wantPixel(t, img, image.Pt(branch.X+258, branch.Y+16), over(rowTint(), row), "the chevron half's second fill")
-	wantPixel(t, img, image.Pt(branch.X+229, branch.Y+16), over(alpha(P.Border, uint8(int(P.Border.A)*65/100)), row), "the hairline")
+	wantPixel(t, img, image.Pt(branch.X+229, branch.Y+16), over(faded(P.Border, 0.65), row), "the hairline")
 }
 
 // Without room inline (a 1000-wide window leaves a 744 canvas), the card
@@ -421,7 +434,7 @@ func TestMenuReasonDrawn(t *testing.T) {
 	wantPixel(t, img, beside, P.Background, "no reason before the pointer rests")
 	l.frame(300 * time.Millisecond)
 	img = l.pixels(t)
-	wantPixel(t, img, beside, P.Popover, "the reason's popover left of the row")
+	wantPixel(t, img, beside, over(alpha(P.Popover, 0xd5), P.Background), "the reason's glass popover left of the row")
 	wantPixel(t, img, image.Pt(1100, row-6), P.Background, "above it")
 	l.click(1162+40, float32(row+14))
 	for _, a := range l.frame(10 * time.Millisecond) {
@@ -431,11 +444,13 @@ func TestMenuReasonDrawn(t *testing.T) {
 	}
 }
 
-// The branch picker hangs 4dp under its row (whose bottom is at 220):
-// inside its 1dp border, its search block over a rule 43dp down, then the
-// refs 8dp further, each 28dp, the first highlighted at foreground 9%;
-// with nothing to list, a 36dp "No refs found." block instead
-// (BranchPicker.tsx, combobox.tsx).
+// The branch picker hangs 4dp under its row (whose bottom is at 220), as
+// T3's measured (05-header.md §3.8, BranchPicker.tsx): its search field at
+// 234, 26dp tall, over its rule at 266 (both a dp above where the block's
+// room puts them); the list from 268, its refs 12dp further in it and 9 in
+// from the popup's left, 242 wide for the scrollbar's gutter: the first at
+// (1166, 280), highlighted at foreground 9%. With nothing to list, a 36dp
+// "No refs found." block instead.
 func TestBranchPickerDrawn(t *testing.T) {
 	defer SetDark(false)
 	SetDark(true)
@@ -443,15 +458,21 @@ func TestBranchPickerDrawn(t *testing.T) {
 	s.Card.Picker = &BranchPicker{Refs: []BranchRef{{Name: "main", Tag: "default"}, {Name: "feature/ui-polish", Tag: "current"}}}
 	img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return NewTheme().Desktop(gtx, s) })
 	// x is clear of the names and of the tags at the rows' ends.
-	top, x := 220+4, 1157+173
-	list := top + 1 + 43
+	x, list := 1157+173, 268
 	hi := over(alpha(P.Foreground, 0x17), P.Popover)
 	// The popup's border is nearly the highlight's colour, so the scan
 	// stops at the list's last row.
-	if first, last := run(img, x, list, list+8+2*28, hi); first != list+8 || last != list+8+28-1 {
-		t.Errorf("the highlighted ref spans y %d..%d, want %d..%d", first, last, list+8, list+8+28-1)
+	if first, last := run(img, x, list, list+12+2*28, hi); first != 280 || last != 280+28-1 {
+		t.Errorf("the highlighted ref spans y %d..%d, want 280..307", first, last)
 	}
-	wantPixel(t, img, image.Pt(x, list+8+28+3), P.Popover, "the second ref, not highlighted")
+	wantPixel(t, img, image.Pt(1166, 290), hi, "the highlight's left edge")
+	wantPixel(t, img, image.Pt(1165, 290), P.Popover, "left of it")
+	wantPixel(t, img, image.Pt(1166+242-1, 290), hi, "the highlight's right edge")
+	wantPixel(t, img, image.Pt(1166+242, 290), P.Popover, "the gutter right of it")
+	wantPixel(t, img, image.Pt(x, 280+28+3), P.Popover, "the second ref, not highlighted")
+	rule := over(faded(P.Border, 0.7), P.Popover)
+	wantPixel(t, img, image.Pt(1157+60, 266), rule, "the search's rule")
+	wantPixel(t, img, image.Pt(1157+60, 267), P.Popover, "under the rule")
 
 	s.Card.Picker = &BranchPicker{}
 	img = drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return NewTheme().Desktop(gtx, s) })
@@ -468,7 +489,7 @@ func TestBranchPickerDrawn(t *testing.T) {
 	var ops op.Ops
 	gtx := layout.Context{Ops: &ops, Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Constraints{Max: image.Pt(262-2-24, 400)}}
 	lines := th.boxText(gtx, Txt{Size: 12, LineH: 16.0 / 12, Font: UI(font.Medium)}, notice).Size.Y
-	end := list + 8 + 28 + 8 + 8 + lines + 8
+	end := list + 12 + 28 + 12 + 8 + lines + 8
 	// Read past the popup's 8dp corners, left of the notice's text.
 	if _, last := run(img, 1157+9, list, list+200, P.Popover); last != end-1 {
 		t.Errorf("the picker's surface ends at %d, want %d: the notice's %ddp of lines padded 8 under the refs", last, end-1, lines)

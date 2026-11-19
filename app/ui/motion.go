@@ -51,8 +51,8 @@ func level(on bool) float32 {
 	return 0
 }
 
-// value is where f is at now, a transition of d end to end.
-func (f *fade) value(now time.Time, d time.Duration) float32 {
+// value is where f is at now, a transition of d end to end on ease.
+func (f *fade) value(now time.Time, d time.Duration, ease func(float32) float32) float32 {
 	to := level(f.on)
 	span := to - f.from
 	if span < 0 {
@@ -61,7 +61,7 @@ func (f *fade) value(now time.Time, d time.Duration) float32 {
 	if span == 0 {
 		return to
 	}
-	return f.from + (to-f.from)*easeInOut(since(now, f.at, time.Duration(float32(d)*span)))
+	return f.from + (to-f.from)*ease(since(now, f.at, time.Duration(float32(d)*span)))
 }
 
 // transition is a CSS transition of a value toward 1 while on and 0 while
@@ -69,6 +69,11 @@ func (f *fade) value(now time.Time, d time.Duration) float32 {
 // from where it got to, in proportionally less time, as Chrome's do. A
 // value starts where it is: nothing animates the first time it's drawn.
 func (th *Theme) transition(gtx C, id string, on bool, d time.Duration) float32 {
+	return th.transitionEase(gtx, id, on, d, easeInOut)
+}
+
+// transitionEase is transition on another timing function.
+func (th *Theme) transitionEase(gtx C, id string, on bool, d time.Duration, ease func(float32) float32) float32 {
 	if th.in.fades == nil {
 		th.in.fades = map[string]*fade{}
 	}
@@ -78,9 +83,9 @@ func (th *Theme) transition(gtx C, id string, on bool, d time.Duration) float32 
 		th.in.fades[id] = f
 	}
 	if f.on != on {
-		f.from, f.on, f.at = f.value(gtx.Now, d), on, gtx.Now
+		f.from, f.on, f.at = f.value(gtx.Now, d, ease), on, gtx.Now
 	}
-	v := f.value(gtx.Now, d)
+	v := f.value(gtx.Now, d, ease)
 	if v != level(on) {
 		gtx.Execute(op.InvalidateCmd{})
 	}

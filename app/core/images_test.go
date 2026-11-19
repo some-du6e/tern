@@ -23,7 +23,7 @@ func pngBytes(t *testing.T) []byte {
 
 func TestPasteImages(t *testing.T) {
 	a := testApp(t)
-	a.openThread("swiss/t1")
+	a.openThread("studio/t1")
 	shot := clip.Image{Name: "pasted.png", Mime: "image/png", Data: pngBytes(t)}
 	a.pasted(a.composerKey(), []clip.Image{shot, shot}, nil)
 	if s := a.build(time.Now()); len(s.Thumbs) != 2 {
@@ -35,7 +35,7 @@ func TestPasteImages(t *testing.T) {
 	if s := a.build(time.Now()); len(s.Thumbs) != 0 {
 		t.Fatalf("other thread shows %d thumbs", len(s.Thumbs))
 	}
-	a.openThread("swiss/t1")
+	a.openThread("studio/t1")
 	// Each paste typed its chip at the caret.
 	th := ui.NewTheme()
 	a.RunUI(th)
@@ -83,8 +83,8 @@ func TestPasteImages(t *testing.T) {
 
 func TestOpenThreadComposerUsesRef(t *testing.T) {
 	a := testApp(t)
-	a.openThread("swiss/t1")
-	a.choices["swiss/t1"] = &choice{runtime: "approval-required"}
+	a.openThread("studio/t1")
+	a.choices["studio/t1"] = &choice{runtime: "approval-required"}
 	if s := a.build(time.Now()); s.Runtime != runtimeLabel("approval-required") {
 		t.Fatalf("runtime label = %q", s.Runtime)
 	}

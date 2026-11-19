@@ -43,21 +43,32 @@ func drawn(t *testing.T, size image.Point, scale float32, w layout.Widget) *imag
 // wantPixel fails unless the pixel at p (in px) is c, give or take a step.
 func wantPixel(t *testing.T, img *image.RGBA, p image.Point, c color.NRGBA, what string) {
 	t.Helper()
-	got := img.RGBAAt(p.X, p.Y)
-	near := func(a, b uint8) bool { return a-b < 3 || b-a < 3 }
-	if !near(got.R, c.R) || !near(got.G, c.G) || !near(got.B, c.B) {
+	if got := img.RGBAAt(p.X, p.Y); !nearPixel(got, c) {
 		t.Errorf("%s at %v is #%02x%02x%02x, want #%02x%02x%02x", what, p, got.R, got.G, got.B, c.R, c.G, c.B)
 	}
+}
+
+// wantExact fails unless the pixel at p (in px) is exactly c: a flat fill
+// whose last step is the point.
+func wantExact(t *testing.T, img *image.RGBA, p image.Point, c color.NRGBA, what string) {
+	t.Helper()
+	if got := img.RGBAAt(p.X, p.Y); got.R != c.R || got.G != c.G || got.B != c.B {
+		t.Errorf("%s at %v is #%02x%02x%02x, want #%02x%02x%02x exactly", what, p, got.R, got.G, got.B, c.R, c.G, c.B)
+	}
+}
+
+// nearPixel reports a pixel that is c, give or take a step.
+func nearPixel(got color.RGBA, c color.NRGBA) bool {
+	near := func(a, b uint8) bool { d := int(a) - int(b); return d < 3 && d > -3 }
+	return near(got.R, c.R) && near(got.G, c.G) && near(got.B, c.B)
 }
 
 // run is the first and last y in [y0, y1) at column x whose pixel is c,
 // give or take a step, or -1, -1 when none is.
 func run(img *image.RGBA, x, y0, y1 int, c color.NRGBA) (first, last int) {
 	first, last = -1, -1
-	near := func(a, b uint8) bool { return a-b < 3 || b-a < 3 }
 	for y := y0; y < y1; y++ {
-		got := img.RGBAAt(x, y)
-		if near(got.R, c.R) && near(got.G, c.G) && near(got.B, c.B) {
+		if nearPixel(img.RGBAAt(x, y), c) {
 			if first < 0 {
 				first = y
 			}

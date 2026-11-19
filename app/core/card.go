@@ -66,11 +66,39 @@ func vcsKey(envID, cwd string) string { return envID + "\x00" + cwd }
 
 // gitCwd is where a thread's files and Git live: its worktree, else its
 // project's root.
-func gitCwd(t *t3.Thread, p t3.Project) string {
-	if t != nil && t.WorktreePath != "" {
-		return t.WorktreePath
+func gitCwd(worktree string, p t3.Project) string {
+	if worktree != "" {
+		return worktree
 	}
 	return p.WorkspaceRoot
+}
+
+// worktreeOf is the worktree thread t (nil for the draft) works in: its
+// own, or the one the draft took over; "" for the project's folder. Call
+// with the lock held.
+func (a *App) worktreeOf(t *t3.Thread) string {
+	if t != nil {
+		return t.WorktreePath
+	}
+	return a.draftPath
+}
+
+// previousWorktree is the thread whose worktree the draft's run context
+// menu offers to take over (resolvePreviousWorktreeSeed): of project p's
+// threads in e not archived, the one updated last in a worktree other
+// than the draft's own; nil for none. Call with the lock held.
+func (a *App) previousWorktree(e *envState, p t3.Project) *t3.Thread {
+	var best *t3.Thread
+	for _, t := range e.threads {
+		at := millis(t.UpdatedAt)
+		if t.ProjectID != p.ID || t.WorktreePath == "" || t.WorktreePath == a.draftPath || t.ArchivedAt != "" || at == 0 {
+			continue
+		}
+		if best == nil || at > millis(best.UpdatedAt) {
+			best = t
+		}
+	}
+	return best
 }
 
 // cardItems are the card's rows the "Show in thread details" menu turns
@@ -104,19 +132,18 @@ func (a *App) cardScene(s *ui.Scene, e *envState, t *t3.Thread, p t3.Project, ha
 	if !hasProject {
 		return
 	}
-	cwd := gitCwd(t, p)
+	worktree := a.worktreeOf(t)
+	cwd := gitCwd(worktree, p)
 	v := a.watchVcsLocked(e, cwd)
 	st := v.status
 	isRepo := st == nil || st.IsRepo
 	scratch := isScratch(p, e.config)
 	offersGit := cwd != "" && e.config != nil && !scratch
 
-	// The run context.
-	worktree := ""
-	if t != nil {
-		worktree = t.WorktreePath
-	}
-	worktreeMode := worktree != "" || (t == nil && a.draftWorktree)
+	// The run context (resolveEffectiveEnvMode): a thread in a worktree is
+	// in worktree mode; a draft is when it's to make a new one, and works in
+	// a worktree it took over as its current one.
+	worktreeMode := (t != nil && worktree != "") || (t == nil && a.draftWorktree)
 	locked := t != nil
 	label := workspaceLabel(worktree, worktreeMode, locked)
 	icon := "folder"
@@ -134,11 +161,8 @@ func (a *App) cardScene(s *ui.Scene, e *envState, t *t3.Thread, p t3.Project, ha
 	if show("environment") {
 		d.Run = &ui.RunContext{Machine: machineKind(e.config), Label: e.env.Label, Tip: e.env.Label, Workspace: icon, WorkspaceTip: tip, Locked: locked}
 	}
-	switch {
-	case !locked && a.cardMenu == "run":
-		d.Menu = &ui.CardMenu{For: "run", Rows: runMenu(worktree, a.draftWorktree)}
-	case a.cardMenu == "copypath" && path != "":
-		d.Menu = &ui.CardMenu{For: "copypath", Rows: []ui.MenuRow{{Label: "Copy full path", Icon: "copy"}}, AtPointer: true}
+	if !locked && a.cardMenu == "run" {
+		d.Menu = &ui.CardMenu{For: "run", Rows: runMenu(worktree, a.draftWorktree, a.previousWorktree(e, p))}
 	}
 
 	// Open in editor.
@@ -167,19 +191,19 @@ func (a *App) cardScene(s *ui.Scene, e *envState, t *t3.Thread, p t3.Project, ha
 	if a.cardMenu == "scripts" && sc.Any {
 		var rows []ui.MenuRow
 		for _, s := range p.Scripts {
-			icon := scriptIcon[s.Icon]
-			if icon == "" {
-				icon = "play"
-			}
-			rows = append(rows, ui.MenuRow{Label: scriptLabel(s), Icon: icon})
+			rows = append(rows, ui.MenuRow{Label: scriptLabel(s), Icon: ui.ScriptIcon(s.Icon)})
 		}
-		d.Menu = &ui.CardMenu{For: "scripts", Rows: rows}
+		// With no primary the split is the Actions form, whose menu doesn't
+		// light rows on hover (highlightItemOnHover).
+		d.Menu = &ui.CardMenu{For: "scripts", Rows: rows, NoHover: sc.Primary == ""}
 	}
 
 	// The pull requests go under the branch row, or without one where it
-	// would be, with nothing from Git to fall back on.
+	// would be, with nothing from Git to fall back on. They're read while
+	// the card can be seen: shown inline, or its popover open.
 	if show("branch") && t != nil {
-		d.PRs = a.prsScene(e, p, prItems(e, t, a.branchPR(e, t, p, v)), termsFor(st), now)
+		visible := !a.cardHidden[a.openID] || a.detailsOpen
+		d.PRs = a.prsScene(e, p, prItems(e, t, a.branchPR(e, t, p, v)), termsFor(st), now, visible)
 	}
 	if !offersGit {
 		return
@@ -199,9 +223,6 @@ func (a *App) cardScene(s *ui.Scene, e *envState, t *t3.Thread, p t3.Project, ha
 		d.Branch = b
 		if a.branchPicker != nil {
 			d.Picker = a.refPickerScene(v, t, p.WorkspaceRoot, t == nil && a.draftWorktree)
-		}
-		if a.cardMenu == "copybranch" && value != "" {
-			d.Menu = &ui.CardMenu{For: "copybranch", Rows: []ui.MenuRow{{Label: "Copy branch name", Icon: "copy"}}, AtPointer: true}
 		}
 	}
 
@@ -293,32 +314,29 @@ func (a *App) branchOf(t *t3.Thread, v *vcsState) string {
 // root; "" for a draft's worktree that doesn't exist yet. Call with the
 // lock held.
 func (a *App) workspacePath(t *t3.Thread, p t3.Project) string {
-	switch {
-	case t != nil && t.WorktreePath != "":
-		return t.WorktreePath
-	case t == nil && a.draftWorktree:
+	if t == nil && a.draftWorktree {
 		return ""
 	}
-	return p.WorkspaceRoot
-}
-
-// scriptIcon names each script icon's lucide icon in the menu.
-var scriptIcon = map[string]string{
-	"play": "play", "test": "flask-conical", "lint": "list-checks", "configure": "wrench", "build": "hammer", "debug": "bug",
+	return gitCwd(a.worktreeOf(t), p)
 }
 
 // runMenu is a draft's run context menu: its workspace, the current
-// checkout (or worktree) or a new worktree.
-func runMenu(worktree string, newWorktree bool) []ui.MenuRow {
+// checkout (or the worktree it has) or a new worktree, and the previous
+// worktree, prev's, with its branch under it, when there's one.
+func runMenu(worktree string, newWorktree bool, prev *t3.Thread) []ui.MenuRow {
 	current := ui.MenuRow{Kind: ui.MenuRadioRow, Label: workspaceLabel(worktree, false, false), Icon: "folder", Checked: !newWorktree}
 	if worktree != "" {
 		current.Icon = "folder-git"
 	}
-	return []ui.MenuRow{
+	rows := []ui.MenuRow{
 		{Kind: ui.MenuGroupLabel, Label: "Workspace"},
 		current,
 		{Kind: ui.MenuRadioRow, Label: "New worktree", Icon: "folder-git-2", Checked: newWorktree},
 	}
+	if prev != nil {
+		rows = append(rows, ui.MenuRow{Kind: ui.MenuRadioRow, Label: "Previous worktree", Icon: "history", Detail: prev.Branch})
+	}
+	return rows
 }
 
 // editorMenu lists the editors to make the preferred one, the preferred

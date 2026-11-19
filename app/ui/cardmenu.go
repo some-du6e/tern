@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/color"
 	"strings"
+	"time"
 
 	"gioui.org/font"
 	"gioui.org/io/key"
@@ -26,16 +27,126 @@ func inBorder(w W) W {
 	return func(gtx C) D { return pad(1, 1, 1, 1).Layout(gtx, w) }
 }
 
-// cardMenu is m's rows in T3's menu, w wide: 28dp rows padded 4 by 8 with
-// 16dp icons at 80%, radio rows with their check at the end, group labels,
-// separators and notes.
+// cardMenuState is the open card menu's keyboard: its focus, the menu it
+// is for, the row the arrows or the pointer light, and the typeahead.
+type cardMenuState struct {
+	tag     int
+	open    string
+	hi      int  // the lit row, -1 for none
+	pointer bool // the pointer lit it, and unlights it when it leaves
+	typed   string
+	typedAt time.Time
+}
+
+// menuRows reports whether row r takes the keyboard: items, radio and
+// checkbox rows. Disabled ones stay in the order but do nothing.
+func menuRows(r MenuRow) bool {
+	return r.Kind == MenuItemRow || r.Kind == MenuRadioRow || r.Kind == MenuCheckRow
+}
+
+// nextRow is the next row of rows from i in dir that takes the keyboard,
+// wrapping around; -1 if there's none.
+func nextRow(rows []MenuRow, i, dir int) int {
+	n := len(rows)
+	if i < 0 && dir < 0 {
+		i = n
+	}
+	for k := 1; k <= n; k++ {
+		j := ((i+dir*k)%n + n) % n
+		if menuRows(rows[j]) {
+			return j
+		}
+	}
+	return -1
+}
+
+// cardMenuKeys is a card menu's keyboard (02-primitives.md port note 9):
+// opening moves the focus into it, lighting the first row when the
+// keyboard opened it; the arrows move the light, wrapping, Home and End
+// go to the ends, letters jump to the next row they start (500ms apart
+// they start a new search, the same letter again cycles), Enter and Space
+// pick the lit row, and Escape and Tab close it a level at a time.
+func (th *Theme) cardMenuKeys(gtx C, m *CardMenu) {
+	cs := &th.in.cardMenu
+	if cs.open != m.For {
+		*cs = cardMenuState{open: m.For, hi: -1}
+		if th.in.keyFocus {
+			cs.hi = nextRow(m.Rows, -1, 1)
+		}
+		gtx.Execute(key.FocusCmd{Tag: &cs.tag})
+	}
+	for {
+		ev, ok := gtx.Event(
+			key.FocusFilter{Target: &cs.tag},
+			key.Filter{Focus: &cs.tag, Name: ""},
+			key.Filter{Focus: &cs.tag, Name: key.NameTab, Optional: key.ModShift},
+		)
+		if !ok {
+			return
+		}
+		e, ok := ev.(key.Event)
+		if !ok || e.State != key.Press {
+			continue
+		}
+		cs.pointer = false
+		switch e.Name {
+		case key.NameDownArrow:
+			cs.hi = nextRow(m.Rows, cs.hi, 1)
+		case key.NameUpArrow:
+			cs.hi = nextRow(m.Rows, cs.hi, -1)
+		case key.NameHome:
+			cs.hi = nextRow(m.Rows, -1, 1)
+		case key.NameEnd:
+			cs.hi = nextRow(m.Rows, 0, -1)
+		case key.NameEscape, key.NameTab:
+			th.push(Action{ID: "menus.escape", Kind: "click"})
+		case key.NameReturn, key.NameEnter, key.NameSpace:
+			if cs.hi >= 0 && cs.hi < len(m.Rows) && !m.Rows[cs.hi].Disabled {
+				th.push(Action{ID: fmt.Sprintf("card.%s:%d", m.For, cs.hi), Kind: "click"})
+			}
+		default:
+			if len([]rune(string(e.Name))) != 1 {
+				continue
+			}
+			if gtx.Now.Sub(cs.typedAt) > 500*time.Millisecond {
+				cs.typed = ""
+			}
+			cs.typed, cs.typedAt = cs.typed+strings.ToLower(string(e.Name)), gtx.Now
+			q, from := cs.typed, cs.hi
+			if strings.Count(q, q[:1]) == len(q) {
+				// One letter again and again steps through its rows.
+				q = q[:1]
+			} else {
+				from--
+			}
+			for k := 1; k <= len(m.Rows); k++ {
+				j := ((from+k)%len(m.Rows) + len(m.Rows)) % len(m.Rows)
+				if menuRows(m.Rows[j]) && strings.HasPrefix(strings.ToLower(m.Rows[j].Label), q) {
+					cs.hi = j
+					break
+				}
+			}
+		}
+	}
+}
+
+// cardMenu is m's rows in T3's menu, w wide (menu.tsx): 28dp rows padded
+// 4 by 8; items with 16dp icons in muted at 80%, radio rows with their 12dp
+// icon in the row's colour, the checked one filled with foreground at 8%;
+// checkbox rows with T3's check before the label; group labels,
+// separators and notes. The lit row is filled with accent, over the
+// checked fill.
 func (th *Theme) cardMenu(gtx C, m *CardMenu, w int) D {
+	cs := &th.in.cardMenu
+	th.cardMenuKeys(gtx, m)
 	gtx.Constraints = layout.Constraints{Min: image.Pt(w, 0), Max: image.Pt(w, gtx.Constraints.Max.Y)}
-	return popupFrame(gtx, inBorder(func(gtx C) D {
+	hovered := -1
+	d := popupFrame(gtx, inBorder(func(gtx C) D {
 		return pad(4, 4, 4, 4).Layout(gtx, func(gtx C) D {
 			var kids []layout.FlexChild
 			for i, r := range m.Rows {
-				r, id := r, fmt.Sprintf("card.%s:%d", m.For, i)
+				i, r, id := i, r, fmt.Sprintf("card.%s:%d", m.For, i)
+				row := func(gtx C) D { return th.cardMenuRow(gtx, r, i == cs.hi) }
 				switch r.Kind {
 				case MenuSeparator:
 					kids = append(kids, rigid(func(gtx C) D {
@@ -63,53 +174,86 @@ func (th *Theme) cardMenu(gtx C, m *CardMenu, w int) D {
 							return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: col}, r.Label)
 						})
 					}))
-				case MenuItemRow:
-					if r.Disabled && r.Reason != "" {
-						// A disabled row explains itself in a popover to its
-						// left while the pointer rests on it; its presses do
-						// nothing.
+				default:
+					if r.Disabled {
+						// A disabled row takes no presses; one with a reason
+						// explains itself in a popover to its left while the
+						// pointer rests on it.
 						off := "off." + id
 						kids = append(kids, rigid(func(gtx C) D {
-							d := th.cardMenuRow(gtx, r)
-							th.hover(gtx, off, d.Size)
-							th.reasonPopover(gtx, off, r.Reason, d.Size, true)
+							d := row(gtx)
+							if r.Reason != "" {
+								th.hover(gtx, off, d.Size)
+								th.reasonPopover(gtx, off, r.Reason, d.Size, true)
+							}
 							return d
 						}))
 						continue
 					}
-					fallthrough
-				default:
-					if r.Disabled {
-						id = ""
-					}
-					kids = append(kids, rigid(th.menuItem(id, func(gtx C) D { return th.cardMenuRow(gtx, r) })))
+					kids = append(kids, rigid(func(gtx C) D {
+						c, _ := th.events(gtx, id)
+						if c.Hovered() {
+							hovered = i
+						}
+						d := row(gtx)
+						th.hit(gtx, id, d.Size)
+						return d
+					}))
 				}
 			}
 			return Col(gtx, kids...)
 		})
 	}))
+	// The pointer lights the row under it (unless the menu doesn't light
+	// rows on hover), and unlights it when it leaves.
+	switch {
+	case m.NoHover:
+	case hovered >= 0 && cs.hi != hovered:
+		cs.hi, cs.pointer = hovered, true
+		gtx.Execute(op.InvalidateCmd{})
+	case hovered < 0 && cs.pointer:
+		cs.hi, cs.pointer = -1, false
+		gtx.Execute(op.InvalidateCmd{})
+	}
+	return d
 }
 
-// menuAtPointer draws the menu w 4dp below where the last right-click
-// landed (a Base UI menu anchored there, side bottom, align start), moved
-// back inside a win-sized window when it would run off it.
+// menuAtPointer draws the menu w where the last right-click landed, as a
+// Base UI menu anchored there opens (side bottom, align start, 4dp off):
+// when it would run off the window's right it lines its right edge up
+// with the click instead, and off the bottom it opens above it; then it
+// keeps 5dp inside the win-sized window.
 func (th *Theme) menuAtPointer(gtx C, win image.Point, w W) {
 	m := op.Record(gtx.Ops)
 	g := gtx
 	g.Constraints = layout.Constraints{Max: win}
 	d := w(g)
 	call := m.Stop()
-	at := th.in.ctxAt.Add(image.Pt(0, dp(gtx, 4)))
-	at.X = max(0, min(at.X, win.X-d.Size.X))
-	at.Y = max(0, min(at.Y, win.Y-d.Size.Y))
+	edge, off := dp(gtx, 5), dp(gtx, 4)
+	at := th.in.ctxAt.Add(image.Pt(0, off))
+	if at.X+d.Size.X > win.X-edge {
+		at.X = th.in.ctxAt.X - d.Size.X
+	}
+	if at.Y+d.Size.Y > win.Y-edge {
+		at.Y = th.in.ctxAt.Y - off - d.Size.Y
+	}
+	at.X = max(edge, min(at.X, win.X-edge-d.Size.X))
+	at.Y = max(edge, min(at.Y, win.Y-edge-d.Size.Y))
 	m2 := op.Record(gtx.Ops)
 	op.Offset(at).Add(gtx.Ops)
 	call.Add(gtx.Ops)
 	op.Defer(gtx.Ops, m2.Stop())
 }
 
-// cardMenuRow is one item, radio or checkbox row.
-func (th *Theme) cardMenuRow(gtx C, r MenuRow) D {
+// cardMenuRow is one item, radio or checkbox row, lit or not. Radio rows
+// lay out their own content (BranchToolbar.tsx): the 12dp icon a dp into
+// each side's padding, 6 to the label, and a second line in 12px muted
+// under it with the icon at the first line.
+func (th *Theme) cardMenuRow(gtx C, r MenuRow, lit bool) D {
+	text := P.PopoverForeground
+	if lit {
+		text = P.AccentForeground
+	}
 	m := op.Record(gtx.Ops)
 	d := func(gtx C) D {
 		gtx.Constraints.Min.X = gtx.Constraints.Max.X
@@ -121,36 +265,46 @@ func (th *Theme) cardMenuRow(gtx C, r MenuRow) D {
 			// At least 28 tall: Gio's Inset keeps the minimum it's given, so
 			// the padding comes off it here.
 			gtx.Constraints.Min = image.Pt(gtx.Constraints.Max.X, dp(gtx, 28-8))
-			text := P.PopoverForeground
+			label := func(gtx C) D {
+				return th.Text(gtx, Txt{Size: 14, LineH: 20.0 / 14, Color: text, MaxLines: 1}, r.Label)
+			}
 			var kids []layout.FlexChild
-			if r.Kind == MenuCheckRow {
-				// A 16dp column for the check, then 8 to the label.
+			switch {
+			case r.Kind == MenuRadioRow && r.Detail != "":
+				// The previous worktree (PreviousWorktreeItemContent.tsx):
+				// its icon 4dp down, by the first line, and its branch under
+				// the label.
+				return layout.Flex{Alignment: layout.Start}.Layout(gtx,
+					rigid(func(gtx C) D { return pad(4, 4, 0, -2).Layout(gtx, LucideW(r.Icon, text, 12)) }),
+					flexed(func(gtx C) D {
+						return Col(gtx, rigid(label), rigid(func(gtx C) D {
+							th.middleTruncate(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: P.MutedForeground}, r.Detail, dp(gtx, 8))
+							return D{Size: image.Pt(gtx.Constraints.Max.X, dp(gtx, 16))}
+						}))
+					}))
+			case r.Kind == MenuRadioRow:
+				kids = append(kids, rigid(func(gtx C) D { return pad(0, 4, 0, -2).Layout(gtx, LucideW(r.Icon, text, 12)) }))
+			case r.Kind == MenuCheckRow:
+				// A 16dp column for T3's own check, then 8 to the label.
 				kids = append(kids, rigid(func(gtx C) D {
 					if !r.Checked {
 						return D{Size: image.Pt(dp(gtx, 16), dp(gtx, 16))}
 					}
-					return LucideW("check", text, 16)(gtx)
+					return LucideW("menu-check", text, 16)(gtx)
 				}), rigid(Spacer(8, 0)))
-			}
-			if r.Icon != "" {
-				if r.Kind == MenuRadioRow {
-					// Radio rows lay out their own content: a 12dp icon, gap 6.
-					kids = append(kids, rigid(LucideW(r.Icon, alpha(P.MutedForeground, 0xcc), 12)), rigid(Spacer(6, 0)))
-				} else {
-					icon := LucideW(r.Icon, alpha(P.MutedForeground, 0xcc), 16)
-					if kind, ok := strings.CutPrefix(r.Icon, "provider:"); ok {
-						icon = ProviderMark(kind, alpha(P.MutedForeground, 0xcc), 16)
-					}
-					if id, ok := strings.CutPrefix(r.Icon, "editor:"); ok {
-						// Brand marks at full strength (opacity-100).
-						icon = editorIcon(id, alpha(P.MutedForeground, 0xcc), 16)
-					}
-					kids = append(kids, rigid(func(gtx C) D { return pad(0, -2, 0, -2).Layout(gtx, icon) }), rigid(Spacer(8, 0)))
+			case r.Icon != "":
+				col := over(alpha(P.MutedForeground, 0xcc), P.Popover)
+				icon := LucideW(r.Icon, col, 16)
+				if kind, ok := strings.CutPrefix(r.Icon, "provider:"); ok {
+					icon = ProviderMark(kind, col, 16)
 				}
+				if id, ok := strings.CutPrefix(r.Icon, "editor:"); ok {
+					// Brand marks at full strength (opacity-100).
+					icon = editorIcon(id, col, 16)
+				}
+				kids = append(kids, rigid(func(gtx C) D { return pad(0, -2, 0, -2).Layout(gtx, icon) }), rigid(Spacer(8, 0)))
 			}
-			kids = append(kids, flexed(func(gtx C) D {
-				return th.Text(gtx, Txt{Size: 14, LineH: 20.0 / 14, Color: text, MaxLines: 1}, r.Label)
-			}))
+			kids = append(kids, flexed(label))
 			if r.Shortcut != "" {
 				kids = append(kids, rigid(func(gtx C) D {
 					return pad(0, 0, 0, 16).Layout(gtx, func(gtx C) D {
@@ -158,16 +312,14 @@ func (th *Theme) cardMenuRow(gtx C, r MenuRow) D {
 					})
 				}))
 			}
-			if r.Kind == MenuRadioRow && r.Checked {
-				kids = append(kids, rigid(func(gtx C) D {
-					return pad(0, -2, 0, 6).Layout(gtx, LucideW("check", text, 14))
-				}))
-			}
 			return Row(gtx, kids...)
 		})
 	}(gtx)
 	call := m.Stop()
-	if r.Kind == MenuRadioRow && r.Checked && !th.in.menuHover {
+	switch {
+	case lit:
+		fill(gtx, over(P.Accent, P.Popover), image.Rectangle{Max: d.Size}, dp(gtx, 4))
+	case r.Kind == MenuRadioRow && r.Checked:
 		fill(gtx, over(alpha(P.Foreground, 0x14), P.Popover), image.Rectangle{Max: d.Size}, dp(gtx, 4))
 	}
 	if r.Disabled {
@@ -223,9 +375,11 @@ func (th *Theme) branchPicker(gtx C, p *BranchPicker, w int) D {
 		switch {
 		case len(rows) > 0:
 			kids = append(kids, rigid(func(gtx C) D {
-				// The list scrolls past 224dp (max-h-56), padded 8 0 8 4.
+				// The list scrolls past 224dp (max-h-56): the list padded 4
+				// round, the refs in it 8 above and below and 4 at the start,
+				// with the 6dp scrollbar gutter kept at the end.
 				gtx.Constraints.Max.Y = dp(gtx, 224)
-				return pad(8, 4, 8, 4).Layout(gtx, func(gtx C) D {
+				return pad(4+8, 4+6, 4+8, 4+4).Layout(gtx, func(gtx C) D {
 					if hi := p.Highlight; hi != th.in.pickHi {
 						// The arrows bring the highlight into view.
 						th.in.pickHi = hi
@@ -273,7 +427,8 @@ func (th *Theme) branchPicker(gtx C, p *BranchPicker, w int) D {
 
 // refSearch is the picker's search block: padded 10 by 12, a 16dp search
 // icon at muted 55% and the field over a 1dp rule at border 70%, which
-// turns ring colour while it has the focus. The arrows move the highlight
+// turns ring colour while it has the focus, all drawn a dp up
+// (-translate-y-px) in the room they take. The arrows move the highlight
 // and Enter picks it ("branch.search" key and submit actions).
 func (th *Theme) refSearch(gtx C) D {
 	const id = "branch.search"
@@ -291,7 +446,8 @@ func (th *Theme) refSearch(gtx C) D {
 	return pad(10, 12, 0, 12).Layout(gtx, func(gtx C) D {
 		w := gtx.Constraints.Max.X
 		h := dp(gtx, 26)
-		rule := over(alpha(P.Border, uint8(int(P.Border.A)*70/100)), P.Popover)
+		defer op.Offset(image.Pt(0, -max(1, dp(gtx, 1)))).Push(gtx.Ops).Pop()
+		rule := over(faded(P.Border, 0.7), P.Popover)
 		if gtx.Focused(ed) {
 			rule = P.Ring
 		}
@@ -403,7 +559,7 @@ func (th *Theme) alertDialog(gtx C, a *Alert, win image.Point) {
 }
 
 // footerFill is a dialog's default footer: muted at 72% over the popup.
-func footerFill() color.NRGBA { return over(alpha(P.Muted, uint8(int(P.Muted.A)*72/100)), P.Popover) }
+func footerFill() color.NRGBA { return over(faded(P.Muted, 0.72), P.Popover) }
 
 // dialog draws body as T3's dialog in the middle of a win-sized window, up
 // to maxW wide: the backdrop over everything, then the popup with the

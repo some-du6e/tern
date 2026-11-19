@@ -83,7 +83,7 @@ func newFakeEnv(t *testing.T) *fakeEnv {
 // dial connects a's key to the fake as a paired (bearer) session.
 func (f *fakeEnv) dial(a *App) *t3.Conn {
 	f.t.Helper()
-	sess := &t3.Session{EnvironmentID: "swiss", HTTPBaseURL: f.srv.URL, WSBaseURL: "ws" + strings.TrimPrefix(f.srv.URL, "http"),
+	sess := &t3.Session{EnvironmentID: "studio", HTTPBaseURL: f.srv.URL, WSBaseURL: "ws" + strings.TrimPrefix(f.srv.URL, "http"),
 		AccessToken: "test", ExpiresAt: time.Now().Add(time.Hour), Bearer: true}
 	conn, err := t3.Dial(context.Background(), a.key, sess)
 	if err != nil {

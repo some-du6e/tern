@@ -1,9 +1,13 @@
 package main
 
-import "github.com/some-du6e/tern/app/ui"
+import (
+	"image"
+
+	"github.com/some-du6e/tern/app/ui"
+)
 
 func envs() []ui.Env {
-	return []ui.Env{{Label: "workstation", Status: ui.EnvOnline}, {Label: "bowen", Status: ui.EnvOnline}, {Label: "macbook", Status: ui.EnvOffline}}
+	return []ui.Env{{Label: "workstation", Status: ui.EnvOnline}, {Label: "buildbox", Status: ui.EnvOnline}, {Label: "macbook", Status: ui.EnvOffline}}
 }
 
 func sidebar(s *ui.Scene, selected string) {
@@ -11,13 +15,13 @@ func sidebar(s *ui.Scene, selected string) {
 	s.Filter = "All projects"
 	s.Pinned = []ui.ThreadRow{
 		{Title: "tern roadmap", Project: "tern", Branch: "main", Age: "2d"},
-		{Title: "Fleet: bowen nightly backups", Project: "swiss-fleet", Branch: "main", Env: "bowen", Unread: true, Age: "7h"},
+		{Title: "Fleet: buildbox nightly backups", Project: "home-lab", Branch: "main", Env: "buildbox", Unread: true, Age: "7h"},
 	}
 	s.Active = []ui.ThreadRow{
 		{Title: "Review: thread.stop capability", Project: "t3code", State: ui.ThreadApproval, Note: "pnpm test --filter server", Age: "2h"},
 		{Title: "Watch pairing flow", Project: "tern", State: ui.ThreadQuestion, Note: "Which session should the watch get?", Age: "41m"},
 		{Title: "Port the T3 Connect client to Go", Project: "tern", Branch: "t3/go-client", State: ui.ThreadRunning, Timer: "1m 08s", Age: "now"},
-		{Title: "Restore test: vaultwarden snapshot", Project: "swiss-fleet", Branch: "main", Env: "bowen", State: ui.ThreadRunning, Timer: "12m", Age: "12m"},
+		{Title: "Restore test: vaultwarden snapshot", Project: "home-lab", Branch: "main", Env: "buildbox", State: ui.ThreadRunning, Timer: "12m", Age: "12m"},
 		{Title: "Gio sidebar: virtualize 1k rows", Project: "tern", Branch: "t3/sidebar-virtual", Unread: true, Age: "18m"},
 		{Title: "Relay status polling", Project: "tern", State: ui.ThreadError, Note: "RelayEnvironmentEndpointTimedOutError", Age: "5h"},
 		{Title: "History essay: outline and sources", Project: "schoolwork-writer", Branch: "main", Age: "1d"},
@@ -97,7 +101,6 @@ func base(selected string) *ui.Scene {
 		MoreAbove:   true,
 	}
 	sidebar(s, selected)
-	s.Browser = &ui.Browser{Title: "tern", URL: "localhost:8787", Control: "You have control"}
 	s.Items = threadItems()
 	s.Header = &ui.ChatHeader{Project: "tern", Icon: ui.ProjectIcon{Monogram: "TN", Color: "sky"}, Server: true, CanRename: true}
 	s.DetailsCard = true
@@ -107,9 +110,16 @@ func base(selected string) *ui.Scene {
 		Scripts: &ui.Scripts{Primary: "Test", Icon: "test", Any: true},
 		Branch:  &ui.BranchRow{Label: "t3/go-client"},
 		Git:     &ui.GitActions{Label: "Commit, push & PR", Icon: "provider:github"},
-		Changes: &ui.Changes{Insertions: 2382, Deletions: 14, Base: "vs main"},
+		// tern has no Diff surface for the row to open yet, so it's off,
+		// as in the app.
+		Changes: &ui.Changes{Insertions: 2382, Deletions: 14, Base: "vs main", Disabled: true},
 	}
-	s.Changes = []ui.FileChange{
+	return s
+}
+
+// changedFiles are the files the diff window lists.
+func changedFiles() []ui.FileChange {
+	return []ui.FileChange{
 		{Path: "app/t3/rpc.go", Add: 48, Del: 6, Kind: 'M', Selected: true},
 		{Path: "app/app.go", Add: 112, Kind: 'A'},
 		{Path: "app/t3/relay.go", Add: 9, Del: 3, Kind: 'M'},
@@ -117,7 +127,6 @@ func base(selected string) *ui.Scene {
 		{Path: "app/ui/model.go", Add: 21, Del: 2, Kind: 'M'},
 		{Path: "poc/README.md", Add: 1, Del: 1, Kind: 'M'},
 	}
-	return s
 }
 
 func runningScene() *ui.Scene {
@@ -129,7 +138,6 @@ func runningScene() *ui.Scene {
 
 func approvalScene() *ui.Scene {
 	s := base("Port the T3 Connect client to Go")
-	s.Panel = ui.PanelBrowser
 	s.State = ui.ThreadApproval
 	s.Active[2].State = ui.ThreadApproval
 	s.Active[2].Note = "git push -u origin t3/go-client"
@@ -186,7 +194,7 @@ func diffScene() *ui.Scene {
 	s.Diff = &ui.DiffView{
 		Title: "Diff  ·  Turn 4 of 4",
 		File:  "app/t3/rpc.go",
-		Files: s.Changes,
+		Files: changedFiles(),
 		Lines: []ui.DiffLine{
 			{Kind: '@', Text: "@@ -104,17 +104,37 @@ func (c *Conn) readLoop() error {"},
 			{Kind: ' ', Old: 104, New: 104, Text: "func (c *Conn) readLoop() error {"},
@@ -250,7 +258,6 @@ func questionScene() *ui.Scene {
 		{Header: "Session", Text: "Which session should the watch get?", Options: []string{"30-day, full access", "30-day, read + operate only", "1-hour, renew from phone"}, Picked: 1},
 		{Header: "Pairing", Text: "How should the watch receive the credential?", Options: []string{"QR code on desktop", "Typed 6-word code", "Through the iPhone app"}, Picked: 0},
 	}
-	s.Changes = nil
 	return s
 }
 
@@ -280,9 +287,6 @@ func draftScene() *ui.Scene {
 		{Name: "/frontend:refactor", Hint: "<path>", Desc: "Refactor a component"},
 		{Name: "/pr-comments", Desc: "Fetch review comments on this branch"},
 	}
-	s.Changes = nil
-	s.Panel = ui.PanelBrowser
-	s.Browser = &ui.Browser{}
 	return s
 }
 
@@ -343,7 +347,97 @@ func draftMenuScene() *ui.Scene {
 		{Kind: ui.MenuGroupLabel, Label: "Workspace"},
 		{Kind: ui.MenuRadioRow, Label: "Current checkout", Icon: "folder"},
 		{Kind: ui.MenuRadioRow, Label: "New worktree", Icon: "folder-git-2", Checked: true},
+		{Kind: ui.MenuRadioRow, Label: "Previous worktree", Icon: "history", Detail: "t3/investigate-release-build-times"},
 	}}
+	return s
+}
+
+// titleMenuScene has the thread's actions menu open under its title, as
+// a click on the title opens it; the thread came from an agent on a
+// linked machine, so its badge follows the title.
+func titleMenuScene() *ui.Scene {
+	s := runningScene()
+	s.Header.Origin = "laptop"
+	s.Menu = &ui.ContextMenu{At: image.Pt(353, 41), Items: []ui.MenuItem{
+		{ID: "new-thread-on-branch", Label: "New thread on t3/go-client", Icon: "message-square-plus"},
+		{ID: "pin", Label: "Pin thread", Icon: "pin"},
+		{ID: "settle", Label: "Settle thread", Icon: "circle-check"},
+		{ID: "rename", Label: "Rename thread", Icon: "pencil", Sep: true},
+		{ID: "regenerate-title", Label: "Regenerate title", Icon: "refresh-cw"},
+		{ID: "mark-unread", Label: "Mark unread", Icon: "mail-open"},
+		{ID: "auto-settle", Label: "Auto-settle behavior", Icon: "timer", Children: []ui.MenuItem{
+			{ID: "auto-settle:enabled", Label: "Follow settings", Radio: true, Checked: true},
+			{ID: "auto-settle:disabled", Label: "Never", Radio: true},
+		}},
+		{ID: "copy", Label: "Copy", Icon: "copy", Sep: true, Children: []ui.MenuItem{
+			{ID: "copy-path", Label: "Path", Icon: "folder"},
+			{ID: "copy-branch", Label: "Branch", Icon: "git-branch"},
+			{ID: "copy-thread", Label: "Thread", Icon: "message-square"},
+			{ID: "copy-thread-id", Label: "Thread ID", Icon: "hash"},
+		}},
+		{ID: "archive", Label: "Archive thread", Icon: "archive", Off: true, Sep: true},
+		{ID: "delete", Label: "Delete", Icon: "trash", Danger: true},
+	}}
+	return s
+}
+
+// branchPickerScene has the inline card's branch picker open, the
+// highlight on its first ref.
+func branchPickerScene() *ui.Scene {
+	s := runningScene()
+	s.Card.Picker = &ui.BranchPicker{Status: "Showing 5 of 31 refs", Refs: []ui.BranchRef{
+		{Name: "t3/go-client", Tag: "current"}, {Name: "main", Tag: "default"},
+		{Name: "t3/investigate-release-build-times", Tag: "worktree"}, {Name: "t3/sidebar-virtual"}, {Name: "origin/main", Tag: "remote"},
+	}}
+	return s
+}
+
+// noProjectScene is a new thread in No project: its own grey icon on the
+// crumb, a plain title, and a card for its folder alone, which has no Git
+// and no scripts yet.
+func noProjectScene() *ui.Scene {
+	s := draftScene()
+	s.Suggest, s.Composer, s.Images = nil, "", 0
+	s.Header = &ui.ChatHeader{Project: "No project", Icon: ui.ProjectIcon{Lucide: "message-square-dashed", Color: "gray"}}
+	s.Card = &ui.ThreadDetails{
+		Run:     &ui.RunContext{Machine: "server", Label: "workstation", Tip: "workstation", Workspace: "folder-git-2", WorkspaceTip: "New worktree"},
+		OpenIn:  &ui.OpenIn{Label: "Open in editor", Disabled: true},
+		Scripts: &ui.Scripts{},
+	}
+	return s
+}
+
+// initGitScene is a thread in a folder that isn't a repository: Initialize
+// Git in place of the branch, and the project's scripts as Actions.
+func initGitScene() *ui.Scene {
+	s := runningScene()
+	s.Card.Scripts = &ui.Scripts{Any: true}
+	s.Card.Branch, s.Card.Git, s.Card.Changes = nil, nil, nil
+	s.Card.InitGit = true
+	return s
+}
+
+// itemsMenuScene is a card with every row turned off: "Choose what to
+// show", with the menu it opens.
+func itemsMenuScene() *ui.Scene {
+	s := runningScene()
+	s.Card = &ui.ThreadDetails{Menu: &ui.CardMenu{For: "items", Rows: []ui.MenuRow{
+		{Kind: ui.MenuGroupLabel, Label: "Show in thread details"},
+		{Kind: ui.MenuCheckRow, Label: "Environment and worktree"}, {Kind: ui.MenuCheckRow, Label: "Open in editor"},
+		{Kind: ui.MenuCheckRow, Label: "Project scripts"}, {Kind: ui.MenuCheckRow, Label: "Branch and pull request"},
+		{Kind: ui.MenuCheckRow, Label: "Git actions"}, {Kind: ui.MenuCheckRow, Label: "Changes", Checked: true},
+		{Kind: ui.MenuSeparator}, {Label: "Reset to default"},
+	}}}
+	return s
+}
+
+// subagentScene is a subagent's thread in a narrow window: its parent
+// folds to "..." to leave the title room.
+func subagentScene() *ui.Scene {
+	s := runningScene()
+	s.SidebarHidden = true
+	s.Title = "Check the relay's retry budget against the sleep handler"
+	s.Header.Parent = "Port the T3 Connect client to Go"
 	return s
 }
 
@@ -399,7 +493,7 @@ func renameScene() *ui.Scene {
 }
 
 func signInScene() *ui.Scene {
-	return &ui.Scene{Login: &ui.SignIn{Email: "karim@example.com", Step: 1, Code: "4821"}}
+	return &ui.Scene{Login: &ui.SignIn{Email: "dev@example.com", Step: 1, Code: "4821"}}
 }
 
 func phoneScene() *ui.Scene {

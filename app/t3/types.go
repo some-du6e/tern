@@ -32,7 +32,6 @@ type Project struct {
 type ProjectIcon struct {
 	Kind         string `json:"kind"` // lucide, emoji, monogram
 	Name         string `json:"name"`
-	Emoji        string `json:"emoji"`
 	Text         string `json:"text"`
 	Color        string `json:"color"`
 	MonogramText string `json:"monogramText"`
@@ -47,7 +46,6 @@ type ProjectScript struct {
 	Icon                string `json:"icon"` // play, test, lint, configure, build, debug
 	RunOnWorktreeCreate bool   `json:"runOnWorktreeCreate"`
 	RunOnSettle         bool   `json:"runOnSettle"`
-	StopOnSettle        bool   `json:"stopOnSettle"`
 }
 
 type RuntimeRequest struct {
@@ -72,8 +70,11 @@ type Thread struct {
 	PinnedAt              string             `json:"pinnedAt"`
 	PinOrderKey           string             `json:"pinOrderKey"`
 	ActiveOrderKey        string             `json:"activeOrderKey"`
+	SettledOverride       string             `json:"settledOverride"` // "settled", "active" or ""
 	SettledAt             string             `json:"settledAt"`
 	SnoozedUntil          string             `json:"snoozedUntil"`
+	AutoSettleDisabledAt  string             `json:"autoSettleDisabledAt"`
+	TitleRegeneration     *Regeneration      `json:"titleRegeneration"`
 	ArchivedAt            string             `json:"archivedAt"`
 	DeletedAt             string             `json:"deletedAt"`
 	LastError             string             `json:"lastError"`
@@ -98,6 +99,11 @@ type Thread struct {
 // LinkOrigin is the linked environment whose agent started a thread.
 type LinkOrigin struct {
 	Label string `json:"label"`
+}
+
+// Regeneration is a title regeneration on its way.
+type Regeneration struct {
+	RequestID string `json:"requestId"`
 }
 
 // GuestShare is a thread's guest link (guestShare.ts): when it expires,
@@ -331,6 +337,7 @@ type ServerConfig struct {
 			InlineMessageContext         bool `json:"inlineMessageContext"`
 			ThreadStop                   bool `json:"threadStop"`
 			PullRequestChecks            bool `json:"pullRequestChecks"`
+			ThreadAutoSettleOptOut       bool `json:"threadAutoSettleOptOut"`
 		} `json:"capabilities"`
 	} `json:"environment"`
 }

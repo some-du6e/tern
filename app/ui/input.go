@@ -64,17 +64,36 @@ type input struct {
 	pressed               bool                   // a press landed this frame
 	anchors               map[string]image.Point // where targets drop their menus, in the window
 	hovers                map[string]*hoverTag
-	// The details card's scroll.
+	// Whether the last press landed on a button (a click target other
+	// than a sidebar row, T3's are divs), which the rename field's blur
+	// asks; the click targets that are buttons; and a button's press seen
+	// this frame.
+	pressButton, buttonPressed bool
+	buttons                    map[string]bool
+	// The details card's scroll; whether it's being laid out only to
+	// measure it, which leaves its popups and focus alone; and the density
+	// it settled on for the card it was last given.
 	cardScroll  int
 	cardScrollG gesture.Scroll
+	measuring   bool
+	density     densityMemo
 	// The branch picker's search and highlight last frame: a new search
 	// scrolls its list to the top, a new highlight into view.
 	pickQuery string
 	pickHi    int
-	// The shell: whether the details card fits inline (from the last
-	// layout), and the sidebar rail's drag.
+	// The menus: the row being drawn under the pointer, the open context
+	// menu's submenus and highlight, and the open card menu's focus and lit
+	// row; and the click target that takes the focus on its next layout, a
+	// menu's trigger once Escape closes the menu.
+	menuHover bool
+	menu      menuState
+	cardMenu  cardMenuState
+	refocus   string
+	// The shell: the window's width, which tooltips keep inside; whether
+	// the details card fits inline (from the last layout), and the sidebar
+	// rail's drag.
+	winW        int
 	cardFits    bool
-	menuHover   bool // the menu row being drawn is under the pointer
 	railDrag    bool
 	railW       float32
 	railEdge    handle
@@ -146,6 +165,10 @@ func (th *Theme) List(id string, toEnd bool) *layout.List {
 // hit makes a size-sized area at the current offset a click target and
 // reports whether the pointer is over it.
 func (th *Theme) hit(gtx C, id string, size image.Point) bool {
+	if th.in.buttons == nil {
+		th.in.buttons = map[string]bool{}
+	}
+	th.in.buttons[id] = !strings.HasPrefix(id, "thread:")
 	c, rc := th.events(gtx, id)
 	defer clip.Rect{Max: size}.Push(gtx.Ops).Pop()
 	c.Add(gtx.Ops)
@@ -171,6 +194,9 @@ func (th *Theme) events(gtx C, id string) (*gesture.Click, *int) {
 		e, ok := c.Update(gtx.Source)
 		if !ok {
 			break
+		}
+		if e.Kind == gesture.KindPress && th.in.buttons[id] {
+			th.in.buttonPressed = true
 		}
 		if e.Kind == gesture.KindClick {
 			if r, ok := th.in.runs[id]; ok {
@@ -218,6 +244,7 @@ func (th *Theme) events(gtx C, id string) (*gesture.Click, *int) {
 		if e, ok := ev.(pointer.Event); ok {
 			switch e.Buttons {
 			case pointer.ButtonSecondary:
+				th.in.menu.open = false // a new menu starts afresh
 				th.push(Action{ID: id, Kind: "context"})
 			case pointer.ButtonTertiary:
 				th.push(Action{ID: id, Kind: "middle"})
@@ -243,6 +270,7 @@ func (th *Theme) trackPointer(gtx C, size image.Point) {
 				th.in.ctxAt = e.Position.Round()
 			}
 			th.in.pressAt, th.in.pressed, th.in.keyFocus = e.Position.Round(), true, false
+			th.in.pressButton, th.in.buttonPressed = th.in.buttonPressed, false
 		}
 	}
 	defer clip.Rect{Max: size}.Push(gtx.Ops).Pop()
@@ -255,6 +283,10 @@ func (th *Theme) trackPointer(gtx C, size image.Point) {
 // is only while focus came from the keyboard.
 func (th *Theme) keyTarget(gtx C, id string) bool {
 	c, _ := th.events(gtx, id)
+	if th.in.refocus == id {
+		th.in.refocus = ""
+		gtx.Execute(key.FocusCmd{Tag: c})
+	}
 	for {
 		ev, ok := gtx.Event(key.FocusFilter{Target: c},
 			key.Filter{Focus: c, Name: key.NameReturn}, key.Filter{Focus: c, Name: key.NameEnter}, key.Filter{Focus: c, Name: key.NameSpace})
@@ -282,6 +314,11 @@ func (th *Theme) focusTarget(gtx C, id string) {
 		gtx.Execute(key.FocusCmd{Tag: c})
 	}
 }
+
+// FocusTarget sends the focus back to click target id on its next layout,
+// with its ring: Escape hands it back to the trigger of the menu it
+// closes.
+func (th *Theme) FocusTarget(id string) { th.in.refocus = id }
 
 // FocusCard sends the focus into the details card's first control on its
 // next frame, as T3 does when the card opens. Opened from the keyboard,
@@ -373,12 +410,50 @@ func (th *Theme) Tip(id, tip string, up bool, align int, w W) W {
 
 // tipAt shows T3's tooltip for click target id (size big at the current
 // offset) once the pointer has rested on it for 600ms, fading and scaling
-// in over 150ms (docs/ui/02-primitives.md §3.7, port note 10).
+// in over 150ms (docs/ui/02-primitives.md §3.7, port note 10). align lines
+// it up with the target's left edge (-1), middle (0) or right edge (1).
 func (th *Theme) tipAt(gtx C, id, tip string, size image.Point, up bool, align int) {
+	th.tipPlaced(gtx, id, tip, size, up, func(w int) int {
+		switch align {
+		case -1:
+			return 0
+		case 1:
+			return size.X - w
+		}
+		return (size.X - w) / 2
+	})
+}
+
+// tipInside is tipAt below a target whose left edge is x in a window win
+// wide: centred on it, then moved to stay 5dp inside the window, as Base
+// UI's collision padding keeps it (02-primitives.md port note 8).
+func (th *Theme) tipInside(gtx C, id, tip string, size image.Point, x, win int) {
+	th.tipPlaced(gtx, id, tip, size, false, func(w int) int {
+		edge := dp(gtx, 5)
+		return max(edge-x, min((size.X-w)/2, win-edge-x-w))
+	})
+}
+
+// tipArea shows tip above r (at the current offset) while the pointer
+// rests on it, without taking the presses from what's under it: the
+// tooltip of an icon inside a row.
+func (th *Theme) tipArea(gtx C, id, tip string, r image.Rectangle) {
+	defer op.Offset(r.Min).Push(gtx.Ops).Pop()
+	th.hoverArea(gtx, id, r.Size())
+	th.tipShown(gtx, id, tip, r.Size(), true, th.hoverState(gtx, id), false, func(w int) int { return (r.Dx() - w) / 2 })
+}
+
+// tipPlaced is tipAt with the tooltip's left, given its width, from left.
+func (th *Theme) tipPlaced(gtx C, id, tip string, size image.Point, up bool, left func(w int) int) {
 	c := th.in.clicks[id]
 	// Keyboard focus opens it at once, without the fade.
 	focused := c != nil && gtx.Focused(c) && th.in.keyFocus
-	if c == nil || !(c.Hovered() || focused) || tip == "" {
+	th.tipShown(gtx, id, tip, size, up, c != nil && c.Hovered(), focused, left)
+}
+
+// tipShown draws target id's tooltip while it's hovered or focused.
+func (th *Theme) tipShown(gtx C, id, tip string, size image.Point, up, hovered, focused bool, left func(w int) int) {
+	if !(hovered || focused) || tip == "" {
 		delete(th.in.tipSince, id)
 		return
 	}
@@ -408,13 +483,7 @@ func (th *Theme) tipAt(gtx C, id, tip string, size image.Point, up bool, align i
 	td := th.tooltip(g, tip)
 	call := m.Stop()
 	gap := dp(gtx, 4)
-	at := image.Pt((size.X-td.Size.X)/2, size.Y+gap)
-	switch align {
-	case -1:
-		at.X = 0
-	case 1:
-		at.X = size.X - td.Size.X
-	}
+	at := image.Pt(left(td.Size.X), size.Y+gap)
 	if up {
 		at.Y = -td.Size.Y - gap
 	}
@@ -434,23 +503,34 @@ func (th *Theme) tipAt(gtx C, id, tip string, size image.Point, up bool, align i
 	op.Defer(gtx.Ops, m2.Stop())
 }
 
-// tooltip is T3's tooltip popup: popover surface, 1dp border, radius 6,
-// 12/16.5 text, padded 4 by 8, and its lip and small shadow.
-func (th *Theme) tooltip(gtx C, tip string) D {
+// tooltip is T3's tooltip popup (TooltipPopup): popover surface, 1dp
+// border, radius 6, 12/16.5 text padded 4 by 8 inside the border, and its
+// lip and small shadow.
+func (th *Theme) tooltip(gtx C, tip string) D { return th.tipBox(gtx, tip, false) }
+
+// tipBox is a tooltip's box, or with glass a tooltip-styled popover's
+// (popover.tsx tooltipStyle): the dropdown glass as it paints over the
+// window, inside a 1dp border at the foreground's 10%, with 12/16 text.
+func (th *Theme) tipBox(gtx C, tip string, glass bool) D {
+	t := Txt{Size: 12, LineH: 16.5 / 12, Color: P.PopoverForeground}
+	bg, border := P.Popover, over(P.Border, P.Popover)
+	if glass {
+		t.LineH = 16.0 / 12
+		bg = cardFill()
+		border = over(alpha(P.ContrastForeground, 0x1a), bg)
+	}
 	m := op.Record(gtx.Ops)
-	d := pad(4, 8, 4, 8).Layout(gtx, func(gtx C) D {
-		return th.Text(gtx, Txt{Size: 12, LineH: 16.5 / 12, Color: P.PopoverForeground}, tip)
-	})
+	d := pad(5, 9, 5, 9).Layout(gtx, func(gtx C) D { return th.Text(gtx, t, tip) })
 	call := m.Stop()
 	r := image.Rectangle{Max: d.Size}
 	rad := dp(gtx, 6)
 	shadow(gtx, r, rad, []boxShadow{{0, 4, 6, -1, alpha(rgb(0), 0x0d)}, {0, 2, 4, -2, alpha(rgb(0), 0x0d)}})
-	fill(gtx, P.Popover, r, rad)
-	strokeRect(gtx, over(P.Border, P.Popover), r, rad, float32(max(1, dp(gtx, 1))))
+	fill(gtx, bg, r, rad)
+	strokeRect(gtx, border, r, rad, float32(max(1, dp(gtx, 1))))
 	if dark {
-		hline(gtx, over(alpha(rgb(0xffffff), 0x0f), P.Popover), max(1, dp(gtx, 1)), rad, r.Max.X-rad)
+		hline(gtx, over(alpha(rgb(0xffffff), 0x0f), bg), max(1, dp(gtx, 1)), rad, r.Max.X-rad)
 	} else {
-		hline(gtx, over(alpha(rgb(0), 0x0a), P.Popover), r.Max.Y-max(1, dp(gtx, 1))-1, rad, r.Max.X-rad)
+		hline(gtx, over(alpha(rgb(0), 0x0a), bg), r.Max.Y-max(1, dp(gtx, 1))-1, rad, r.Max.X-rad)
 	}
 	call.Add(gtx.Ops)
 	return d

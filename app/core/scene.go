@@ -271,7 +271,6 @@ func (a *App) build(now time.Time) *ui.Scene {
 	s.Net = a.net
 	s.Error = a.errText
 	s.Notice = a.notice
-	s.Panel = ui.PanelChanges
 	s.Details = a.detailsOpen
 	cardKey := a.openID
 	if a.draft != "" {
@@ -325,13 +324,7 @@ func (a *App) build(now time.Time) *ui.Scene {
 		}
 	}
 	s.Stats = fmt.Sprintf("%s threads   ·   %d running", len3(total), running)
-	if _, t := a.thread(a.ctxRef); t != nil {
-		g := ui.Trait{Sel: -1}
-		for _, it := range a.threadItems(t) {
-			g.Choices = append(g.Choices, ui.TraitChoice{Label: it.label, Desc: it.desc, Danger: it.danger, Off: it.off})
-		}
-		s.Context = &ui.Traits{Groups: []ui.Trait{g}}
-	}
+	a.menuScene(s)
 	if a.accountOpen {
 		s.Account = &ui.Traits{Groups: []ui.Trait{{Label: "T3 Connect", Sel: -1, Choices: []ui.TraitChoice{{Label: "Sign out", Desc: "Forgets this device's sessions"}}}}}
 	}
@@ -461,9 +454,6 @@ func (a *App) threadScene(s *ui.Scene, now time.Time) {
 		a.pending(s, t, v)
 	}
 	a.composerScene(s, a.openID)
-	if v != nil {
-		s.Changes = changes(v)
-	}
 }
 
 func shortPath(p string) string {
@@ -500,34 +490,6 @@ func runtimeLabel(id string) string {
 		}
 	}
 	return id
-}
-
-// changes lists the files the thread's edits touched, newest stats per file.
-func changes(v *threadView) []ui.FileChange {
-	byFile := map[string]*ui.FileChange{}
-	var order []string
-	for _, it := range v.sorted() {
-		if it.Type != "file_change" || it.FileName == "" {
-			continue
-		}
-		c := byFile[it.FileName]
-		if c == nil {
-			c = &ui.FileChange{Path: it.FileName, Kind: 'M'}
-			byFile[it.FileName] = c
-			order = append(order, it.FileName)
-		}
-		if it.Additions != nil {
-			c.Add += *it.Additions
-		}
-		if it.Deletions != nil {
-			c.Del += *it.Deletions
-		}
-	}
-	var out []ui.FileChange
-	for _, f := range order {
-		out = append(out, *byFile[f])
-	}
-	return out
 }
 
 func firstLine(s string) string {

@@ -1,5 +1,7 @@
 package ui
 
+import "image"
+
 // The view model. Every field maps to something the T3 protocol sends (see
 // ../docs): shell threads, turn items, runs, runtime requests. The mockups
 // fill it with fixtures; the client will fill it from the socket.
@@ -174,6 +176,29 @@ type TraitChoice struct {
 	Off         bool // shown but can't be picked now
 }
 
+// ContextMenu is the menu a thread's title, a right-click on the header or
+// on a sidebar row opens: the browser's DOM menu in T3
+// (contextMenuFallback.ts).
+type ContextMenu struct {
+	Items    []MenuItem
+	Keyboard bool        // opened from the keyboard: the first item has focus
+	At       image.Point // where a mockup's opens; a live one opens at the click
+}
+
+// MenuItem is one row of a menu.
+type MenuItem struct {
+	ID       string // click target "ctx:<ID>"
+	Label    string
+	Icon     string // the menu's own icon (menuIcons)
+	Detail   string // a trailing value: "6:00 PM"
+	Danger   bool
+	Off      bool       // shown, but can't be picked now
+	Sep      bool       // a separator above it
+	Radio    bool       // a radio row: a check when Checked, else a gap
+	Checked  bool       //
+	Children []MenuItem // a submenu
+}
+
 type Suggestion struct {
 	Name, Hint, Desc string
 }
@@ -194,24 +219,6 @@ const (
 	SignInCode
 	SignInPair
 )
-
-// Browser is the preview surface. An empty URL is the new-tab page.
-type Browser struct {
-	Title   string
-	URL     string
-	Control string // "You have control", "Agent has control", "Watching"
-}
-
-type RunInfo struct {
-	Machine  string
-	Provider string // picks the model's logo
-	Status   string
-	Model    string
-	Elapsed  string
-	Mode     string
-	Branch   string
-	Worktree string
-}
 
 // ChatHeader is the breadcrumb in the chat column's title row
 // (ChatHeader.tsx): the project, a subagent's parent, then the thread's
@@ -272,10 +279,9 @@ type RunContext struct {
 
 // OpenIn is the Open in editor split (OpenInPicker.tsx).
 type OpenIn struct {
-	Editor       string // the preferred editor's id, "" for none
-	Label        string // "Open in VS Code", "Open in editor"
-	Disabled     bool   // nothing to open it with
-	MenuDisabled bool
+	Editor   string // the preferred editor's id, "" for none
+	Label    string // "Open in VS Code", "Open in editor"
+	Disabled bool   // nothing to open it with
 }
 
 // Scripts is the project's scripts (ProjectScriptsControl.tsx): a split
@@ -284,7 +290,6 @@ type Scripts struct {
 	Primary string // the script the split runs, "" for none
 	Icon    string // its icon: play, test, lint, configure, build or debug
 	Any     bool   // the project has scripts
-	CanAdd  bool   // "Add project script" opens the editor for a new one
 }
 
 // BranchRow is the branch picker's trigger (BranchToolbarBranchSelector.tsx).
@@ -399,6 +404,7 @@ type CardMenu struct {
 	For       string
 	Rows      []MenuRow
 	AtPointer bool
+	NoHover   bool // the pointer doesn't light its rows (highlightItemOnHover off)
 }
 
 // MenuRowKind is what a MenuRow draws (menu.tsx).
@@ -418,6 +424,7 @@ type MenuRow struct {
 	Kind     MenuRowKind
 	Label    string
 	Icon     string // a lucide icon, 16dp at 80% before the label (12dp in radio rows); "provider:<kind>" or "editor:<id>" for a mark
+	Detail   string // a radio row's second line in 12px muted: the previous worktree's branch
 	Shortcut string
 	Checked  bool
 	Disabled bool
@@ -480,7 +487,7 @@ type Scene struct {
 	Access                   *Traits      // the access-mode menu, open over the lock
 	Account                  *Traits      // the account menu, open over the sidebar footer
 	Projects                 *Traits      // the new-thread project menu, one group per machine
-	Context                  *Traits      // a thread's right-click menu, at the click
+	Menu                     *ContextMenu // a thread's actions menu, at the click or under the header's title
 	Details                  bool         // the thread details popover is open
 	DetailsCard              bool         // the details card is shown inline, where it fits
 	SidebarHidden            bool         // the sidebar is collapsed
@@ -514,11 +521,6 @@ type Scene struct {
 	Suggest     []Suggestion
 	SuggestSel  int
 	SuggestHead string
-
-	Changes []FileChange
-	Run     *RunInfo
-	Panel   int // which right panel tab is open
-	Browser *Browser
 
 	Picker *ModelPicker
 	Traits *Traits

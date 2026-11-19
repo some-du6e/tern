@@ -108,6 +108,7 @@ type App struct {
 	// waiting on its dialog; the pull request whose checks popover is open,
 	// and whether it shows the finished checks too.
 	prLoads       map[string]*prLoad
+	lastInput     time.Time // the last click or key, which keeps them being read
 	prAlert       *prAlert
 	checksOpen    string
 	checksAll     bool
@@ -119,15 +120,20 @@ type App struct {
 	lastScripts   map[string]string
 	draftWorktree bool
 	draftBase     string
-	remoteEditors func() []string
+	// The worktree the draft took over (the previous worktree, or a "New
+	// thread on" thread's) and the branch it was given.
+	draftPath, draftBranch string
+	remoteEditors          func() []string
 	// OpenURL opens a URL on this computer: an editor's, for a folder on
 	// another machine.
 	OpenURL      func(string) error
 	machinesOpen bool                // the footer's machines menu is up
 	drawers      map[string]*drawer  // each thread's terminals, by ref
 	browsers     map[string]*browser // each thread's browser panel, by ref
-	ctxRef       string              // the thread whose right-click menu is open
+	ctxRef       string              // the thread whose actions menu is open
 	ctxConfirm   bool                // Delete was clicked once and wants a second click
+	ctxFrom      string              // the control that opened it, which Escape gives the focus back to
+	ctxCopy      string              // the card's copy menu open at the pointer: "path" or "branch"
 	errText      string
 	notice       string
 	answers      map[string]map[int]bool // question id -> picked option indexes
@@ -190,18 +196,19 @@ func NewWithStore(store *t3.Store, redraw func()) (*App, error) {
 	}
 	clerk := t3.NewClerk(store)
 	a := &App{
-		store:    store,
-		key:      key,
-		clerk:    clerk,
-		relay:    t3.NewRelay(clerk, key),
-		redraw:   redraw,
-		choices:  map[string]*choice{},
-		images:   map[string][]pastedImage{},
-		trash:    map[string][]pastedImage{},
-		sent:     map[string]*sentThumb{},
-		drawers:  map[string]*drawer{},
-		browsers: map[string]*browser{},
-		answers:  map[string]map[int]bool{},
+		store:     store,
+		lastInput: time.Now(),
+		key:       key,
+		clerk:     clerk,
+		relay:     t3.NewRelay(clerk, key),
+		redraw:    redraw,
+		choices:   map[string]*choice{},
+		images:    map[string][]pastedImage{},
+		trash:     map[string][]pastedImage{},
+		sent:      map[string]*sentThumb{},
+		drawers:   map[string]*drawer{},
+		browsers:  map[string]*browser{},
+		answers:   map[string]map[int]bool{},
 	}
 	_ = store.Delete("env-filter")   // from when a machine's chip filtered the inbox
 	_ = store.Delete("details-card") // from when one switch hid every thread's card

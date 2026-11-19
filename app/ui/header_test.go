@@ -79,37 +79,86 @@ func headerScene() *Scene {
 		Card:   &ThreadDetails{}}
 }
 
-// The crumbs share the list as T3's do (§3.1): the project crumb keeps its
-// content width (icon, 6, text up to 160) while the title takes what's
-// left; under pressure the title stops at 40 and only then does the
-// project give way; a parent folds to "..." once the crumbs overflow.
+// clicked is what a click at x on the header's row hits: its action's
+// target, or "" for nothing. The test's clicks all come at time 0, so one
+// on the title after another reads as its double click.
+func clicked(l *live, x int) string {
+	l.click(float32(x), 26)
+	for _, a := range l.frame(time.Second) {
+		if a.Kind == "click" || a.Kind == "double" {
+			return a.ID
+		}
+	}
+	return ""
+}
+
+// The crumbs share the list as T3's do (§3.1), as their click targets
+// show: the project crumb keeps its content width (icon, 6, text up to
+// 160) while the title takes what's left; under pressure the title stops
+// at 40 and only then does the project give way. A parent folds to "..."
+// once the crumbs, measured as T3 measures them, overflow: the project as
+// it lays out and the parent and title whole, the title's "From" badge
+// left out.
 func TestCrumbLayout(t *testing.T) {
-	th := NewTheme()
+	s := headerScene()
+	w := 1000
+	l := newLive(image.Pt(1100, 52), nil)
+	l.draw = func(gtx C) {
+		g := gtx
+		g.Constraints = layout.Exact(image.Pt(w, 52))
+		l.th.chatHeader(g, s, image.Point{}, false)
+	}
+	l.frame(0)
 	var ops op.Ops
 	gtx := layout.Context{Ops: &ops, Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Constraints{Max: image.Pt(2000, 52)}}
-	h := &ChatHeader{Project: "atlas", Server: true}
-	text := th.textW(gtx, crumbFont(P.MutedForeground), "atlas")
-	l := th.layoutCrumbs(gtx, h, "Wire up the parser", 1000, false)
-	if l.gap != 12 || l.project != 14+6+text || l.title != 1000-2*12-l.sep-l.project {
-		t.Errorf("wide: %+v (project text %d)", l, text)
+	text := func(s string) int { return l.th.textW(gtx, crumbFont(P.MutedForeground), s) }
+	sep := l.th.textW(gtx, Txt{Size: 14, LineH: 20.0 / 14}, "/")
+	project := 14 + 6 + text("atlas")
+	for _, c := range []struct {
+		x    int
+		want string
+	}{{project - 2, "header.project"}, {project + 4, ""}, {project + 12 + sep + 12 + 2, "header.title"}} {
+		if got := clicked(l, c.x); got != c.want {
+			t.Errorf("wide, at %d: %q, want %q", c.x, got, c.want)
+		}
 	}
-	if n := th.layoutCrumbs(gtx, h, "x", 1000, true); n.gap != 8 {
-		t.Errorf("narrow gap %d, want 8", n.gap)
+	// 70 wide: the title keeps its 40 and the project gives way.
+	w = 70
+	l.frame(time.Second)
+	if got := clicked(l, 70-40+2); got != "header.title" {
+		t.Errorf("tight, the title's 40: %q", got)
 	}
-	tight := th.layoutCrumbs(gtx, h, "Wire up the parser", 70, false)
-	if tight.title != 40 || tight.project != 70-24-tight.sep-40 {
-		t.Errorf("tight: %+v", tight)
+	if got := clicked(l, 70-40-12-sep-12-2); got != "header.project" {
+		t.Errorf("tight, the project's end: %q", got)
 	}
-	long := th.layoutCrumbs(gtx, &ChatHeader{Project: "a project with a really very long name indeed"}, "t", 2000, false)
-	if long.project != 14+6+160 {
-		t.Errorf("long project crumb %d, want its text capped at 160", long.project)
+	// A parent with room is whole; without, "...".
+	s.Header.Parent, s.Title = "Plan the parser rewrite", "Child"
+	parentX := project + 12 + sep + 12
+	ellipsis := text("...")
+	w = 1000
+	l.frame(time.Second)
+	if got := clicked(l, parentX+ellipsis+4); got != "header.parent" {
+		t.Errorf("a parent with room: %q past the ellipsis's width, want the parent", got)
 	}
-	sub := &ChatHeader{Project: "atlas", Parent: "Plan the parser rewrite", Server: true}
-	if l := th.layoutCrumbs(gtx, sub, "Child", 1000, false); l.collapsed || l.parent != th.textW(gtx, crumbFont(P.MutedForeground), sub.Parent) {
-		t.Errorf("parent with room: %+v", l)
+	whole := parentX + text(s.Header.Parent) + 12 + sep + 12 + l.th.textW(gtx, crumbFont(P.Foreground), s.Title) + 4 + 14
+	w = whole - 1
+	l.frame(time.Second)
+	if got := clicked(l, parentX+ellipsis+12+sep+12+2); got != "header.title" {
+		t.Errorf("a parent without room: %q after its ellipsis, want the title", got)
 	}
-	if l := th.layoutCrumbs(gtx, sub, "Child", 200, false); !l.collapsed || l.parent != th.textW(gtx, crumbFont(P.MutedForeground), "...") {
-		t.Errorf("parent without room: %+v", l)
+	// The badge after the title isn't counted: just room for the crumbs,
+	// the parent stays whole.
+	s.Header.Origin = "laptop"
+	w = whole
+	l.frame(time.Second)
+	if got := clicked(l, parentX+ellipsis+4); got != "header.parent" {
+		t.Errorf("with a badge: %q past the ellipsis's width, want the parent whole", got)
+	}
+	long := &ChatHeader{Project: "a project with a really very long name indeed"}
+	s.Header, w = long, 1000
+	l.frame(time.Second)
+	if got := clicked(l, 14+6+160+4); got != "" {
+		t.Errorf("past the long project's 160 of text: %q", got)
 	}
 }
 

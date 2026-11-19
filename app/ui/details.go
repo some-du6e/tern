@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"sort"
 	"strings"
 	"time"
 
@@ -123,6 +124,16 @@ func rowFont(col color.NRGBA) Txt {
 	return Txt{Size: 13, LineH: 19.5 / 13, Font: UI(font.Medium), Color: col}
 }
 
+// densityMemo is the density the card settled on, for the card it was
+// given, its width and the room it had: the scene builds a new card
+// whenever what's in it changes, so the card is measured once per build,
+// not every frame (05-header.md port note 6).
+type densityMemo struct {
+	card     *ThreadDetails
+	w, avail int
+	dn       density
+}
+
 // details draws the card in gtx.Constraints.Max (its width and the most
 // it may grow to), judging its density against avail, and scrolls what
 // doesn't fit with fades at the overflowing edges. It returns the card's
@@ -134,17 +145,24 @@ func (th *Theme) details(gtx C, s *Scene, avail int) D {
 		m := op.Record(gtx.Ops)
 		g := gtx
 		g.Constraints = layout.Constraints{Max: image.Pt(w-2*px, 1<<20)}
+		th.in.measuring = true
 		h := th.cardContent(g, s, dn, true).Size.Y
+		th.in.measuring = false
 		m.Stop()
 		return h + 2*px
 	}
-	dn := densityFull
-	if full := measure(densityFull); full > avail {
-		dn = densityCompact
-		if measure(densityCompact) > avail {
-			dn = densityEssential
+	memo := &th.in.density
+	if memo.card != s.Card || memo.w != w || memo.avail != avail {
+		dn := densityFull
+		if full := measure(densityFull); full > avail {
+			dn = densityCompact
+			if measure(densityCompact) > avail {
+				dn = densityEssential
+			}
 		}
+		*memo = densityMemo{card: s.Card, w: w, avail: avail, dn: dn}
 	}
+	dn := memo.dn
 	m := op.Record(gtx.Ops)
 	g := gtx
 	g.Constraints = layout.Constraints{Max: image.Pt(w-2*px, 1<<20)}
@@ -256,7 +274,7 @@ func (th *Theme) cardContent(gtx C, s *Scene, dn density, measuring bool) D {
 		}
 		if rule && y > 0 {
 			// The divider, border at 65%, only after a section with rows.
-			fill(gtx, over(alpha(P.Border, uint8(int(P.Border.A)*65/100)), cardFill()), image.Rect(0, y, w, y+max(1, dp(gtx, 1))), 0)
+			fill(gtx, over(faded(P.Border, 0.65), cardFill()), image.Rect(0, y, w, y+max(1, dp(gtx, 1))), 0)
 			y += max(1, dp(gtx, 1))
 		}
 		y += dp(gtx, 8)
@@ -268,6 +286,7 @@ func (th *Theme) cardContent(gtx C, s *Scene, dn density, measuring bool) D {
 			off.Pop()
 			at := image.Pt(dp(gtx, 8), y+h+dp(gtx, 4))
 			switch {
+			case measuring:
 			case r.popup == "branch" && d.Picker != nil:
 				th.deferBelow(gtx, at, func(gtx C) D { return th.branchPicker(gtx, d.Picker, rowW) })
 			case r.popup != "" && d.Menu != nil && d.Menu.For == r.popup:
@@ -287,7 +306,7 @@ func (th *Theme) cardContent(gtx C, s *Scene, dn density, measuring bool) D {
 		g.Constraints = layout.Constraints{Max: image.Pt(rowW, 1<<20)}
 		open := d.Menu != nil && d.Menu.For == "items"
 		h := th.row(g, ctl{id: "card.choose", popup: true, open: open}, "sliders-horizontal", 16, "Choose what to show").Size.Y
-		if open && !d.Menu.AtPointer {
+		if open && !d.Menu.AtPointer && !measuring {
 			th.deferBelow(gtx, image.Pt(0, h+dp(gtx, 4)), func(gtx C) D { return th.cardMenu(gtx, d.Menu, dp(gtx, 232)) })
 		}
 		return D{Size: image.Pt(w, h+dp(gtx, 16))}
@@ -315,8 +334,8 @@ func (th *Theme) state(gtx C, c ctl) (hovered, pressed, focused bool) {
 	}
 	g, _ := th.events(gtx, c.id)
 	focused = th.keyTarget(gtx, c.id)
-	if th.in.focusCard {
-		// The first control that can take the focus does.
+	if th.in.focusCard && !th.in.measuring {
+		// The first control the card draws at its density takes the focus.
 		th.in.focusCard = false
 		th.focusTarget(gtx, c.id)
 	}
@@ -346,25 +365,34 @@ func focusRing(gtx C, r image.Rectangle, k corners, under color.NRGBA) {
 }
 
 // control draws c over r (relative to the current origin) with corners k:
-// the hover or open fill on top of under, the focus ring, the 97% press
-// and the disabled fade around content, and its tooltip above.
+// the hover or open fill on top of under, the focus ring fading in over
+// 150ms, the 97% press, and its tooltip above. A disabled control fades
+// to 64% whole, its fill and ring with it.
 func (th *Theme) control(gtx C, c ctl, r image.Rectangle, k corners, under color.NRGBA, content func(gtx C)) {
 	hovered, pressed, focused := th.state(gtx, c)
-	bg := under
-	if hovered || c.open {
-		bg = over(rowTint(), under)
-		k.fill(gtx, bg, r)
-	}
-	if focused {
-		focusRing(gtx, r, k, bg)
-	}
-	scale := float32(1)
-	if !c.popup && c.id != "" {
-		scale = 1 - 0.03*th.transition(gtx, c.id+".press", pressed, transitionDur)
+	ring, scale := float32(0), float32(1)
+	if c.id != "" {
+		// transition-[box-shadow,scale]: the ring fades in and out, and a
+		// control that opens no menu shrinks while pressed.
+		ring = th.transition(gtx, c.id+".ring", focused, transitionDur)
+		if !c.popup {
+			scale = 1 - 0.03*th.transition(gtx, c.id+".press", pressed, transitionDur)
+		}
 	}
 	func() {
 		if c.disabled || c.explains {
 			defer paint.PushOpacity(gtx.Ops, 0.64).Pop()
+		}
+		bg := under
+		if hovered || c.open {
+			bg = over(rowTint(), under)
+			k.fill(gtx, bg, r)
+		}
+		if ring > 0 {
+			func() {
+				defer paint.PushOpacity(gtx.Ops, ring).Pop()
+				focusRing(gtx, r, k, bg)
+			}()
 		}
 		if scale != 1 {
 			mid := f32.Pt(float32(r.Min.X+r.Max.X)/2, float32(r.Min.Y+r.Max.Y)/2)
@@ -405,7 +433,7 @@ func chevron(gtx C, x int) {
 // hairline is a split's 1×16 divider at x, border at 65%, shown while the
 // pair is in use.
 func hairline(gtx C, x int, under color.NRGBA) {
-	col := over(alpha(P.Border, uint8(int(P.Border.A)*65/100)), under)
+	col := over(faded(P.Border, 0.65), under)
 	fill(gtx, col, image.Rect(x, dp(gtx, 8), x+max(1, dp(gtx, 1)), dp(gtx, 24)), 0)
 }
 
@@ -520,58 +548,62 @@ var machineIcons = map[string]string{
 
 // runRow is the machine and workspace row: the machine's mark (18dp, a
 // pixel into the padding each side), its name, and the workspace's icon at
-// the end. A started thread's is a plain row; a draft's opens its menu.
+// the end, or with no machine the workspace's icon leading. A started
+// thread's is a plain row; a draft's opens its menu. Each icon has its
+// tooltip over the row, which still takes the pointer's presses there, so
+// a right-click on an icon is the row's.
 func (th *Theme) runRow(d *ThreadDetails) W {
 	return func(gtx C) D {
 		rc := d.Run
-		w := gtx.Constraints.Max.X
-		content := func(gtx C, end int, col color.NRGBA) {
-			x := 0
+		w, h := gtx.Constraints.Max.X, dp(gtx, rowH)
+		end := w - dp(gtx, 1)
+		if !rc.Locked {
+			end = w - dp(gtx, 32) // the chevron half
+		}
+		trailing := end - dp(gtx, 10+16)
+		s16, s18 := dp(gtx, 16), dp(gtx, 18)
+		ws := image.Rect(dp(gtx, 11), (h-s16)/2, dp(gtx, 11)+s16, (h-s16)/2+s16)
+		var mark image.Rectangle
+		if rc.Machine != "" {
+			mark = image.Rect(dp(gtx, 10), (h-s18)/2, dp(gtx, 10)+s18, (h-s18)/2+s18)
+			ws = ws.Add(image.Pt(trailing-dp(gtx, 11), 0))
+		}
+		content := func(gtx C, col color.NRGBA) {
 			if rc.Machine != "" {
 				icon := machineIcons[rc.Machine]
 				if icon == "" {
 					icon = "server"
 				}
-				s := dp(gtx, 18)
-				off := op.Offset(image.Pt(dp(gtx, 10), (dp(gtx, rowH)-s)/2)).Push(gtx.Ops)
+				off := op.Offset(mark.Min).Push(gtx.Ops)
 				LucideW(icon, P.MutedForeground, 18)(gtx)
-				th.hover(gtx, "card.machine", image.Pt(s, s))
-				th.tipAt(gtx, "card.machine", rc.Tip, image.Pt(s, s), true, 0)
 				off.Pop()
-			} else {
-				x = -1 // the workspace icon leads instead
-				th.workspaceIcon(gtx, rc, 0)
 			}
-			trailing := end - dp(gtx, 10+16)
+			off := op.Offset(ws.Min).Push(gtx.Ops)
+			LucideW(rc.Workspace, P.MutedForeground, 16)(gtx)
+			off.Pop()
 			th.rowLabel(gtx, rowFont(col), rc.Label, dp(gtx, rowLabelX), trailing-dp(gtx, 10+rowLabelX))
-			if x == 0 {
-				th.workspaceIcon(gtx, rc, trailing-dp(gtx, 11))
-			}
 		}
+		var dims D
 		if rc.Locked {
 			col := rowText()
 			if dark {
 				col = P.MutedForeground
 			}
 			// Not a button, but its right-click copies the path.
-			th.hover(gtx, "card.runlocked", image.Pt(w, dp(gtx, rowH)))
-			content(gtx, w-dp(gtx, 1), col)
-			return D{Size: image.Pt(w, dp(gtx, rowH))}
+			th.hover(gtx, "card.runlocked", image.Pt(w, h))
+			content(gtx, col)
+			dims = D{Size: image.Pt(w, h)}
+		} else {
+			dims = th.selectRow(gtx, ctl{id: "card.run", popup: true, open: d.Menu != nil && d.Menu.For == "run"}, func(gtx C, half int) {
+				content(gtx, rowText())
+			})
 		}
-		return th.selectRow(gtx, ctl{id: "card.run", popup: true, open: d.Menu != nil && d.Menu.For == "run"}, func(gtx C, half int) {
-			content(gtx, half, rowText())
-		})
+		if rc.Machine != "" {
+			th.tipArea(gtx, "card.machine", rc.Tip, mark)
+		}
+		th.tipArea(gtx, "card.workspace", rc.WorkspaceTip, ws)
+		return dims
 	}
-}
-
-// workspaceIcon is the run row's workspace icon at the icon column from
-// x, with the workspace's path as its tooltip.
-func (th *Theme) workspaceIcon(gtx C, rc *RunContext, x int) {
-	rowIcon(gtx, rc.Workspace, P.MutedForeground, x, 16)
-	s := dp(gtx, 16)
-	defer op.Offset(image.Pt(x+dp(gtx, 11), (dp(gtx, rowH)-s)/2)).Push(gtx.Ops).Pop()
-	th.hover(gtx, "card.workspace", image.Pt(s, s))
-	th.tipAt(gtx, "card.workspace", rc.WorkspaceTip, image.Pt(s, s), true, 0)
 }
 
 // openInRow is the Open in editor split: the preferred editor's mark and
@@ -581,7 +613,7 @@ func (th *Theme) openInRow(d *ThreadDetails) W {
 		o := d.OpenIn
 		return th.split(gtx,
 			ctl{id: "card.openin", disabled: o.Disabled, tip: o.Label},
-			ctl{id: "card.editors", disabled: o.MenuDisabled, popup: true, open: d.Menu != nil && d.Menu.For == "openin", tip: "Choose editor"},
+			ctl{id: "card.editors", popup: true, open: d.Menu != nil && d.Menu.For == "openin", tip: "Choose editor"},
 			func(gtx C, w int) {
 				// The preferred editor's mark at the icon column.
 				s := dp(gtx, 16)
@@ -599,9 +631,18 @@ var scriptIcons = map[string]string{
 	"play": "play", "test": "flask-conical", "lint": "list-checks", "configure": "wrench", "build": "hammer", "debug": "bug",
 }
 
+// ScriptIcon is a project script icon's lucide name, play by default.
+func ScriptIcon(kind string) string {
+	if icon := scriptIcons[kind]; icon != "" {
+		return icon
+	}
+	return "play"
+}
+
 // scriptsRow is the project's scripts: a split that runs the primary
 // script, a split whose halves both open the menu when there's none, or a
-// row that adds the first.
+// row that adds the first. In the Actions form the primary isn't a menu
+// trigger to T3 (no aria-haspopup), so a press shrinks it.
 func (th *Theme) scriptsRow(d *ThreadDetails) W {
 	return func(gtx C) D {
 		sc := d.Scripts
@@ -612,23 +653,21 @@ func (th *Theme) scriptsRow(d *ThreadDetails) W {
 				ctl{id: "card.script", tip: "Run " + sc.Primary},
 				ctl{id: "card.scripts", popup: true, open: open, tip: "Script actions"},
 				func(gtx C, w int) {
-					icon := scriptIcons[sc.Icon]
-					if icon == "" {
-						icon = "play"
-					}
-					rowIcon(gtx, icon, P.MutedForeground, 0, 16)
+					rowIcon(gtx, ScriptIcon(sc.Icon), P.MutedForeground, 0, 16)
 					th.rowLabel(gtx, rowFont(rowText()), sc.Primary, dp(gtx, rowLabelX), w-dp(gtx, rowLabelX+10))
 				})
 		case sc.Any:
 			return th.split(gtx,
-				ctl{id: "card.scripts", popup: true, open: open},
+				ctl{id: "card.scripts", open: open},
 				ctl{id: "card.scripts.more", popup: true, open: open},
 				func(gtx C, w int) {
 					rowIcon(gtx, "wrench", P.MutedForeground, 0, 16)
 					th.rowLabel(gtx, rowFont(rowText()), "Actions", dp(gtx, rowLabelX), w-dp(gtx, rowLabelX+10))
 				})
 		}
-		return th.row(gtx, ctl{id: "card.addscript", disabled: !sc.CanAdd, tip: "Add project script"}, "plus", 14, "Add project script")
+		// T3's row opens its Add Action dialog, which tern doesn't have, so
+		// it stays off here.
+		return th.row(gtx, ctl{id: "card.addscript", disabled: true}, "plus", 14, "Add project script")
 	}
 }
 
@@ -709,8 +748,8 @@ func (th *Theme) gitStatusRow(gtx C, g *GitActions, w int) D {
 	} else {
 		title, detail = g.Success.Title, g.Success.Description
 	}
-	// The detail line grows in over 200ms.
-	t := easeOutCSS(th.transition(gtx, "card.git.detail", detail != "", 200*time.Millisecond))
+	// The detail line grows in over 200ms, once, on ease-out.
+	t := th.transitionEase(gtx, "card.git.detail", detail != "", 200*time.Millisecond, easeOutCSS)
 	lineH := dp(gtx, 18)
 	h := max(dp(gtx, rowH), dp(gtx, 12)+lineH+int(t*float32(dp(gtx, 2+16))))
 	r := image.Rect(0, 0, w, h)
@@ -722,17 +761,27 @@ func (th *Theme) gitStatusRow(gtx C, g *GitActions, w int) D {
 		pw = w - th.textW(gtx, Txt{Size: 11, LineH: 16.0 / 11}, elapsed) - dp(gtx, 10+12)
 	}
 	y := dp(gtx, 6)
-	icon := dp(gtx, 14)
-	func() {
-		defer op.Offset(image.Pt(dp(gtx, 11), y+(lineH-icon)/2)).Push(gtx.Ops).Pop()
-		if g.Running != nil {
-			T3Spinner(P.MutedForeground, 14, float64(gtx.Now.UnixMilli()%1000)/1000)(gtx)
-			gtx.Execute(op.InvalidateCmd{})
-		} else {
-			LucideW("check", P.Success, 14)(gtx)
-		}
-	}()
+	// At work, the control's own 16dp spinner in its text colour, a dp
+	// into each side of the padding; done, a 14dp check in --success.
+	// Either way the status is 12dp on (gap-x-3).
 	tx := dp(gtx, 11+14+12)
+	if g.Running != nil {
+		s := dp(gtx, 16)
+		func() {
+			defer op.Offset(image.Pt(dp(gtx, 9), y+(lineH-s)/2)).Push(gtx.Ops).Pop()
+			T3Spinner(rowText(), 16, float64(gtx.Now.UnixMilli()%1000)/1000)(gtx)
+		}()
+		// About 30 frames a second while it spins, as the window paces
+		// its other live spinners.
+		gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(33 * time.Millisecond)})
+		tx = dp(gtx, 9+16-2+12)
+	} else {
+		icon := dp(gtx, 14)
+		func() {
+			defer op.Offset(image.Pt(dp(gtx, 11), y+(lineH-icon)/2)).Push(gtx.Ops).Pop()
+			LucideW("check", P.Success, 14)(gtx)
+		}()
+	}
 	func() {
 		defer op.Offset(image.Pt(tx, y)).Push(gtx.Ops).Pop()
 		g := gtx
@@ -829,8 +878,9 @@ func groupDigits(n int) string {
 }
 
 // reasonPopover is T3's tooltip-styled popover for an action that can't
-// run: it opens 300ms after the pointer reaches target id (size big at the
-// current origin), 4dp below it, or with left 4dp left of it and level
+// run (popover.tsx tooltipStyle: the glass, radius 6, 12/16 text padded 4
+// by 8): it opens 300ms after the pointer reaches target id (size big at
+// the current origin), 4dp below it, or with left 4dp left of it and level
 // with its middle. Declared below at its start, it flips to its end, since
 // the card sits at the window's right.
 func (th *Theme) reasonPopover(gtx C, id, reason string, size image.Point, left bool) {
@@ -854,7 +904,7 @@ func (th *Theme) reasonPopover(gtx C, id, reason string, size image.Point, left 
 	m := op.Record(gtx.Ops)
 	g := gtx
 	g.Constraints = layout.Constraints{Max: image.Pt(dp(gtx, 320), dp(gtx, 200))}
-	td := th.tooltip(g, reason)
+	td := th.tipBox(g, reason, true)
 	call := m.Stop()
 	at2 := image.Pt(size.X-td.Size.X, size.Y+dp(gtx, 4))
 	if left {
@@ -884,10 +934,8 @@ func (th *Theme) middleTruncate(gtx C, t Txt, s string, mid int) {
 	tailW := th.textW(gtx, t, "…"+tail)
 	room := w - tailW
 	hr := []rune(head)
-	n := 0
-	for n < len(hr) && th.textW(gtx, t, string(hr[:n+1])) <= room {
-		n++
-	}
+	// The longest head that fits, found by halves (fitHead).
+	n := sort.Search(len(hr), func(k int) bool { return th.textW(gtx, t, string(hr[:k+1])) > room })
 	x := th.capText(gtx, t, string(hr[:n]), mid)
 	defer op.Offset(image.Pt(x, 0)).Push(gtx.Ops).Pop()
 	th.capText(gtx, t, "…"+tail, mid)

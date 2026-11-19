@@ -468,11 +468,15 @@ func flexed(w W) layout.FlexChild { return layout.Flexed(1, w) }
 // Row lays children out left to right and centers them in the strip's
 // minimum height. Flex alone would pass that minimum down and pin text to
 // the top.
-func Row(gtx C, children ...layout.FlexChild) D {
+func Row(gtx C, children ...layout.FlexChild) D { return RowGap(gtx, 0, children...) }
+
+// RowGap is Row with gapDp between the children, as a CSS flex row with a
+// gap centres its items.
+func RowGap(gtx C, gapDp float32, children ...layout.FlexChild) D {
 	h := gtx.Constraints.Min.Y
 	gtx.Constraints.Min.Y = 0
 	m := op.Record(gtx.Ops)
-	dims := layout.Flex{Alignment: layout.Middle}.Layout(gtx, children...)
+	dims := layout.Flex{Alignment: layout.Middle, Gap: dp(gtx, gapDp)}.Layout(gtx, children...)
 	call := m.Stop()
 	if dims.Size.Y >= h {
 		call.Add(gtx.Ops)
@@ -733,24 +737,86 @@ type boxShadow struct {
 	col                color.NRGBA
 }
 
-// shadow paints CSS box shadows for the rounded rect r. Gio has no blur, so
-// each shadow's blurred edge is a stack of rounded rects, from the edge of
-// the blur in to its middle, whose alphas add up to the shadow's colour.
+// shadowKey is one drawn box shadow, in px: the element's size and radius,
+// the shadow's offset, blur and spread, and its colour.
+type shadowKey struct {
+	w, h, radius       int
+	x, y, blur, spread int
+	col                color.NRGBA
+}
+
+// shadowImages are the shadows drawn so far, by shape; a handful at most
+// are in use, so the lot goes once it grows past that.
+var shadowImages = map[shadowKey]paint.ImageOp{}
+
+// shadow paints CSS box shadows for the rounded rect r (radius in px)
+// smoothly, as Chrome does (01-tokens.md port note 9): each is r grown by
+// its spread and moved by its offset, blurred by a Gaussian of half its
+// blur radius, and clipped out of r itself. Gio has no blur, so each is
+// drawn once into an image and kept.
 func shadow(gtx C, r image.Rectangle, radius int, shadows []boxShadow) {
 	for _, sh := range shadows {
-		off := image.Pt(dp(gtx, sh.x), dp(gtx, sh.y))
-		blur := float32(dp(gtx, sh.blur))
-		spread := dp(gtx, sh.spread)
-		n := max(1, min(8, int(blur)))
-		c := sh.col
-		c.A = uint8(max(1, int(float32(sh.col.A)/float32(n)+0.5)))
-		for i := 0; i < n; i++ {
-			grow := spread + int(blur*(0.5-float32(i)/float32(n)))
-			rr := r.Add(off).Inset(-grow)
-			if rr.Dx() <= 0 || rr.Dy() <= 0 {
+		k := shadowKey{w: r.Dx(), h: r.Dy(), radius: radius, x: dp(gtx, sh.x), y: dp(gtx, sh.y),
+			blur: dp(gtx, sh.blur), spread: dp(gtx, sh.spread), col: sh.col}
+		if k.w+2*k.spread <= 0 || k.h+2*k.spread <= 0 {
+			continue
+		}
+		im, ok := shadowImages[k]
+		if !ok {
+			if len(shadowImages) > 32 {
+				clear(shadowImages)
+			}
+			im = paint.NewImageOp(shadowImage(k))
+			shadowImages[k] = im
+		}
+		func() {
+			ext := shadowExtent(k.blur)
+			defer op.Offset(r.Min.Add(image.Pt(k.x-k.spread-ext, k.y-k.spread-ext))).Push(gtx.Ops).Pop()
+			im.Add(gtx.Ops)
+			paint.PaintOp{}.Add(gtx.Ops)
+		}()
+	}
+}
+
+// shadowExtent is how far a shadow of blur radius blur reaches past its
+// shape: three of its Gaussian's deviations, half the blur radius each.
+func shadowExtent(blur int) int { return (3*blur + 1) / 2 }
+
+// shadowImage is k's shadow, from its shape's top left less its extent:
+// at each pixel the colour at the share of the blurred shape covering it,
+// 0.5·erfc(d/(σ√2)) at signed distance d from the shape's edge, none
+// inside the element. Gio blends in linear light, so the alpha is raised
+// to darken what's under it as much as Chrome's sRGB blend of black does.
+func shadowImage(k shadowKey) *image.NRGBA {
+	ext := shadowExtent(k.blur)
+	sw, shh := k.w+2*k.spread, k.h+2*k.spread
+	img := image.NewNRGBA(image.Rect(0, 0, sw+2*ext, shh+2*ext))
+	sigma := math.Max(float64(k.blur)/2, 0.5)
+	sdf := func(px, py float64, w, h, rad float64) float64 {
+		// The signed distance from (px, py) to a w×h box with corners rad.
+		rad = math.Min(rad, math.Min(w, h)/2)
+		qx := math.Abs(px-w/2) - (w/2 - rad)
+		qy := math.Abs(py-h/2) - (h/2 - rad)
+		out := math.Hypot(math.Max(qx, 0), math.Max(qy, 0))
+		return out + math.Min(math.Max(qx, qy), 0) - rad
+	}
+	a := float64(k.col.A) / 255
+	for y := range img.Bounds().Dy() {
+		for x := range img.Bounds().Dx() {
+			px, py := float64(x-ext)+0.5, float64(y-ext)+0.5
+			// The element, where its own box hides its shadow.
+			if sdf(px-float64(k.spread-k.x), py-float64(k.spread-k.y), float64(k.w), float64(k.h), float64(k.radius)) < 0 {
 				continue
 			}
-			fill(gtx, c, rr, max(0, radius+grow))
+			d := sdf(px, py, float64(sw), float64(shh), float64(max(0, k.radius+k.spread)))
+			cover := a * 0.5 * math.Erfc(d/(sigma*math.Sqrt2))
+			if cover <= 0.5/255 {
+				continue
+			}
+			// What sRGB's blend leaves of the light under black, in linear light.
+			lin := 1 - math.Pow(1-cover, 2.2)
+			img.SetNRGBA(x, y, color.NRGBA{R: k.col.R, G: k.col.G, B: k.col.B, A: uint8(lin*255 + 0.5)})
 		}
 	}
+	return img
 }

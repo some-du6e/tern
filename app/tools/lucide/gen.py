@@ -20,7 +20,7 @@ LUCIDE = ["settings", "server", "laptop", "monitor", "circle-user", "git-branch"
           "list-checks", "hammer", "bug", "play", "cloud", "git-pull-request-arrow", "message-square-dashed",
           "copy", "sliders-horizontal", "git-pull-request-draft", "git-pull-request-closed", "git-merge",
           "eye", "eye-off", "chevron-up", "user", "circle-check", "circle-x", "circle-dot", "octagon-x",
-          "circle-slash", "circle-dashed", "folder-closed"]
+          "circle-slash", "circle-dashed", "folder-closed", "history", "download", "triangle-alert", "arrow-up-right"]
 
 assets = pathlib.Path(sys.argv[1])
 bundle = "\n".join(p.read_text(errors="replace") for p in assets.glob("*.js"))
@@ -72,6 +72,23 @@ for name in LUCIDE:
     if not m:
         raise SystemExit(f"no icon {name}")
     d = "".join(shape(k, at) for k, at in re.findall(r"\[`(\w+)`,\{([^}]*)\}\]", m.group(1)))
+    out.append(f'\t"{name}": `{d}`,')
+out.append("}")
+out.append("")
+
+# The in-page context menu (contextMenuFallback.ts) carries its own copies
+# of the icons it shows, which it strokes at 2: its ICON_PATHS, as
+# name:[{tag:`path`,attrs:{d:`...`}},...].
+fallback = "\n".join(p.read_text(errors="replace") for p in assets.glob("contextMenuFallback-*.js"))
+icons = re.search(r"\{(archive:\[.*?)\}\]\};", fallback, re.S)
+if not icons:
+    raise SystemExit("no ICON_PATHS in contextMenuFallback")
+out += ["// menuIcons are the icons T3's in-page context menu draws, its own",
+        "// copies of lucide's, as SVG path data in a 24x24 box.",
+        "var menuIcons = map[string]string{"]
+for m in re.finditer(r'(?:"([\w-]+)"|(\w+)):\[((?:\{tag:`\w+`,attrs:\{[^}]*\}\},?)+)\]', icons.group(1) + "}]"):
+    name = m.group(1) or m.group(2)
+    d = "".join(shape(k, at) for k, at in re.findall(r"\{tag:`(\w+)`,attrs:\{([^}]*)\}\}", m.group(3)))
     out.append(f'\t"{name}": `{d}`,')
 out.append("}")
 out.append("")

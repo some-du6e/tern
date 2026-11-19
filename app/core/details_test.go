@@ -233,9 +233,9 @@ func cardApp(t *testing.T, st *t3.VcsStatus, edit func(a *App, e *envState, th *
 	if edit != nil {
 		edit(a, e, th)
 	}
-	a.openThread("swiss/t1")
+	a.openThread("studio/t1")
 	a.mu.Lock()
-	v := a.watchVcsLocked(e, gitCwd(th, e.projects[th.ProjectID]))
+	v := a.watchVcsLocked(e, gitCwd(th.WorktreePath, e.projects[th.ProjectID]))
 	v.status, v.refs = st, &t3.VcsRefs{IsRepo: true}
 	a.mu.Unlock()
 	return a, built(a, time.Now())
@@ -249,7 +249,7 @@ func TestCardRows(t *testing.T) {
 	if d == nil || d.Run == nil || d.OpenIn == nil || d.Scripts == nil || d.Branch == nil || d.Git == nil || d.Changes == nil {
 		t.Fatalf("rows: %+v", d)
 	}
-	if !d.Run.Locked || d.Run.Label != "swiss" || d.Run.Workspace != "folder" || d.Run.Machine != "server" {
+	if !d.Run.Locked || d.Run.Label != "studio" || d.Run.Workspace != "folder" || d.Run.Machine != "server" {
 		t.Errorf("run context: %+v", d.Run)
 	}
 	if d.Branch.Label != "feature" || d.Branch.Disabled {
@@ -264,7 +264,7 @@ func TestCardRows(t *testing.T) {
 	if d.Scripts.Primary != "" || d.Scripts.Any {
 		t.Errorf("scripts: %+v", d.Scripts)
 	}
-	if h := s.Header; h == nil || h.Project != "goog" || !h.Server || s.Title != "On swiss" || h.Icon.Monogram == "" {
+	if h := s.Header; h == nil || h.Project != "atlas" || !h.Server || s.Title != "On studio" || h.Icon.Monogram == "" {
 		t.Errorf("header: %+v %q", h, s.Title)
 	}
 }
@@ -279,8 +279,8 @@ func TestCardRowsWorktree(t *testing.T) {
 		Deletions  int    `json:"deletions"`
 	}{"main", 12, 3}
 	_, s := cardApp(t, st, func(a *App, e *envState, th *t3.Thread) {
-		th.WorktreePath, th.Branch = "/srv/worktrees/goog/fix-login", "fix-login"
-		e.projects["p1"] = t3.Project{ID: "p1", Title: "goog", WorkspaceRoot: "/srv/goog",
+		th.WorktreePath, th.Branch = "/srv/worktrees/atlas/fix-login", "fix-login"
+		e.projects["p1"] = t3.Project{ID: "p1", Title: "atlas", WorkspaceRoot: "/srv/atlas",
 			Scripts: []t3.ProjectScript{{ID: "setup", Name: "Install", RunOnWorktreeCreate: true}, {ID: "test", Name: "Test", Icon: "test"}}}
 	})
 	d := s.Card
@@ -290,7 +290,7 @@ func TestCardRowsWorktree(t *testing.T) {
 	if d.Changes.Insertions != 12 || d.Changes.Deletions != 3 || d.Changes.Base != "vs main" {
 		t.Errorf("changes: %+v", d.Changes)
 	}
-	if d.Run.Label != "swiss" || d.Run.Workspace != "folder-git-2" || d.Run.WorkspaceTip != "/srv/worktrees/goog/fix-login" {
+	if d.Run.Label != "studio" || d.Run.Workspace != "folder-git-2" || d.Run.WorkspaceTip != "/srv/worktrees/atlas/fix-login" {
 		t.Errorf("run context: %+v", d.Run)
 	}
 	if d.Scripts.Primary != "Test" || d.Scripts.Icon != "test" {
@@ -328,7 +328,7 @@ func TestCardQuietAndLineage(t *testing.T) {
 	if d := s.Card; d.Git != nil || d.Changes != nil || d.Branch == nil {
 		t.Errorf("quiet: %+v", d)
 	}
-	if s.Header.Parent != "Same id on swiss" {
+	if s.Header.Parent != "Same id on studio" {
 		t.Errorf("parent crumb %q", s.Header.Parent)
 	}
 }
@@ -356,14 +356,14 @@ func TestDraftWorkspace(t *testing.T) {
 	}
 	a.handle(th, ui.Action{ID: "card.run:2", Kind: "click"})
 	s = built(a, time.Now())
-	if s.Card.Menu != nil || s.Card.Run.Workspace != "folder-git-2" || s.Card.Run.Label != "swiss" || s.Card.Branch.Label != "From main" {
+	if s.Card.Menu != nil || s.Card.Run.Workspace != "folder-git-2" || s.Card.Run.Label != "studio" || s.Card.Branch.Label != "From main" {
 		t.Fatalf("new worktree: run %+v branch %+v", s.Card.Run, s.Card.Branch)
 	}
 	a.mu.Lock()
-	strategy := a.draftStrategyLocked()
+	strategy, err := a.draftStrategyLocked()
 	a.mu.Unlock()
-	if strategy["type"] != "worktree" || strategy["baseRef"] != "main" {
-		t.Fatalf("launch strategy %v", strategy)
+	if err != nil || strategy["type"] != "worktree" || strategy["baseRef"] != "main" {
+		t.Fatalf("launch strategy %v, %v", strategy, err)
 	}
 	// Picking the new worktree's base offers no ref to create.
 	a.handle(th, ui.Action{ID: "card.branch", Kind: "click"})
@@ -373,39 +373,93 @@ func TestDraftWorkspace(t *testing.T) {
 	}
 }
 
+// The draft's workspace menu offers the worktree the project's threads
+// worked in last, not archived (resolvePreviousWorktreeSeed), its branch
+// under the label; taking it makes that worktree the draft's current one,
+// which the launch reuses, on its branch.
+func TestDraftPreviousWorktree(t *testing.T) {
+	a := testApp(t)
+	e := a.envs[0]
+	e.config = &t3.ServerConfig{}
+	at := func(d time.Duration) string { return time.Now().UTC().Add(-d).Format(time.RFC3339Nano) }
+	e.threads["w1"] = &t3.Thread{ID: "w1", ProjectID: "p1", WorktreePath: "/work/atlas-wt/old", Branch: "old", UpdatedAt: at(time.Hour)}
+	e.threads["w2"] = &t3.Thread{ID: "w2", ProjectID: "p1", WorktreePath: "/work/atlas-wt/lexer", Branch: "fix/lexer", UpdatedAt: at(time.Minute)}
+	e.threads["w3"] = &t3.Thread{ID: "w3", ProjectID: "p1", WorktreePath: "/work/atlas-wt/gone", Branch: "gone", UpdatedAt: at(0), ArchivedAt: at(0)}
+	a.draftIn("studio", "p1")
+	th := ui.NewTheme()
+	a.handle(th, ui.Action{ID: "card.run", Kind: "click"})
+	m := built(a, time.Now()).Card.Menu
+	if m == nil || len(m.Rows) != 4 {
+		t.Fatalf("run menu %+v", m)
+	}
+	if r := m.Rows[3]; r.Kind != ui.MenuRadioRow || r.Label != "Previous worktree" || r.Detail != "fix/lexer" || r.Icon != "history" || r.Checked {
+		t.Fatalf("previous worktree row %+v", r)
+	}
+	a.handle(th, ui.Action{ID: "card.run:3", Kind: "click"})
+	s := built(a, time.Now())
+	if r := s.Card.Run; r.Workspace != "folder-git" || r.WorkspaceTip != "/work/atlas-wt/lexer" {
+		t.Fatalf("run context %+v", r)
+	}
+	a.handle(th, ui.Action{ID: "card.run", Kind: "click"})
+	m = built(a, time.Now()).Card.Menu
+	if r := m.Rows[1]; r.Label != "Current worktree" || r.Icon != "folder-git" || !r.Checked {
+		t.Fatalf("the current row %+v", r)
+	}
+	if r := m.Rows[3]; r.Detail != "old" {
+		t.Fatalf("the previous worktree is now the one before: %+v", r)
+	}
+	a.mu.Lock()
+	strategy, err := a.draftStrategyLocked()
+	a.mu.Unlock()
+	if err != nil || strategy["type"] != "existing_worktree" || strategy["worktreePath"] != "/work/atlas-wt/lexer" || strategy["branch"] != "fix/lexer" {
+		t.Fatalf("launch strategy %v, %v", strategy, err)
+	}
+}
+
 // The header's project crumb starts a new thread in that project.
 func TestHeaderProjectCrumb(t *testing.T) {
 	a := testApp(t)
 	a.openThread("mac/same")
 	a.handle(ui.NewTheme(), ui.Action{ID: "header.project", Kind: "click"})
-	if a.draft != "p9" || a.draftEnv != "mac" || a.openID != "" {
-		t.Fatalf("draft %q on %q, open %q", a.draft, a.draftEnv, a.openID)
+	if s := built(a, time.Now()); s.Header.Server || s.Title != "New thread" || s.Header.Project != "nimbus" || s.Card.Run.Label != "MacBook" {
+		t.Fatalf("header %+v %q, run %+v", s.Header, s.Title, s.Card.Run)
 	}
 }
 
-// Opening the title's menu puts the open thread's menu up; a second click
-// closes it. A right-click anywhere in the header opens it too.
+// The title opens the open thread's actions menu; the press outside it
+// closes it before a second click, which opens it again, as T3's does,
+// and Escape closes it. A right-click anywhere in the header opens it too.
 func TestHeaderMenu(t *testing.T) {
 	a := testApp(t)
 	th := ui.NewTheme()
-	a.openThread("swiss/t1")
+	a.openThread("studio/t1")
+	open := func() bool {
+		s := built(a, time.Now())
+		return s.Menu != nil && len(s.Menu.Items) > 0 && s.Menu.Items[0].Label == "Rename thread"
+	}
 	a.handle(th, ui.Action{ID: "header.title", Kind: "click"})
-	if s := built(a, time.Now()); s.Context == nil || a.ctxRef != "swiss/t1" {
+	if !open() {
 		t.Fatal("the title should open the thread's menu")
 	}
+	a.handle(th, ui.Action{ID: "menus.close", Kind: "click"})
 	a.handle(th, ui.Action{ID: "header.title", Kind: "click"})
-	if s := built(a, time.Now()); s.Context != nil {
-		t.Fatal("a second click should close it")
+	if !open() {
+		t.Fatal("a second click should open it again")
+	}
+	a.handle(th, ui.Action{ID: "menus.escape", Kind: "click"})
+	if open() {
+		t.Fatal("Escape should close it")
 	}
 	a.handle(th, ui.Action{ID: "header", Kind: "context"})
-	if s := built(a, time.Now()); s.Context == nil {
+	if !open() {
 		t.Fatal("a right-click in the header should open it")
 	}
 }
 
 // The card's own menu, at a right-click, turns its rows off and on and
-// resets them, and the choice persists; the branch row's right-click
-// offers to copy the branch instead.
+// resets them, staying open as T3's checkbox items do, and the choice
+// persists; the run context and branch rows' right-click offers to copy
+// the path or the branch instead, in the in-page menu.
 func TestCardItemsMenu(t *testing.T) {
 	a, _ := cardApp(t, status(nil), nil)
 	th := ui.NewTheme()
@@ -416,7 +470,7 @@ func TestCardItemsMenu(t *testing.T) {
 		t.Fatalf("menu %+v", m)
 	}
 	a.handle(th, ui.Action{ID: "card.items:5", Kind: "click"})
-	if d := built(a, time.Now()).Card; d.Git != nil || d.Changes == nil || d.Menu != nil {
+	if d := built(a, time.Now()).Card; d.Git != nil || d.Changes == nil || d.Menu == nil || d.Menu.Rows[5].Checked {
 		t.Fatalf("Git actions off: %+v", d)
 	}
 	var stored map[string]bool
@@ -428,15 +482,18 @@ func TestCardItemsMenu(t *testing.T) {
 		t.Fatalf("after: %+v", m)
 	}
 	a.handle(th, ui.Action{ID: "card.items:8", Kind: "click"})
-	if d := built(a, time.Now()).Card; d.Git == nil {
-		t.Fatal("Reset should bring the row back")
+	if d := built(a, time.Now()).Card; d.Git == nil || d.Menu == nil {
+		t.Fatal("Reset should bring the row back and leave the menu up")
 	}
-	a.handle(th, ui.Action{ID: "card.branch", Kind: "context"})
-	if m := built(a, time.Now()).Card.Menu; m == nil || m.For != "copybranch" || m.Rows[0].Label != "Copy branch name" {
-		t.Fatalf("branch's menu %+v", m)
+	for _, c := range []struct{ id, label string }{{"card.branch", "Copy branch name"}, {"card.runlocked", "Copy full path"}, {"card.workspace", "Copy full path"}} {
+		a.handle(th, ui.Action{ID: c.id, Kind: "context"})
+		s := built(a, time.Now())
+		if s.Menu == nil || len(s.Menu.Items) != 1 || s.Menu.Items[0].Label != c.label || s.Menu.Items[0].Icon != "copy" || s.Card.Menu != nil {
+			t.Fatalf("%s's menu %+v", c.id, s.Menu)
+		}
 	}
-	a.handle(th, ui.Action{ID: "card.copybranch:0", Kind: "click"})
-	if m := built(a, time.Now()).Card.Menu; m != nil {
+	a.handle(th, ui.Action{ID: "ctx:copy-full-path", Kind: "click"})
+	if s := built(a, time.Now()); s.Menu != nil {
 		t.Fatal("copying closes it")
 	}
 }
@@ -445,7 +502,7 @@ func TestCardItemsMenu(t *testing.T) {
 func TestCardToggle(t *testing.T) {
 	a := testApp(t)
 	th := ui.NewTheme()
-	a.openThread("swiss/t1")
+	a.openThread("studio/t1")
 	if s := built(a, time.Now()); !s.DetailsCard {
 		t.Fatal("the card is shown by default")
 	}
@@ -458,7 +515,7 @@ func TestCardToggle(t *testing.T) {
 		t.Fatal("another thread keeps its card")
 	}
 	var hidden map[string]bool
-	if ok, _ := a.store.Get("details-hidden", &hidden); !ok || !hidden["swiss/t1"] {
+	if ok, _ := a.store.Get("details-hidden", &hidden); !ok || !hidden["studio/t1"] {
 		t.Fatalf("stored %v", hidden)
 	}
 }

@@ -26,10 +26,9 @@ type RepositoryIdentity struct {
 
 // PullRequestCheck is one of a pull request's checks.
 type PullRequestCheck struct {
-	Name        string `json:"name"`
-	Status      string `json:"status"` // pending, action-required, success, failure, skipped, neutral, cancelled
-	Description string `json:"description"`
-	URL         string `json:"url"`
+	Name   string `json:"name"`
+	Status string `json:"status"` // pending, action-required, success, failure, skipped, neutral, cancelled
+	URL    string `json:"url"`
 }
 
 // PullRequestDetail is the part of pullRequests.detail the card reads:
@@ -46,12 +45,9 @@ type PullRequestDetail struct {
 	} `json:"viewerPermissions"`
 	Number            int                `json:"number"`
 	Title             string             `json:"title"`
-	URL               string             `json:"url"`
 	State             string             `json:"state"` // open, closed, merged
 	IsDraft           bool               `json:"isDraft"`
 	Mergeability      string             `json:"mergeability"` // mergeable, conflicting, unknown
-	HeadBranch        string             `json:"headBranch"`
-	BaseBranch        string             `json:"baseBranch"`
 	Checks            []PullRequestCheck `json:"checks"`
 	MergeCapabilities map[string]bool    `json:"mergeCapabilities"`
 	ObservedAt        *float64           `json:"observedAt"`
