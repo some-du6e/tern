@@ -244,7 +244,8 @@ func darkest(img *image.RGBA, r image.Rectangle) uint8 {
 // while the close is on its way.
 func TestHeaderGuestShare(t *testing.T) {
 	s := headerScene()
-	s.Title = "Wire up the parser and the lexer and everything that comes after them, all of it"
+	// Long enough to be cut in SF Pro too, where the first 80 characters fit.
+	s.Title = "Wire up the parser and the lexer and everything that comes after them, all of it, then the printer, the formatter and the docs"
 	g := &GuestLine{Status: "Sam is a guest"}
 	s.Header.Guest = g
 	l := newLive(image.Pt(900, 52), nil)
