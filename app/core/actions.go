@@ -256,6 +256,8 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		a.runInTerminal(act.Text)
 	case "link":
 		a.openLink(arg)
+	case "cite":
+		a.goToCited(th, arg)
 	case "plan.download":
 		a.download(arg, []byte(act.Text))
 	case "file.download":

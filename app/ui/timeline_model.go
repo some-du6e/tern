@@ -27,6 +27,9 @@ type Timeline struct {
 	// Working: the thread is working, so opening a row while the live end
 	// is followed keeps following it.
 	Working bool
+	// Reveal is a row to bring into view once, as a quoted response's card
+	// does its reply.
+	Reveal string
 }
 
 // RowKind is a row's kind (§2.2).

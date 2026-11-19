@@ -403,7 +403,7 @@ func (th *Theme) bubble(gtx C, r *TimelineRow, mediaAbove bool) D {
 	p := dp(gtx, 12)
 	st := mdStyle{color: P.Foreground, on: surface, user: true, owner: r.ID}
 	doc := th.parsed(m.Text, st, m.Chips)
-	textW := min(maxW-2*p, th.mdNatural(gtx, doc, doc.blocks, maxW-2*p))
+	textW := min(maxW-2*p, th.mdNatural(gtx, doc, doc.blocks, st, maxW-2*p))
 	// Its files over its words, 8dp above them (mb-2).
 	filesH := 0
 	var files recording

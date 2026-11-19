@@ -75,6 +75,9 @@ type App struct {
 	// What the user opened in each thread's timeline, for the last 100.
 	disclosures     map[string]*disclosure
 	disclosureOrder []string
+	// cited is the reply a quoted response's card goes to, by its thread's
+	// ref and its message id, until the timeline has shown it.
+	cited citedReply
 
 	choices map[string]*choice       // per thread ref, or "draft"
 	images  map[string][]pastedImage // pasted and not sent yet, same keys
@@ -963,19 +966,26 @@ func mergeRun(dst *t3.Run, src t3.Run) {
 
 func (a *App) loadEarlier() {
 	a.mu.Lock()
+	ok := a.loadEarlierLocked()
+	a.mu.Unlock()
+	if ok {
+		a.changed()
+	}
+}
+
+// loadEarlierLocked starts fetching the open thread's next page of history,
+// unless there's none or it's on its way. Call with the lock held.
+func (a *App) loadEarlierLocked() bool {
 	v := a.view
 	var conn *t3.Conn
 	if v != nil {
 		conn = v.env.conn
 	}
 	if v == nil || conn == nil || !v.more || v.loading || v.cursor == "" {
-		a.mu.Unlock()
-		return
+		return false
 	}
 	v.loading, v.historyErr = true, ""
 	cursor := v.cursor
-	a.mu.Unlock()
-	a.changed()
 	go func() {
 		page, err := conn.HistoryPage(v.id, cursor)
 		a.mu.Lock()
@@ -992,6 +1002,7 @@ func (a *App) loadEarlier() {
 		}
 		v.cursor, v.more = page.NextCursor, page.HasMoreHistory
 	}()
+	return true
 }
 
 // getTurnItem asks the server for a turn item in full. Tests replace it.

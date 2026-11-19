@@ -583,3 +583,29 @@ func TestFileOnlyMessage(t *testing.T) {
 		t.Fatalf("message %+v", m)
 	}
 }
+
+// A quoted response's card goes to its reply: the fold hiding it opens,
+// and the timeline brings its row into view once (MessagesTimeline.tsx:
+// 664-705). A reply the thread doesn't hold reveals nothing.
+func TestCitedReplyIsRevealed(t *testing.T) {
+	tt := newTimelineTest(t, []t3.Run{{ID: "run-1", Status: "completed", StartedAt: at(0), CompletedAt: at(134), Ordinal: 1}},
+		turnItem("u1", "user_message", 1, 0, "runId", "run-1", "text", "Write a poem", "inputIntent", "turn_start"),
+		turnItem("a1", "assistant_message", 2, 10, "runId", "run-1", "text", "I should ground this first.", "phase", "commentary"),
+		turnItem("c1", "command_execution", 3, 12, "runId", "run-1", "input", "rg poem", "exitCode", 0),
+		turnItem("a2", "assistant_message", 4, 20, "runId", "run-1", "text", "Here is the poem.", "phase", "final_answer"),
+	)
+	wantShape(t, "folded", tt.rows(), "user:u1, fold, assistant:a2")
+	tt.click("cite:swiss/t1/a1")
+	s := tt.a.build(t0.Add(time.Hour))
+	wantShape(t, "revealed", s.Timeline.Rows, "user:u1, fold, assistant:a1, work:c1, assistant:a2")
+	if s.Timeline.Reveal != "a1" {
+		t.Errorf("reveal %q, want a1", s.Timeline.Reveal)
+	}
+	if r := tt.a.build(t0.Add(time.Hour)).Timeline.Reveal; r != "" {
+		t.Errorf("the reply is revealed again: %q", r)
+	}
+	tt.click("cite:swiss/t1/gone")
+	if r := tt.a.build(t0.Add(time.Hour)).Timeline.Reveal; r != "" || tt.a.cited != (citedReply{}) {
+		t.Errorf("a reply that isn't there: reveal %q, still waiting for %+v", r, tt.a.cited)
+	}
+}

@@ -373,6 +373,11 @@ func (th *Theme) traceBox(gtx C, id string, in int, thoughts []string, live bool
 // plainText draws s wrapped in t's font, UI's by default, its line breaks
 // kept, lines lineH dp apart.
 func (th *Theme) plainText(gtx C, s string, t Txt, lineH float32) int {
+	return th.inline(gtx, th.plainPara(s, t, lineH), nil).Size.Y
+}
+
+// plainPara is plainText's paragraph.
+func (th *Theme) plainPara(s string, t Txt, lineH float32) *inlineText {
 	if t.Font.Typeface == "" {
 		t.Font = UI(font.Normal)
 	}
@@ -385,7 +390,7 @@ func (th *Theme) plainText(gtx C, s string, t Txt, lineH float32) int {
 			p.runs = append(p.runs, inlineRun{text: line, font: t.Font, size: float32(t.Size), color: t.Color})
 		}
 	}
-	return th.inline(gtx, th.keepText(s, t, p), nil).Size.Y
+	return th.keepText(s, t, p)
 }
 
 // keepText keeps a one-off paragraph for as long as its text is shown:

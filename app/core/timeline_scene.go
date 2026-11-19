@@ -46,8 +46,12 @@ func (a *App) timeline(s *ui.Scene, t *t3.Thread, v *threadView, root string) {
 		v.seenRun, v.seenStatus = r.ID, r.Status
 	}
 	items := v.sorted()
+	rows := deriveRows(timelineEntries(items), in)
+	if a.cited.thread == a.openID && a.cited.message != "" {
+		rows = a.revealCited(tl, v, rows, func() []*row { return deriveRows(timelineEntries(items), in) })
+	}
 	claimed := false
-	for _, r := range deriveRows(timelineEntries(items), in) {
+	for _, r := range rows {
 		if ur, ok := a.uiRow(r, v, root, in.pending); ok {
 			tl.Rows = append(tl.Rows, ur)
 		}
@@ -72,6 +76,65 @@ func (a *App) timeline(s *ui.Scene, t *t3.Thread, v *threadView, root string) {
 		}
 		tl.Approvals = append(tl.Approvals, pendingApproval(t.PendingRuntimeRequest, asked, v.requestLive(in.pending)))
 	}
+}
+
+// citedReply is a quoted response's source: its thread's ref and the
+// reply's message id.
+type citedReply struct{ thread, message string }
+
+// goToCited follows a quoted response's card, arg its escaped
+// "<environment>/<thread>/<message>": to its thread, where the timeline
+// then shows the reply (assistantCitationNavigation).
+func (a *App) goToCited(th *ui.Theme, arg string) {
+	parts := strings.Split(arg, "/")
+	if len(parts) != 3 {
+		return
+	}
+	for i, p := range parts {
+		s, err := url.PathUnescape(p)
+		if err != nil || s == "" {
+			return
+		}
+		parts[i] = s
+	}
+	r := ref(parts[0], parts[1])
+	a.mu.Lock()
+	a.cited = citedReply{thread: r, message: parts[2]}
+	open := a.openID == r
+	a.mu.Unlock()
+	if !open {
+		a.switchTo(th, func() { a.openThread(r) })
+	}
+	a.changed()
+}
+
+// revealCited shows the cited reply once its thread's rows are in: it
+// opens the fold that hides it (MessagesTimeline.tsx:664-705) and has the
+// timeline bring its row into view. A reply the loaded turns don't hold
+// fetches the history before them until it comes, or there's no more.
+// derive derives the rows again.
+func (a *App) revealCited(tl *ui.Timeline, v *threadView, rows []*row, derive func() []*row) []*row {
+	msg := a.cited.message
+	for _, r := range rows {
+		if r.kind == "turn-fold" && r.hidden[msg] && !v.unfolded[r.runID] {
+			v.unfolded[r.runID] = true
+			rows = derive()
+			break
+		}
+	}
+	for _, r := range rows {
+		if r.kind == "message" && r.id == msg {
+			tl.Reveal, a.cited = r.id, citedReply{}
+			return rows
+		}
+	}
+	switch {
+	case a.loadEarlierLocked():
+		tl.LoadingHistory = true
+	case v.loaded && !v.loading:
+		a.cited = citedReply{}
+	}
+	return rows
 }
 
 // working is T3's isWorking for the timeline: the run is running, or

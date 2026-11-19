@@ -72,6 +72,8 @@ type follow struct {
 	reveal       string
 	fromPrev     bool
 	revealFrames int
+	// revealed is the Timeline.Reveal last brought into view.
+	revealed string
 }
 
 // endBand is how close to the end counts as the end (MessagesTimeline.logic.ts:324-336).
@@ -141,6 +143,18 @@ func (th *Theme) timeline(gtx C, s *Scene, laneX, laneW, composer int) {
 			return tl.Rows[i-1].ID
 		}
 		return "footer"
+	}
+	if tl.Reveal != f.revealed {
+		f.revealed = tl.Reveal
+		for i := range tl.Rows {
+			if tl.Rows[i].ID == tl.Reveal {
+				// The row comes in 24dp under the top, and the end is let go
+				// (timelineScrollAnchoring.ts's anchor offset).
+				f.released, f.atEnd, f.leftAt = true, false, gtx.Now
+				l.Position = layout.Position{First: i + 1, Offset: -dp(gtx, 24), BeforeEnd: true}
+				f.first = tl.Rows[i].ID
+			}
+		}
 	}
 	if f.released && f.first != "" && ids(l.Position.First) != f.first {
 		for i := 0; i < n; i++ {

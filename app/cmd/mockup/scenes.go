@@ -132,6 +132,10 @@ const planText = "# Retry the uploader\n\n## Summary\n\nRetry failed chunks with
 	"## Risks\n\n- Retrying a chunk the server already stored duplicates it.\n- A long backoff can outlive the caller's deadline.\n" +
 	"- The fake clock must cover the jitter.\n\n## Out of scope\n\n- Resumable uploads.\n- Progress reporting.\n"
 
+// quotedReply quotes the reply's tip, as "Cite" writes it.
+const quotedReply = "t3-citation://v1/env/thread/a2?text=Start+with+the+callback&start=812&end=835" +
+	"&prefix=TIP%0A&suffix=%3A+a+channel+is+easy+to+build&comment=It+also+keeps+Send+synchronous."
+
 // longPrompt is a message tall enough to collapse.
 var longPrompt = strings.Repeat("The uploader drops the connection when a chunk takes longer than the timeout, and the caller sees a bare EOF. ", 3) +
 	"\n\n" + strings.Repeat("- keep the timeout per attempt\n", 8) + "\nAnd log every retry."
@@ -155,6 +159,7 @@ func settledRows() []ui.TimelineRow {
 		{ID: "a2", Kind: ui.RowAssistant, Message: &ui.Message{ID: "a2", Text: markdownReply, Meta: true, Copy: true, Badge: "interrupted"}},
 		{ID: "interrupt", Kind: ui.RowDivider, Label: "Run interrupted", Icon: "circle-stop", Wrap: true,
 			Detail: "The provider stopped answering while the upload's tests ran, so the run was interrupted before it finished."},
+		{ID: "s5", Kind: ui.RowUser, Message: &ui.Message{ID: "s5", Text: "Agreed: [Assistant quote](" + quotedReply + ") Go with the callback."}},
 		{ID: "s4", Kind: ui.RowUser, Message: &ui.Message{ID: "s4", Files: []ui.File{{ID: "f1", Name: "upload-trace.pdf", Size: 2516582},
 			{ID: "f2", Name: "pasted.txt", Size: 900, Pasted: true}}}},
 		{ID: "live-activity-row", Kind: ui.RowThinking, Live: true, Label: "Thinking"},

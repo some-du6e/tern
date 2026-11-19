@@ -22,8 +22,9 @@ import (
 // tall as the block's line-height with the half-leading above and below,
 // wrapping between words and breaking inside a word only when it can't
 // fit a line by itself (overflow-wrap: anywhere). Inline code is a padded
-// box behind its text, cloned on each line it spans; links and chips keep
-// their boxes for the pointer.
+// box behind its text, cloned on each line it spans; a mark's box opens on
+// its first line and closes on its last; links and chips keep their boxes
+// for the pointer. A clamped paragraph ends its last line with "…".
 
 // inlineRun is a stretch of text in one style.
 type inlineRun struct {
@@ -32,6 +33,7 @@ type inlineRun struct {
 	size      float32 // the font size in dp
 	color     color.NRGBA
 	code      bool // inline code: padded 0.1em by 0.35em in a 1dp border, radius 4
+	mark      bool // highlighted: on the paragraph's markBg, padded 2dp either end, radius 4
 	strike    bool
 	underline bool
 	italic    bool // Inter has no italic, so Chrome slants the roman: so does this
@@ -53,8 +55,13 @@ type inlineText struct {
 	lineH float32 // dp
 	// chips are the labels of the pictures its chip runs draw.
 	chips []string
-	// codeBg is inline code's fill, composited on the surface it sits on.
-	codeBg color.NRGBA
+	// codeBg is inline code's fill, composited on the surface it sits on;
+	// markBg a mark's.
+	codeBg, markBg color.NRGBA
+	// maxLines clamps the paragraph to that many lines (line-clamp), the
+	// last ending in "…" in ellipsis; 0 doesn't.
+	maxLines int
+	ellipsis color.NRGBA
 	// indent is where the first line starts, in dp: a task's checkbox
 	// pulls it into the list's gutter.
 	indent float32
@@ -103,13 +110,16 @@ type metricKey struct {
 
 // piece is one run's text on one line, or a chip.
 type piece struct {
-	run     *inlineRun
-	glyphs  []text.Glyph
-	x, w    int // where it starts on its line and its advance, with code padding
-	pad     int // inline code's padding and border, each side
-	ascent  int
-	descent int
-	chip    string
+	run    *inlineRun
+	glyphs []text.Glyph
+	text   string // the text the glyphs draw
+	x, w   int    // where it starts on its line and its advance, with its padding
+	// lpad and rpad are the padding (and inline code's border) before and
+	// after the glyphs.
+	lpad, rpad int
+	ascent     int
+	descent    int
+	chip       string
 }
 
 // metrics is the font's ascent and descent at px, measured once.
@@ -209,12 +219,16 @@ func (th *Theme) layoutInline(gtx C, t *inlineText, maxW int) *inlineLayout {
 			x += w
 			continue
 		}
-		pad := 0
-		if r.code {
+		// Code pads each line's piece; a mark only its first and last.
+		pad, ends := 0, false
+		switch {
+		case r.code:
 			pad = px(0.35*r.size) + max(1, px(1))
+		case r.mark:
+			pad, ends = px(2), true
 		}
 		rest := r.text
-		for rest != "" {
+		for first := true; rest != ""; first = false {
 			if x == start {
 				// Spaces at the start of a wrapped line collapse away.
 				rest = strings.TrimLeftFunc(rest, unicode.IsSpace)
@@ -222,7 +236,11 @@ func (th *Theme) layoutInline(gtx C, t *inlineText, maxW int) *inlineLayout {
 					break
 				}
 			}
-			avail := maxW - x - 2*pad
+			lpad := pad
+			if ends && !first {
+				lpad = 0
+			}
+			avail := maxW - x - lpad - pad
 			gs, n, w := th.shapeLine(r.font, px(r.size), rest, max(1, avail), false)
 			if n == 0 {
 				if x > start {
@@ -236,10 +254,14 @@ func (th *Theme) layoutInline(gtx C, t *inlineText, maxW int) *inlineLayout {
 					gs, _, w = th.shapeLine(r.font, px(r.size), rest[:n], 1<<20, false)
 				}
 			}
+			rpad := pad
+			if ends && n < len(rest) {
+				rpad = 0
+			}
 			m := th.metrics(r.font, px(r.size))
-			line = append(line, piece{run: r, glyphs: gs, x: x, w: w + 2*pad, pad: pad,
+			line = append(line, piece{run: r, glyphs: gs, text: rest[:n], x: x, w: lpad + w + rpad, lpad: lpad, rpad: rpad,
 				ascent: int(m.ascent + 0.5), descent: int(m.descent + 0.5)})
-			x += w + 2*pad
+			x += lpad + w + rpad
 			rest = rest[n:]
 			if rest != "" {
 				newLine()
@@ -249,6 +271,10 @@ func (th *Theme) layoutInline(gtx C, t *inlineText, maxW int) *inlineLayout {
 	if len(line) > 0 || len(lines) == 0 {
 		lines = append(lines, line)
 	}
+	if t.maxLines > 0 && len(lines) > t.maxLines {
+		lines = lines[:t.maxLines]
+		lines[len(lines)-1] = th.ellipsize(lines[len(lines)-1], t, maxW, px)
+	}
 
 	l := &inlineLayout{lines: len(lines)}
 	l.call, l.size, l.links = th.paintInline(gtx, t, lines, maxW)
@@ -257,6 +283,41 @@ func (th *Theme) layoutInline(gtx C, t *inlineText, maxW int) *inlineLayout {
 	}
 	th.tl.layouts[k] = l
 	return l
+}
+
+// ellipsize ends a clamped paragraph's last line with "…" in the block's
+// font and its ellipsis colour, dropping the characters it has no room
+// for, as line-clamp does.
+func (th *Theme) ellipsize(line []piece, t *inlineText, maxW int, px func(float32) int) []piece {
+	er := &inlineRun{text: "…", font: t.font, size: t.size, color: t.ellipsis}
+	gs, _, ew := th.shapeLine(er.font, px(er.size), er.text, 1<<20, false)
+	for len(line) > 0 {
+		p := &line[len(line)-1]
+		s := strings.TrimRightFunc(p.text, unicode.IsSpace)
+		if p.x+p.w+ew <= maxW && s == p.text {
+			break
+		}
+		if p.text == "" {
+			// A chip, an icon or a gap without room after it.
+			line = line[:len(line)-1]
+			continue
+		}
+		r := p.run
+		g, n, w := th.shapeLine(r.font, px(r.size), s, max(1, maxW-ew-p.x-p.lpad), true)
+		if s == "" || n == 0 {
+			line = line[:len(line)-1]
+			continue
+		}
+		// A mark the clamp cuts doesn't close here.
+		p.glyphs, p.text, p.rpad, p.w = g, s[:n], 0, p.lpad+w
+		break
+	}
+	x := 0
+	if n := len(line); n > 0 {
+		x = line[n-1].x + line[n-1].w
+	}
+	m := th.metrics(er.font, px(er.size))
+	return append(line, piece{run: er, glyphs: gs, text: er.text, x: x, w: ew, ascent: int(m.ascent + 0.5), descent: int(m.descent + 0.5)})
 }
 
 // paintInline records the laid-out lines' drawing, each line placed by the
@@ -300,11 +361,14 @@ func (th *Theme) paintInline(gtx C, t *inlineText, lines [][]piece, maxW int) (o
 			if r.gap > 0 {
 				continue
 			}
-			if r.code {
+			switch {
+			case r.code:
 				em := r.size * gtx.Metric.PxPerDp
 				padY := 0.1*em + float32(max(1, dp(gtx, 1)))
 				box := image.Rect(p.x, base-p.ascent-int(padY+0.5), p.x+p.w, base+p.descent+int(padY+0.5))
 				fill(g, t.codeBg, box, dp(gtx, 4))
+			case r.mark:
+				fill(g, t.markBg, image.Rect(p.x, base-p.ascent, p.x+p.w, base+p.descent), dp(gtx, 4))
 			}
 			if r.link > 0 {
 				links = append(links, linkBox{r.link - 1, image.Rect(dx+p.x, base-p.ascent, dx+p.x+p.w, base+p.descent)})
@@ -319,7 +383,7 @@ func (th *Theme) paintInline(gtx C, t *inlineText, lines [][]piece, maxW int) (o
 				th.paintGlyphs(g, gs, image.Pt(lx, base), col, false)
 				continue
 			}
-			th.paintGlyphs(g, p.glyphs, image.Pt(p.x+p.pad, base), col, r.italic)
+			th.paintGlyphs(g, p.glyphs, image.Pt(p.x+p.lpad, base), col, r.italic)
 			if r.strike {
 				em := r.size * gtx.Metric.PxPerDp
 				y := base - int(0.27*em+0.5)

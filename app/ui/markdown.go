@@ -26,8 +26,9 @@ import (
 // GitHub's tables, strikethrough, task lists and autolinks, parsed by
 // goldmark and laid out with .chat-markdown's rules, margins collapsing
 // between blocks as CSS's do. GitHub's > [!NOTE] alerts are T3's too, and
-// so is Claude's "★ Insight" callout. Footnotes, <details>, math,
-// Mermaid, images, file and thread chips are drawn as their text.
+// so are Claude's "★ Insight" callout and quoted responses' cards.
+// Footnotes, <details>, math, Mermaid, images, file and thread chips are
+// drawn as their text.
 
 type mdKind int
 
@@ -41,6 +42,7 @@ const (
 	mdCode
 	mdTable
 	mdRule
+	mdCite // a quoted response's card
 )
 
 // mdNode is one block.
@@ -48,6 +50,11 @@ type mdNode struct {
 	kind  mdKind
 	tight bool // a tight list item's paragraph, without margins
 	level int  // a heading's level; a list's depth, from 1
+	// own: the block's margins are mt and mb, as for the pieces of a
+	// paragraph a quoted response's card cuts.
+	own    bool
+	mt, mb float32
+	cite   *citation
 	// A list: ordered, its first number and its markers' width in digits;
 	// an item's number.
 	ordered bool
@@ -258,10 +265,10 @@ func (b *mdBuilder) blocks(n ast.Node, depth int) []*mdNode {
 	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
 		switch c := c.(type) {
 		case *ast.Paragraph:
-			out = append(out, &mdNode{kind: mdPara, text: b.paragraph(c, 14, UI(font.Normal), b.st.color, 22.75)})
+			out = append(out, b.paragraphBlocks(c, false)...)
 		case *ast.TextBlock:
 			// A tight list's item text, which no <p> wraps: no margins.
-			out = append(out, &mdNode{kind: mdPara, tight: true, text: b.paragraph(c, 14, UI(font.Normal), b.st.color, 22.75)})
+			out = append(out, b.paragraphBlocks(c, true)...)
 		case *ast.Heading:
 			size := map[int]float32{1: 20, 2: 18, 3: 16}[c.Level]
 			if size == 0 {
@@ -499,74 +506,139 @@ func (b *mdBuilder) paragraph(n ast.Node, size float32, f font.Font, col color.N
 	return t
 }
 
+// paragraphBlocks is a paragraph's blocks: the paragraph, or, where its
+// citation links quote a response, the paragraph cut around them, each a
+// card of its own between the text before and after it (ChatMarkdown.tsx:
+// 1153-1161). The first and last block keep the paragraph's margins; a
+// card has 10.4 above unless it starts the paragraph and below unless it
+// ends it, and the text between has none.
+func (b *mdBuilder) paragraphBlocks(n ast.Node, tight bool) []*mdNode {
+	st := runStyle{font: UI(font.Normal), size: 14, color: b.st.color}
+	newText := func() *inlineText {
+		return &inlineText{font: st.font, size: 14, lineH: 22.75, codeBg: b.codeBg(), chips: b.chips}
+	}
+	var out []*mdNode
+	t := newText()
+	piece := func() {
+		// The line breaks and spaces around a card are the card's.
+		blank := func(r inlineRun) bool { return r.brk || strings.TrimSpace(r.text) == "" && r.chip == 0 && r.icon == "" }
+		for len(t.runs) > 0 && blank(t.runs[0]) {
+			t.runs = t.runs[1:]
+		}
+		for len(t.runs) > 0 && blank(t.runs[len(t.runs)-1]) {
+			t.runs = t.runs[:len(t.runs)-1]
+		}
+		if len(t.runs) > 0 {
+			out = append(out, &mdNode{kind: mdPara, text: t})
+		}
+		t = newText()
+	}
+	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+		if l, ok := c.(*ast.Link); ok {
+			if cite, ok := parseCitation(string(l.Destination)); ok {
+				piece()
+				out = append(out, &mdNode{kind: mdCite, cite: &cite})
+				continue
+			}
+		}
+		b.inline(t, c, st)
+	}
+	if len(out) == 0 {
+		return []*mdNode{{kind: mdPara, tight: tight, text: t}}
+	}
+	piece()
+	edge := float32(10.4)
+	if tight {
+		edge = 0
+	}
+	for i, nd := range out {
+		nd.own = true
+		if nd.kind == mdCite {
+			nd.mt, nd.mb = 10.4, 10.4
+		}
+		if i == 0 {
+			nd.mt = edge
+		}
+		if i == len(out)-1 {
+			nd.mb = edge
+		}
+	}
+	return out
+}
+
 func (b *mdBuilder) inlines(t *inlineText, n ast.Node, st runStyle) {
 	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
-		switch c := c.(type) {
-		case *ast.Text:
-			b.addText(t, string(c.Segment.Value(b.src)), st)
-			switch {
-			case c.HardLineBreak():
-				t.runs = append(t.runs, inlineRun{brk: true})
-			case c.SoftLineBreak() && (b.st.user || b.st.breaks || b.insights):
-				t.runs = append(t.runs, inlineRun{brk: true})
-			case c.SoftLineBreak():
-				b.addText(t, " ", st)
-			}
-		case *ast.String:
-			b.addText(t, string(c.Value), st)
-		case *ast.CodeSpan:
-			var sb strings.Builder
-			for g := c.FirstChild(); g != nil; g = g.NextSibling() {
-				if tx, ok := g.(*ast.Text); ok {
-					sb.Write(tx.Segment.Value(b.src))
-				}
-			}
-			// Code is --contrast-foreground, in a link too.
-			cs := st
-			cs.code, cs.font, cs.size = true, Mono(), 0.85*st.size
-			cs.color = over(P.ContrastForeground, b.st.on)
-			b.addText(t, strings.ReplaceAll(sb.String(), "\n", " "), cs)
-		case *ast.Emphasis:
-			es := st
-			if c.Level >= 2 {
-				es.font.Weight = font.Bold
-			} else {
-				es.italic = true
-			}
-			b.inlines(t, c, es)
-		case *east.Strikethrough:
-			ss := st
-			ss.strike = true
-			b.inlines(t, c, ss)
-		case *ast.Link:
-			b.links = append(b.links, string(c.Destination))
-			ls := st
-			ls.link, ls.color = len(b.links), over(P.InfoForeground, b.st.on)
-			b.inlines(t, c, ls)
-		case *ast.AutoLink:
-			b.links = append(b.links, string(c.URL(b.src)))
-			ls := st
-			ls.link, ls.color = len(b.links), over(P.InfoForeground, b.st.on)
-			b.addText(t, string(c.Label(b.src)), ls)
-		case *ast.Image:
-			// The image's words, where T3 would show the picture.
-			b.inlines(t, c, st)
-		case *ast.RawHTML:
-			var sb strings.Builder
-			for i := 0; i < c.Segments.Len(); i++ {
-				seg := c.Segments.At(i)
-				sb.Write(seg.Value(b.src))
-			}
-			switch tag := strings.ToLower(sb.String()); {
-			case b.st.user:
-				b.addText(t, sb.String(), st)
-			case tag == "<br>" || tag == "<br/>" || tag == "<br />":
-				t.runs = append(t.runs, inlineRun{brk: true})
-			}
-		case *east.TaskCheckBox:
-		default:
-			b.inlines(t, c, st)
+		b.inline(t, c, st)
+	}
+}
+
+// inline adds one inline node's text to t in style st.
+func (b *mdBuilder) inline(t *inlineText, c ast.Node, st runStyle) {
+	switch c := c.(type) {
+	case *ast.Text:
+		b.addText(t, string(c.Segment.Value(b.src)), st)
+		switch {
+		case c.HardLineBreak():
+			t.runs = append(t.runs, inlineRun{brk: true})
+		case c.SoftLineBreak() && (b.st.user || b.st.breaks || b.insights):
+			t.runs = append(t.runs, inlineRun{brk: true})
+		case c.SoftLineBreak():
+			b.addText(t, " ", st)
 		}
+	case *ast.String:
+		b.addText(t, string(c.Value), st)
+	case *ast.CodeSpan:
+		var sb strings.Builder
+		for g := c.FirstChild(); g != nil; g = g.NextSibling() {
+			if tx, ok := g.(*ast.Text); ok {
+				sb.Write(tx.Segment.Value(b.src))
+			}
+		}
+		// Code is --contrast-foreground, in a link too.
+		cs := st
+		cs.code, cs.font, cs.size = true, Mono(), 0.85*st.size
+		cs.color = over(P.ContrastForeground, b.st.on)
+		b.addText(t, strings.ReplaceAll(sb.String(), "\n", " "), cs)
+	case *ast.Emphasis:
+		es := st
+		if c.Level >= 2 {
+			es.font.Weight = font.Bold
+		} else {
+			es.italic = true
+		}
+		b.inlines(t, c, es)
+	case *east.Strikethrough:
+		ss := st
+		ss.strike = true
+		b.inlines(t, c, ss)
+	case *ast.Link:
+		b.links = append(b.links, string(c.Destination))
+		ls := st
+		ls.link, ls.color = len(b.links), over(P.InfoForeground, b.st.on)
+		b.inlines(t, c, ls)
+	case *ast.AutoLink:
+		b.links = append(b.links, string(c.URL(b.src)))
+		ls := st
+		ls.link, ls.color = len(b.links), over(P.InfoForeground, b.st.on)
+		b.addText(t, string(c.Label(b.src)), ls)
+	case *ast.Image:
+		// The image's words, where T3 would show the picture.
+		b.inlines(t, c, st)
+	case *ast.RawHTML:
+		var sb strings.Builder
+		for i := 0; i < c.Segments.Len(); i++ {
+			seg := c.Segments.At(i)
+			sb.Write(seg.Value(b.src))
+		}
+		switch tag := strings.ToLower(sb.String()); {
+		case b.st.user:
+			b.addText(t, sb.String(), st)
+		case tag == "<br>" || tag == "<br/>" || tag == "<br />":
+			t.runs = append(t.runs, inlineRun{brk: true})
+		}
+	case *east.TaskCheckBox:
+	default:
+		b.inlines(t, c, st)
 	}
 }
 
@@ -801,6 +873,8 @@ func (n *mdNode) margins() (top, bottom float32) {
 	switch {
 	case n.kind == mdHeading:
 		return 20, 8
+	case n.own:
+		return n.mt, n.mb
 	case n.kind == mdRule || n.tight:
 		return 0, 0
 	case n.kind == mdItem:
@@ -843,11 +917,11 @@ func (th *Theme) mdStack(gtx C, doc *mdDoc, nodes []*mdNode, st mdStyle) int {
 	return y
 }
 
-// mdNatural is how wide blocks would be in a box that shrinks to fit them,
-// up to maxW: paragraphs as wide as their longest line, lists and quotes
-// as their items plus their gutters, and code, tables and rules the
-// whole width.
-func (th *Theme) mdNatural(gtx C, doc *mdDoc, nodes []*mdNode, maxW int) int {
+// mdNatural is how wide blocks in style st would be in a box that shrinks
+// to fit them, up to maxW: paragraphs as wide as their longest line, lists
+// and quotes as their items plus their gutters, a quoted response's card
+// as its passage on one line, and code, tables and rules the whole width.
+func (th *Theme) mdNatural(gtx C, doc *mdDoc, nodes []*mdNode, st mdStyle, maxW int) int {
 	w := 0
 	for _, n := range nodes {
 		switch n.kind {
@@ -856,11 +930,13 @@ func (th *Theme) mdNatural(gtx C, doc *mdDoc, nodes []*mdNode, maxW int) int {
 		case mdList:
 			gutter := dp(gtx, 20)
 			for _, item := range n.kids {
-				w = max(w, gutter+th.mdNatural(gtx, doc, item.kids, maxW-gutter))
+				w = max(w, gutter+th.mdNatural(gtx, doc, item.kids, st, maxW-gutter))
 			}
 		case mdQuote:
 			in := dp(gtx, 2+12.8)
-			w = max(w, in+th.mdNatural(gtx, doc, n.kids, maxW-in))
+			w = max(w, in+th.mdNatural(gtx, doc, n.kids, st, maxW-in))
+		case mdCite:
+			w = max(w, th.citeNatural(gtx, n.cite, st, maxW))
 		default:
 			return maxW
 		}
@@ -903,6 +979,8 @@ func (th *Theme) mdBlock(gtx C, doc *mdDoc, n *mdNode, st mdStyle) int {
 		return th.codeBlock(gtx, n, st)
 	case mdTable:
 		return th.mdTable(gtx, doc, n, st)
+	case mdCite:
+		return th.citeCard(gtx, n.cite, st)
 	}
 	return 0
 }

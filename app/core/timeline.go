@@ -212,6 +212,7 @@ type row struct {
 	before    string
 	after     string
 	failure   string
+	hidden    map[string]bool // a fold's entries it hides while closed
 }
 
 const liveActivityRow = "live-activity-row"
@@ -790,7 +791,8 @@ func deriveRows(all []*tlEntry, in timelineInput) []*row {
 			continue
 		}
 		if f := folds[en.id]; f != nil {
-			rows = append(rows, &row{kind: "turn-fold", id: "turn-fold:" + f.runID, at: f.at, runID: f.runID, label: f.label, expanded: in.openRuns[f.runID]})
+			rows = append(rows, &row{kind: "turn-fold", id: "turn-fold:" + f.runID, at: f.at, runID: f.runID, label: f.label, expanded: in.openRuns[f.runID],
+				hidden: f.hidden})
 		}
 		if collapsed[en.id] || tailIDs[en.id] {
 			continue
