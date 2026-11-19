@@ -106,6 +106,7 @@ type Theme struct {
 
 	richCache map[richKey]*richOps
 	signIn    signInAnim
+	dv        diffView // the Diff surface's scroll, selection and layouts
 
 	// CanRun and Run give PowerShell and cmd code blocks their ▷: whether
 	// a block in a language can run on this PC, and running it.

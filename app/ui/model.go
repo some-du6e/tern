@@ -91,6 +91,9 @@ type Item struct {
 	Attached int
 	Chips    []string // the labels of the pictures ChipText(1), ChipText(2), … in Text
 	Thumbs   []Thumb  // the attached pictures, as they load
+	// Files is an assistant message's changed files card: what its run
+	// changed, under the message's last reply.
+	Files *ChangedFiles
 }
 
 type Approval struct {
@@ -108,26 +111,6 @@ type Question struct {
 	Chosen   []bool // multi-select picks; when set it wins over Picked
 	Custom   string
 	MultiSel bool
-}
-
-type FileChange struct {
-	Path     string
-	Add, Del int
-	Kind     byte // 'M', 'A', 'D'
-	Selected bool
-}
-
-type DiffLine struct {
-	Kind     byte // ' ', '+', '-', '@'
-	Old, New int
-	Text     string
-}
-
-type DiffView struct {
-	Title string
-	File  string
-	Files []FileChange
-	Lines []DiffLine
 }
 
 // ModelPicker is T3's model menu. Tabs are Favorites (Provider "") and each
@@ -194,13 +177,6 @@ const (
 	SignInCode
 	SignInPair
 )
-
-// Browser is the preview surface. An empty URL is the new-tab page.
-type Browser struct {
-	Title   string
-	URL     string
-	Control string // "You have control", "Agent has control", "Watching"
-}
 
 type RunInfo struct {
 	Machine  string
@@ -273,14 +249,11 @@ type Scene struct {
 	SuggestSel   int
 	SuggestHead  string
 
-	Changes []FileChange
-	Run     *RunInfo
-	Panel   int // which right panel tab is open
-	Browser *Browser
+	Run *RunInfo
 
 	Picker *ModelPicker
 	Traits *Traits
-	Diff   *DiffView
+	Diff   *DiffPanel // the right panel's Diff surface, while its tab is open
 	Login  *SignIn
 
 	Phase float64 // spinner angle, so a frame can show motion

@@ -85,6 +85,8 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		return
 	case act.Kind != "click":
 		return
+	case a.diffAction(id):
+		return
 	}
 	verb, arg, _ := strings.Cut(id, ":")
 	switch verb {
@@ -158,6 +160,14 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 	case "menus.close":
 		a.closeMenus()
 	case "browser.toggle":
+		// The right panel's toggle hides the Diff surface with it.
+		a.mu.Lock()
+		hid := a.hideDiffLocked()
+		browsing := a.browsers[a.openID] != nil && a.browsers[a.openID].open
+		a.mu.Unlock()
+		if hid && !browsing {
+			return
+		}
 		a.toggleBrowser()
 		a.mu.Lock()
 		opened := a.browsers[a.openID] != nil && a.browsers[a.openID].open
@@ -168,6 +178,11 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 	case "browser.newtab":
 		a.browserTab("new", 0)
 	case "browser.tab", "browser.tabclose":
+		if verb == "browser.tab" {
+			a.mu.Lock()
+			a.diffFor(a.openID).active = false
+			a.mu.Unlock()
+		}
 		i, _ := strconv.Atoi(arg)
 		a.browserTab(map[string]string{"browser.tab": "show", "browser.tabclose": "close"}[verb], i)
 	case "browser.server":
@@ -354,6 +369,7 @@ func (a *App) closeMenusLocked() {
 	a.picker, a.traitsOpen, a.accessOpen, a.projectsOpen, a.accountOpen = nil, false, false, false, false
 	a.detailsOpen, a.machinesOpen = false, false
 	a.ctxRef, a.ctxConfirm = "", false
+	a.closeDiffMenusLocked()
 }
 
 // ctxItem is one entry in a thread's right-click menu.

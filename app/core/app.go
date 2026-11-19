@@ -97,6 +97,7 @@ type App struct {
 	machinesOpen  bool                // the footer's machines menu is up
 	drawers       map[string]*drawer  // each thread's terminals, by ref
 	browsers      map[string]*browser // each thread's browser panel, by ref
+	diff          *diffShared         // each thread's Diff surface, and what they share (diff.go)
 	ctxRef        string              // the thread whose right-click menu is open
 	ctxConfirm    bool                // Delete was clicked once and wants a second click
 	errText       string
@@ -707,6 +708,8 @@ type threadView struct {
 	open     map[string]bool // tool and thought rows the user expanded
 	full     map[string]*t3.TurnItem
 	cancel   func()
+	// checkpoints are what the thread's runs changed.
+	checkpoints []t3.Checkpoint
 }
 
 func newView(e *envState, id string) *threadView {
@@ -842,6 +845,7 @@ func (a *App) subscribeThread(e *envState, conn *t3.Conn, gen int, r string) {
 			for _, m := range it.Projection.Messages {
 				v.messages[m.ID] = m
 			}
+			v.checkpoints = t3.ThreadCheckpoints(raw)
 			v.cursor, v.more, v.loaded = it.HistoryCursor, it.HasMoreHistory, true
 		case it.Kind == "event" && it.Event != nil:
 			switch t := it.Event.Type; {
@@ -859,6 +863,8 @@ func (a *App) subscribeThread(e *envState, conn *t3.Conn, gen int, r string) {
 				if json.Unmarshal(it.Event.Payload, &m) == nil {
 					v.messages[m.ID] = m
 				}
+			case t == "checkpoint.captured":
+				v.putCheckpoint(it.Event.Payload)
 			}
 		}
 		a.mu.Unlock()

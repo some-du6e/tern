@@ -63,7 +63,7 @@ func (th *Theme) Desktop(gtx C, s *Scene) D {
 
 	sw := th.sidebarPx(gtx, s, size.X)
 	rp := 0
-	if s.Web != nil {
+	if s.Web != nil || s.Diff != nil {
 		rp = th.panelPx(gtx, size.X, sw)
 	}
 	colW := size.X - sw - rp
@@ -85,13 +85,10 @@ func (th *Theme) Desktop(gtx C, s *Scene) D {
 	th.sidebarTrigger(gtx, s, sw > 0)
 	th.titlebarControls(gtx, s, size, rp > 0)
 
-	if s.Diff != nil {
-		th.diffWindow(gtx, s.Diff)
-	}
 	if s.Context != nil {
 		th.contextMenu(gtx, size, s)
 	}
-	if s.Live && (s.Picker != nil || s.Traits != nil || s.Access != nil || s.Account != nil || s.Machines != nil || s.Projects != nil || s.Context != nil || s.Details) {
+	if s.Live && (s.Picker != nil || s.Traits != nil || s.Access != nil || s.Account != nil || s.Machines != nil || s.Projects != nil || s.Context != nil || s.Details || s.Diff.menuOpen()) {
 		// A click anywhere outside an open menu closes it. The menus are
 		// deferred, so they sit above this.
 		th.hit(gtx, "menus.close", size)
@@ -101,12 +98,13 @@ func (th *Theme) Desktop(gtx C, s *Scene) D {
 
 // shellKeys handles T3's shell shortcuts (keybindings.ts): mod+B the
 // sidebar, mod+J the terminal, mod+Alt+B the right panel, mod+Shift+B the
-// thread details.
+// thread details, mod+D the Diff surface (a focused terminal keeps it).
 func (th *Theme) shellKeys(gtx C, s *Scene) {
 	for {
 		ev, ok := gtx.Event(
 			key.Filter{Name: "B", Required: key.ModShortcut, Optional: key.ModShift | key.ModAlt},
 			key.Filter{Name: "J", Required: key.ModShortcut},
+			key.Filter{Name: "D", Required: key.ModShortcut},
 		)
 		if !ok {
 			return
@@ -118,6 +116,8 @@ func (th *Theme) shellKeys(gtx C, s *Scene) {
 		switch {
 		case ke.Name == "J" && s.Run != nil:
 			th.push(Action{ID: "terminal.toggle", Kind: "click"})
+		case ke.Name == "D" && s.Run != nil:
+			th.push(Action{ID: "diff.toggle", Kind: "click"})
 		case ke.Name == "B" && ke.Modifiers.Contain(key.ModShift) && s.Run != nil:
 			th.push(th.detailsAction())
 		case ke.Name == "B" && ke.Modifiers.Contain(key.ModAlt) && s.Run != nil:
@@ -361,7 +361,7 @@ func (th *Theme) titlebarControls(gtx C, s *Scene, size image.Point, panelOpen b
 	}
 	ctls = append(ctls,
 		ctl{"terminal.toggle", term, titleButton{icon: "panel-bottom", pressed: s.Term != nil, disabled: none, tipAlign: 1}},
-		ctl{"browser.toggle", "Toggle right panel (" + ShortcutAlt("B") + ")", titleButton{icon: "panel-right", pressed: s.Web != nil, disabled: none, tipAlign: 1}},
+		ctl{"browser.toggle", "Toggle right panel (" + ShortcutAlt("B") + ")", titleButton{icon: "panel-right", pressed: s.Web != nil || s.Diff != nil, disabled: none, tipAlign: 1}},
 	)
 	n := len(ctls)
 	gap := dp(gtx, 4)

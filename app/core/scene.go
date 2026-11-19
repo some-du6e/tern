@@ -271,7 +271,6 @@ func (a *App) build(now time.Time) *ui.Scene {
 	s.Net = a.net
 	s.Error = a.errText
 	s.Notice = a.notice
-	s.Panel = ui.PanelChanges
 	s.Details = a.detailsOpen
 	s.DetailsCard = a.detailsCard
 	s.SidebarHidden, s.SidebarW = a.sidebarHidden, a.sidebarWidth
@@ -477,9 +476,7 @@ func (a *App) threadScene(s *ui.Scene) {
 	if s.Effort != "" {
 		s.Run.Model += " · " + s.Effort
 	}
-	if v != nil {
-		s.Changes = changes(v)
-	}
+	s.Diff = a.diffPanelLocked(e, t, v)
 }
 
 func shortPath(p string) string {
@@ -516,34 +513,6 @@ func runtimeLabel(id string) string {
 		}
 	}
 	return id
-}
-
-// changes lists the files the thread's edits touched, newest stats per file.
-func changes(v *threadView) []ui.FileChange {
-	byFile := map[string]*ui.FileChange{}
-	var order []string
-	for _, it := range v.sorted() {
-		if it.Type != "file_change" || it.FileName == "" {
-			continue
-		}
-		c := byFile[it.FileName]
-		if c == nil {
-			c = &ui.FileChange{Path: it.FileName, Kind: 'M'}
-			byFile[it.FileName] = c
-			order = append(order, it.FileName)
-		}
-		if it.Additions != nil {
-			c.Add += *it.Additions
-		}
-		if it.Deletions != nil {
-			c.Del += *it.Deletions
-		}
-	}
-	var out []ui.FileChange
-	for _, f := range order {
-		out = append(out, *byFile[f])
-	}
-	return out
 }
 
 func firstLine(s string) string {
@@ -661,6 +630,7 @@ func toolItem(t *t3.TurnItem, full *t3.TurnItem) ui.Item {
 func (a *App) items(s *ui.Scene, t *t3.Thread, v *threadView) {
 	list := v.sorted()
 	folds, hide := a.foldRuns(t, v, list)
+	cards := a.changedFilesLocked(v, list)
 	working := threadState(t) == ui.ThreadRunning
 	thinking := false
 	for _, it := range list {
@@ -694,7 +664,7 @@ func (a *App) items(s *ui.Scene, t *t3.Thread, v *threadView) {
 			if text == "" {
 				continue
 			}
-			s.Items = append(s.Items, ui.Item{Kind: ui.ItemAssistant, Text: text})
+			s.Items = append(s.Items, ui.Item{Kind: ui.ItemAssistant, Text: text, Files: cards[k]})
 		case "reasoning":
 			live := it.Status == "running" || it.Streaming
 			thinking = thinking || live

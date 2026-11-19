@@ -99,17 +99,8 @@ func base(selected string) *ui.Scene {
 		MoreAbove:   true,
 	}
 	sidebar(s, selected)
-	s.Browser = &ui.Browser{Title: "tern", URL: "localhost:8787", Control: "You have control"}
 	s.Items = threadItems()
 	s.Run = &ui.RunInfo{Status: "Running · 1m 08s", Model: "Opus 5.5 · High", Elapsed: "5m 20s total", Mode: "Full access", Branch: "t3/go-client", Worktree: "~/.t3/worktrees/tern"}
-	s.Changes = []ui.FileChange{
-		{Path: "app/t3/rpc.go", Add: 48, Del: 6, Kind: 'M', Selected: true},
-		{Path: "app/app.go", Add: 112, Kind: 'A'},
-		{Path: "app/t3/relay.go", Add: 9, Del: 3, Kind: 'M'},
-		{Path: "app/t3/dpop_test.go", Add: 64, Kind: 'A'},
-		{Path: "app/ui/model.go", Add: 21, Del: 2, Kind: 'M'},
-		{Path: "poc/README.md", Add: 1, Del: 1, Kind: 'M'},
-	}
 	return s
 }
 
@@ -122,7 +113,6 @@ func runningScene() *ui.Scene {
 
 func approvalScene() *ui.Scene {
 	s := base("Port the T3 Connect client to Go")
-	s.Panel = ui.PanelBrowser
 	s.State = ui.ThreadApproval
 	s.StateLabel = "Needs approval"
 	s.Run.Status = "Waiting"
@@ -176,50 +166,6 @@ func codexScene() *ui.Scene {
 	return s
 }
 
-func diffScene() *ui.Scene {
-	s := runningScene()
-	s.Diff = &ui.DiffView{
-		Title: "Diff  ·  Turn 4 of 4",
-		File:  "app/t3/rpc.go",
-		Files: s.Changes,
-		Lines: []ui.DiffLine{
-			{Kind: '@', Text: "@@ -104,17 +104,37 @@ func (c *Conn) readLoop() error {"},
-			{Kind: ' ', Old: 104, New: 104, Text: "func (c *Conn) readLoop() error {"},
-			{Kind: ' ', Old: 105, New: 105, Text: "	defer c.shutdown()"},
-			{Kind: ' ', Old: 106, New: 106, Text: "	for {"},
-			{Kind: '-', Old: 107, Text: "		_, data, err := c.ws.Read(c.ctx)"},
-			{Kind: '+', New: 107, Text: "		ctx, cancel := context.WithTimeout(c.ctx, pongTimeout)"},
-			{Kind: '+', New: 108, Text: "		_, data, err := c.ws.Read(ctx)"},
-			{Kind: '+', New: 109, Text: "		cancel()"},
-			{Kind: ' ', Old: 108, New: 110, Text: "		if err != nil {"},
-			{Kind: '-', Old: 109, Text: "			return err"},
-			{Kind: '+', New: 111, Text: "			// No frame for 15 s: a laptop that slept leaves a socket"},
-			{Kind: '+', New: 112, Text: "			// that never closes. Drop it and resubscribe."},
-			{Kind: '+', New: 113, Text: "			return c.closeWith(errNoPong)"},
-			{Kind: ' ', Old: 110, New: 114, Text: "		}"},
-			{Kind: ' ', Old: 111, New: 115, Text: "		msgs, err := decodeFrame(data)"},
-			{Kind: ' ', Old: 112, New: 116, Text: "		if err != nil {"},
-			{Kind: ' ', Old: 113, New: 117, Text: "			return fmt.Errorf(\"decode frame: %w\", err)"},
-			{Kind: ' ', Old: 114, New: 118, Text: "		}"},
-			{Kind: ' ', Old: 115, New: 119, Text: "		for _, m := range msgs {"},
-			{Kind: '-', Old: 116, Text: "			c.dispatch(m)"},
-			{Kind: '+', New: 120, Text: "			if m.Tag == \"Chunk\" {"},
-			{Kind: '+', New: 121, Text: "				// The server sends nothing more on this stream until we Ack."},
-			{Kind: '+', New: 122, Text: "				c.send(ack{Tag: \"Ack\", RequestID: m.RequestID})"},
-			{Kind: '+', New: 123, Text: "			}"},
-			{Kind: '+', New: 124, Text: "			c.dispatch(m)"},
-			{Kind: ' ', Old: 117, New: 125, Text: "		}"},
-			{Kind: ' ', Old: 118, New: 126, Text: "	}"},
-			{Kind: ' ', Old: 119, New: 127, Text: "}"},
-			{Kind: '@', Text: "@@ -201,6 +209,14 @@ func (c *Conn) Stream(tag string, payload any) *Stream {"},
-			{Kind: ' ', Old: 201, New: 209, Text: "	id := c.nextID.Add(1)"},
-			{Kind: '+', New: 210, Text: "	st := &Stream{id: id, values: make(chan json.RawMessage, 64)}"},
-			{Kind: '+', New: 211, Text: "	c.pending.Store(id, st)"},
-		},
-	}
-	return s
-}
-
 func questionScene() *ui.Scene {
 	s := base("Watch pairing flow")
 	s.Tabs = []string{"Watch pairing flow", "Port the T3 Connect clie…"}
@@ -244,7 +190,6 @@ func questionScene() *ui.Scene {
 		{Header: "Session", Text: "Which session should the watch get?", Options: []string{"30-day, full access", "30-day, read + operate only", "1-hour, renew from phone"}, Picked: 1},
 		{Header: "Pairing", Text: "How should the watch receive the credential?", Options: []string{"QR code on desktop", "Typed 6-word code", "Through the iPhone app"}, Picked: 0},
 	}
-	s.Changes = nil
 	return s
 }
 
@@ -268,9 +213,6 @@ func draftScene() *ui.Scene {
 		{Name: "/pr-comments", Desc: "Fetch review comments on this branch"},
 	}
 	s.Run = nil
-	s.Changes = nil
-	s.Panel = ui.PanelBrowser
-	s.Browser = &ui.Browser{}
 	return s
 }
 

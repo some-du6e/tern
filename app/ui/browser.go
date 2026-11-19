@@ -79,13 +79,20 @@ func (th *Theme) Unfocus() { th.in.blur = true }
 // WriteClipboard puts text on the clipboard at the next frame.
 func (th *Theme) WriteClipboard(text string) { th.in.clipOut = &text }
 
-// browserPanel is the right panel's browser surface; the shell's
-// panelHost frames it and drags its edge.
+// browserPanel is the right panel's browser surface, or its Diff surface
+// when that tab is the one showing; the shell's panelHost frames it and
+// drags its edge.
 func (th *Theme) browserPanel(gtx C, s *Scene) D {
 	v := s.Web
 	return Fill(gtx, ColPanelHi, func(gtx C) D {
+		if s.Diff != nil && s.Diff.Active {
+			return Col(gtx,
+				rigid(func(gtx C) D { return th.browserTabs(gtx, v, s.Diff) }),
+				flexed(func(gtx C) D { return th.diffSurface(gtx, s) }),
+			)
+		}
 		return Col(gtx,
-			rigid(func(gtx C) D { return th.browserTabs(gtx, v) }),
+			rigid(func(gtx C) D { return th.browserTabs(gtx, v, s.Diff) }),
 			rigid(func(gtx C) D { return th.browserBar(gtx, v) }),
 			flexed(func(gtx C) D { return th.browserPage(gtx, v) }),
 		)
@@ -93,8 +100,8 @@ func (th *Theme) browserPanel(gtx C, s *Scene) D {
 }
 
 // browserTabs is the panel's top row, as tall as the thread header: the
-// thread's tabs, +, and close.
-func (th *Theme) browserTabs(gtx C, v *BrowserView) D {
+// thread's tabs, the Diff surface's, +, and close.
+func (th *Theme) browserTabs(gtx C, v *BrowserView, d *DiffPanel) D {
 	return FixedH(gtx, topBarH, func(gtx C) D {
 		size := image.Pt(gtx.Constraints.Max.X, gtx.Constraints.Min.Y)
 		th.dragArea(gtx, size)
@@ -104,9 +111,13 @@ func (th *Theme) browserTabs(gtx C, v *BrowserView) D {
 		return pad(0, 112, 0, 10).Layout(gtx, func(gtx C) D {
 			gtx.Constraints.Min.X = gtx.Constraints.Max.X
 			var kids []layout.FlexChild
-			for i, t := range v.Tabs {
+			var tabs []BrowserTab
+			if v != nil {
+				tabs = v.Tabs
+			}
+			for i, t := range tabs {
 				i, t := i, t
-				on := i == v.Active
+				on := i == v.Active && (d == nil || !d.Active)
 				kids = append(kids, layout.Flexed(1, func(gtx C) D {
 					// Tabs share the row, up to 200dp each.
 					gtx.Constraints.Max.X = min(gtx.Constraints.Max.X, dp(gtx, 200))
@@ -136,6 +147,9 @@ func (th *Theme) browserTabs(gtx C, v *BrowserView) D {
 						})
 					}))(gtx)
 				}), rigid(Spacer(4, 0)))
+			}
+			if d != nil {
+				kids = append(kids, rigid(func(gtx C) D { return th.diffTab(gtx, d) }), rigid(Spacer(4, 0)))
 			}
 			kids = append(kids,
 				rigid(Middle(th.Tip("browser.newtab", "New tab", false, 0, func(gtx C) D {
