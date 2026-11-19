@@ -83,7 +83,7 @@ func (th *Theme) T3Alert(v AlertVariant, icon, title, desc string, on color.NRGB
 				if title == "" {
 					return D{}
 				}
-				return th.Text(gtx, Txt{Size: size, LineH: line, Font: UI(font.Medium), Color: over(cl.title, bg)}, title)
+				return th.cssText(gtx, Txt{Size: size, LineH: line, Font: UI(font.Medium), Color: over(cl.title, bg)}, title)
 			}),
 			rigid(func(gtx C) D {
 				if title == "" || desc == "" {
@@ -95,7 +95,7 @@ func (th *Theme) T3Alert(v AlertVariant, icon, title, desc string, on color.NRGB
 				if desc == "" {
 					return D{}
 				}
-				return th.Text(gtx, Txt{Size: size, LineH: line, Color: over(cl.desc, bg)}, desc)
+				return th.cssText(gtx, Txt{Size: size, LineH: line, Color: over(cl.desc, bg)}, desc)
 			}),
 		)
 		call := m.Stop()

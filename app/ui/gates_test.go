@@ -78,14 +78,14 @@ func TestWordmark(t *testing.T) {
 	}
 }
 
-// tracked text draws what a label draws, each glyph moved by the
+// tracked text draws what cssText draws, each glyph moved by the
 // spacing: none moves nothing, and -0.45 on "Code" takes 4 x 0.45 off.
 func TestTrackedText(t *testing.T) {
 	th := NewTheme()
 	tx := Txt{Size: 18, LineH: 28.0 / 18, Font: UI(font.Medium), Color: rgb(0)}
 	plain := drawn(t, image.Pt(80, 30), 2, func(gtx C) D {
 		fill(gtx, rgb(0xffffff), image.Rect(0, 0, 160, 60), 0)
-		return th.Text(gtx, tx, "Code")
+		return th.cssText(gtx, tx, "Code")
 	})
 	same := drawn(t, image.Pt(80, 30), 2, func(gtx C) D {
 		fill(gtx, rgb(0xffffff), image.Rect(0, 0, 160, 60), 0)
@@ -94,16 +94,18 @@ func TestTrackedText(t *testing.T) {
 	for y := 0; y < 60; y++ {
 		for x := 0; x < 160; x++ {
 			if plain.RGBAAt(x, y) != same.RGBAAt(x, y) {
-				t.Fatalf("untracked text differs from the label at %d,%d", x, y)
+				t.Fatalf("untracked text differs from cssText's at %d,%d", x, y)
 			}
 		}
 	}
 	var ops op.Ops
 	gtx := layout.Context{Ops: &ops, Metric: unit.Metric{PxPerDp: 2, PxPerSp: 2}, Constraints: layout.Constraints{Max: image.Pt(400, 100)}}
-	w0 := th.tracked(gtx, tx, "Code", 0).Size.X
-	w1 := th.tracked(gtx, tx, "Code", -0.45).Size.X
-	if w0-w1 != 3 {
-		t.Errorf("tracked -0.45 is %dpx narrower at 2x, want 3 (4 x 0.9)", w0-w1)
+	d0, d1 := th.tracked(gtx, tx, "Code", 0), th.tracked(gtx, tx, "Code", -0.45)
+	if d0.Size.X-d1.Size.X != 3 {
+		t.Errorf("tracked -0.45 is %dpx narrower at 2x, want 3 (4 x 0.9)", d0.Size.X-d1.Size.X)
+	}
+	if d1.Size.Y != 56 {
+		t.Errorf("tracked 18/28 is %dpx tall at 2x, want its line box's 56", d1.Size.Y)
 	}
 }
 

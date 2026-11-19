@@ -36,11 +36,11 @@ func (th *Theme) home(gtx C, s *Scene, collapsed bool) {
 	switch s.Home {
 	case HomeNoThread:
 		title = func(gtx C) D {
-			return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: over(pct(P.MutedForeground, 50), P.Background), MaxLines: 1}, "No active thread")
+			return th.cssText(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: over(pct(P.MutedForeground, 50), P.Background), MaxLines: 1}, "No active thread")
 		}
 	case HomeNoComputer:
 		title = func(gtx C) D {
-			return th.Text(gtx, Txt{Size: 14, LineH: 20.0 / 14, Font: UI(font.Medium), Color: over(pct(P.MutedForeground, 60), P.Background), MaxLines: 1}, "tern")
+			return th.cssText(gtx, Txt{Size: 14, LineH: 20.0 / 14, Font: UI(font.Medium), Color: over(pct(P.MutedForeground, 60), P.Background), MaxLines: 1}, "tern")
 		}
 	}
 	if title != nil {
@@ -97,8 +97,8 @@ func (th *Theme) emptyHeader(gtx C, w int, hero bool, title, desc string, below 
 	return layout.Flex{Axis: layout.Vertical, Alignment: layout.Middle}.Layout(gtx, kids...)
 }
 
-// balanced lays t out at the narrowest width that keeps its lines, as
-// text-wrap: balance does, and never wider than it needs.
+// balanced lays t out in CSS line boxes at the narrowest width that keeps
+// its lines, as text-wrap: balance does, and never wider than it needs.
 func (th *Theme) balanced(gtx C, t Txt, s string) D {
 	m := op.Record(gtx.Ops)
 	lg := gtx
@@ -106,7 +106,8 @@ func (th *Theme) balanced(gtx C, t Txt, s string) D {
 	d := th.Text(lg, t, s)
 	m.Stop()
 	w := d.Size.X
-	if lines := d.Size.Y / max(1, int(float32(t.Size)*t.LineH*gtx.Metric.PxPerSp+0.5)); lines > 1 {
+	b := th.lineBox(gtx, t)
+	if lines := int(float32(b.height(d.Size.Y))/b.exact + 0.5); lines > 1 {
 		// Narrow it while it keeps as many lines.
 		lo, hi := w/lines, w
 		for lo < hi {
@@ -124,7 +125,7 @@ func (th *Theme) balanced(gtx C, t Txt, s string) D {
 		w = lo
 	}
 	lg.Constraints = layout.Exact(image.Pt(w, d.Size.Y))
-	return th.Text(lg, t, s)
+	return th.cssText(lg, t, s)
 }
 
 // noThread is NoActiveThreadState's block: 512 wide at most, padded 32
@@ -176,7 +177,7 @@ func (th *Theme) noComputer(gtx C) D {
 					return Row(gtx,
 						rigid(LucideW("check", P.MutedForeground, 16)),
 						rigid(Spacer(6, 0)),
-						rigid(func(gtx C) D { return th.Text(gtx, homeText(P.MutedForeground), "Signed in") }),
+						rigid(func(gtx C) D { return th.cssText(gtx, homeText(P.MutedForeground), "Signed in") }),
 					)
 				})),
 				rigid(Spacer(0, 16)),
@@ -185,7 +186,7 @@ func (th *Theme) noComputer(gtx C) D {
 						rigid(th.runOnComputer("t3 connect")),
 						rigid(Spacer(0, 16)),
 						rigid(func(gtx C) D {
-							return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: P.MutedForeground}, "Waiting for your computer…")
+							return th.cssText(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: P.MutedForeground}, "Waiting for your computer…")
 						}),
 					)
 				})),
@@ -204,7 +205,7 @@ func (th *Theme) setupStep(n int, w W) W {
 		num := dp(gtx, 8) + dp(gtx, 12)
 		func() {
 			defer op.Offset(image.Pt(0, dp(gtx, 4))).Push(gtx.Ops).Pop()
-			th.Text(gtx, homeText(P.MutedForeground), strconv.Itoa(n))
+			th.cssText(gtx, homeText(P.MutedForeground), strconv.Itoa(n))
 		}()
 		defer op.Offset(image.Pt(num, 0)).Push(gtx.Ops).Pop()
 		g := gtx
@@ -221,11 +222,11 @@ func (th *Theme) setupStep(n int, w W) W {
 func (th *Theme) runOnComputer(command string) W {
 	return func(gtx C) D {
 		caption := func(s string) layout.FlexChild {
-			return rigid(func(gtx C) D { return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: P.MutedForeground}, s) })
+			return rigid(func(gtx C) D { return th.cssText(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: P.MutedForeground}, s) })
 		}
 		gap := rigid(Spacer(0, 8))
 		return Col(gtx,
-			rigid(func(gtx C) D { return th.Text(gtx, homeText(bodyText()), "Run on your computer:") }),
+			rigid(func(gtx C) D { return th.cssText(gtx, homeText(bodyText()), "Run on your computer:") }),
 			gap,
 			caption("macOS, Linux"),
 			gap,
@@ -249,7 +250,15 @@ func (th *Theme) runOnComputer(command string) W {
 					span(". If ", UI(font.Normal)), span("t3", Mono()),
 					span(" is not found after installing, add the folder the installer names to your PATH.", UI(font.Normal)))
 				t.LineHeightScale = 16.0 / 12
-				return t.Layout(gtx)
+				// In CSS line boxes, as cssText sets them.
+				b := th.lineBox(gtx, Txt{Size: 12, LineH: 16.0 / 12})
+				m := op.Record(gtx.Ops)
+				d := t.Layout(gtx)
+				call := m.Stop()
+				off := op.Offset(image.Pt(0, b.lead)).Push(gtx.Ops)
+				call.Add(gtx.Ops)
+				off.Pop()
+				return D{Size: image.Pt(d.Size.X, b.height(d.Size.Y))}
 			}),
 			gap,
 			rigid(th.textLink("home.download", "Or download the desktop app", Txt{Size: 12, LineH: 16.0 / 12, Color: P.MutedForeground}, P.Foreground, P.Background, 2, 100)),

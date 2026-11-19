@@ -113,12 +113,12 @@ func (th *Theme) machineBanner(gtx C, b *Banner, w int, detached bool) D {
 	lg := gtx
 	lg.Constraints = layout.Constraints{Max: image.Pt(max(0, content), row)}
 	defer op.Offset(image.Pt(row+gap, 0)).Push(gtx.Ops).Pop()
-	title := th.Text(lg, Txt{Size: 12, LineH: 24.0 / 12, Font: UI(font.Medium), Color: bodyText(), MaxLines: 1}, b.Title)
+	title := th.cssText(lg, Txt{Size: 12, LineH: 24.0 / 12, Font: UI(font.Medium), Color: bodyText(), MaxLines: 1}, b.Title)
 	if rest := content - title.Size.X - gap; b.Detail != "" && bw >= dp(gtx, 400) && rest > 0 {
 		dg := lg
 		dg.Constraints = layout.Constraints{Max: image.Pt(rest, row)}
 		m := op.Record(gtx.Ops)
-		dd := th.Text(dg, Txt{Size: 12, LineH: 16.0 / 12, Color: P.MutedForeground, MaxLines: 1}, b.Detail)
+		dd := th.cssText(dg, Txt{Size: 12, LineH: 16.0 / 12, Color: P.MutedForeground, MaxLines: 1}, b.Detail)
 		call := m.Stop()
 		defer op.Offset(image.Pt(title.Size.X+gap, (row-dd.Size.Y)/2)).Push(gtx.Ops).Pop()
 		call.Add(gtx.Ops)

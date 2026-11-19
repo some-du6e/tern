@@ -115,7 +115,7 @@ func (th *Theme) bootFailed(gtx C, f *Failure) {
 		if t.Size == 0 {
 			t.Size, t.LineH = 13, 20.0/13
 		}
-		return func(gtx C) D { return th.Text(gtx, t, s) }
+		return func(gtx C) D { return th.cssText(gtx, t, s) }
 	}
 	button := func(id, label string, h, padX float32, solid bool) W {
 		return func(gtx C) D {
@@ -194,7 +194,7 @@ func (th *Theme) bootFailed(gtx C, f *Failure) {
 				m := op.Record(gtx.Ops)
 				tg := gtx
 				tg.Constraints = layout.Constraints{Min: image.Pt(w-2*px-2*dp(gtx, 12), 0), Max: image.Pt(w-2*px-2*dp(gtx, 12), 1<<20)}
-				td := th.Text(tg, Txt{Size: 12, LineH: 16.0 / 12, Font: Mono(), Color: over(pct(fg, 80), bg)}, f.Report)
+				td := th.cssText(tg, Txt{Size: 12, LineH: 16.0 / 12, Font: Mono(), Color: over(pct(fg, 80), bg)}, f.Report)
 				call := m.Stop()
 				h := min(td.Size.Y+2*dp(gtx, 10)+2*px, dp(gtx, 200))
 				r := image.Rect(0, 0, w, h)
@@ -239,7 +239,7 @@ func (th *Theme) textLink(id, label string, t Txt, hover, on color.NRGBA, offset
 			}
 			col = t.Color
 		}
-		td := th.Text(gtx, t, label)
+		td := th.cssText(gtx, t, label)
 		y := td.Size.Y - td.Baseline + dp(gtx, offset)
 		fill(gtx, col, image.Rect(0, y, td.Size.X, y+max(1, dp(gtx, 1))), 0)
 		th.hit(gtx, id, td.Size)
@@ -373,17 +373,62 @@ func (th *Theme) pageHeader(gtx C, title, desc string) D {
 		}),
 		rigid(Spacer(0, 24)),
 		rigid(func(gtx C) D {
-			return th.Text(gtx, Txt{Size: 20, LineH: 25.0 / 20, Font: UI(font.SemiBold), Color: P.Foreground}, title)
+			return th.cssText(gtx, Txt{Size: 20, LineH: 25.0 / 20, Font: UI(font.SemiBold), Color: P.Foreground}, title)
 		}),
 		rigid(Spacer(0, 8)),
-		rigid(func(gtx C) D { return th.Text(gtx, Txt{Size: 14, LineH: 20.0 / 14, Color: P.MutedForeground}, desc) }),
+		rigid(func(gtx C) D { return th.cssText(gtx, Txt{Size: 14, LineH: 20.0 / 14, Color: P.MutedForeground}, desc) }),
 	)
+}
+
+// lineBox is how CSS sets t's lines and Gio doesn't: each LineH x Size
+// tall with the glyphs centred in it. Gio makes a single line only its
+// ascent and descent tall, with the ascent at the top; lead is how far
+// down the text goes to centre it, and height turns Gio's laid out height
+// into lines x the exact line height.
+type lineBox struct {
+	lead, one, adv int
+	exact          float32
+}
+
+func (th *Theme) lineBox(gtx C, t Txt) lineBox {
+	exact := float32(t.Size) * gtx.Metric.PxPerSp * t.LineH
+	m := op.Record(gtx.Ops)
+	g := gtx
+	g.Constraints = layout.Constraints{Max: image.Pt(1<<20, 1<<20)}
+	one := th.Text(g, t, "x").Size.Y
+	m.Stop()
+	return lineBox{lead: int((exact-float32(one))/2 + 0.5), one: one, adv: int(exact + 0.5), exact: exact}
+}
+
+// height is the CSS height of text Gio laid out gioH tall.
+func (b lineBox) height(gioH int) int {
+	lines := 1
+	if gioH > b.one {
+		lines += (gioH - b.one + b.adv/2) / b.adv
+	}
+	return int(float32(lines)*b.exact + 0.5)
+}
+
+// cssText lays out t in CSS line boxes (lineBox).
+func (th *Theme) cssText(gtx C, t Txt, s string) D {
+	b := th.lineBox(gtx, t)
+	m := op.Record(gtx.Ops)
+	g := gtx
+	g.Constraints.Min.Y = 0
+	d := th.Text(g, t, s)
+	call := m.Stop()
+	off := op.Offset(image.Pt(0, b.lead)).Push(gtx.Ops)
+	call.Add(gtx.Ops)
+	off.Pop()
+	h := b.height(d.Size.Y)
+	return D{Size: image.Pt(d.Size.X, h), Baseline: h - b.lead - (d.Size.Y - d.Baseline)}
 }
 
 // tracked is one line of t with spacing dp after each glyph, as CSS's
 // letter-spacing adds it: Gio's labels have no tracking. Its box is the
-// label's, narrower or wider by the spacing.
+// CSS line box (cssText's), narrower or wider by the spacing.
 func (th *Theme) tracked(gtx C, t Txt, s string, spacing float32) D {
+	b := th.lineBox(gtx, t)
 	m := op.Record(gtx.Ops)
 	d := th.Text(gtx, t, s)
 	m.Stop()
@@ -400,12 +445,13 @@ func (th *Theme) tracked(gtx C, t Txt, s string, spacing float32) D {
 	if len(gs) > 0 {
 		// The glyphs' shape is drawn from the first one's dot, on its
 		// baseline, the way a label draws a line.
-		at := f32.Pt(float32(gs[0].X)/64, float32(gs[0].Y))
+		at := f32.Pt(float32(gs[0].X)/64, float32(gs[0].Y+int32(b.lead)))
 		defer op.Affine(f32.AffineId().Offset(at)).Push(gtx.Ops).Pop()
 		paint.FillShape(gtx.Ops, t.Color, clip.Outline{Path: th.Shaper.Shape(gs)}.Op())
 	}
-	d.Size.X += int(float32(len(gs)) * spacing * gtx.Metric.PxPerDp)
-	return d
+	h := b.height(d.Size.Y)
+	w := d.Size.X + int(float32(len(gs))*spacing*gtx.Metric.PxPerDp)
+	return D{Size: image.Pt(w, h), Baseline: h - b.lead - (d.Size.Y - d.Baseline)}
 }
 
 // pageBox is the pages' quiet box, rounded 8 with a --border 70% edge on
@@ -463,7 +509,7 @@ func (th *Theme) sessionError(gtx C, f *Failure) {
 					return Col(gtx,
 						rigid(func(gtx C) D {
 							return pad(6, 12, 6, 12).Layout(gtx, func(gtx C) D {
-								return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Font: UI(font.Medium), Color: P.MutedForeground, MaxLines: 1}, "Error report")
+								return th.cssText(gtx, Txt{Size: 12, LineH: 16.0 / 12, Font: UI(font.Medium), Color: P.MutedForeground, MaxLines: 1}, "Error report")
 							})
 						}),
 						rigid(func(gtx C) D {
@@ -482,7 +528,7 @@ func (th *Theme) sessionError(gtx C, f *Failure) {
 							g.Constraints = layout.Exact(r.Max)
 							l.Layout(g, 1, func(gtx C, _ int) D {
 								return pad(8, 12, 8, 12).Layout(gtx, func(gtx C) D {
-									return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Font: Mono(), Color: over(pct(P.Foreground, 85), bg)}, f.Report)
+									return th.cssText(gtx, Txt{Size: 12, LineH: 16.0 / 12, Font: Mono(), Color: over(pct(P.Foreground, 85), bg)}, f.Report)
 								})
 							})
 							return D{Size: image.Pt(r.Dx(), h+px)}
@@ -500,7 +546,7 @@ func (th *Theme) reportHeight(gtx C, report string, w int) int {
 	g := gtx
 	g.Constraints = layout.Constraints{Min: image.Pt(w, 0), Max: image.Pt(w, 1<<20)}
 	d := pad(8, 12, 8, 12).Layout(g, func(gtx C) D {
-		return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Font: Mono()}, report)
+		return th.cssText(gtx, Txt{Size: 12, LineH: 16.0 / 12, Font: Mono()}, report)
 	})
 	m.Stop()
 	return d.Size.Y
@@ -523,7 +569,7 @@ func (th *Theme) pairing(gtx C, p *Pairing) {
 				// The label is inline, so it takes the form's 24dp line box.
 				return FixedH(gtx, 24, func(gtx C) D {
 					return Row(gtx, rigid(func(gtx C) D {
-						return th.Text(gtx, Txt{Size: 14, LineH: 20.0 / 14, Font: UI(font.Medium), Color: P.Foreground, MaxLines: 1}, "Pairing link")
+						return th.cssText(gtx, Txt{Size: 14, LineH: 20.0 / 14, Font: UI(font.Medium), Color: P.Foreground, MaxLines: 1}, "Pairing link")
 					}))
 				})
 			}),
@@ -550,7 +596,7 @@ func (th *Theme) pairing(gtx C, p *Pairing) {
 			rigid(Spacer(0, 24)),
 			rigid(func(gtx C) D {
 				return pageBox(gtx, padXY(12, 12), func(gtx C) D {
-					return th.Text(gtx, Txt{Size: 12, LineH: 19.5 / 12, Color: P.MutedForeground},
+					return th.cssText(gtx, Txt{Size: 12, LineH: 19.5 / 12, Color: P.MutedForeground},
 						"Run t3 pair on the computer that runs T3 Code and paste the link it prints. Each link pairs once, and the session lasts 30 days.")
 				})
 			}),

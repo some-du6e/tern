@@ -133,18 +133,18 @@ func (th *Theme) clerkHeader(title, subtitle, email string) W {
 	return func(gtx C) D {
 		kids := []layout.FlexChild{
 			rigid(func(gtx C) D {
-				return th.Text(gtx, Txt{Size: 20, LineH: 28.0 / 20, Font: UI(font.SemiBold), Color: P.ContrastForeground}, title)
+				return th.cssText(gtx, Txt{Size: 20, LineH: 28.0 / 20, Font: UI(font.SemiBold), Color: P.ContrastForeground}, title)
 			}),
 			rigid(Spacer(0, 4)),
 			rigid(func(gtx C) D {
-				return th.Text(gtx, Txt{Size: 14, LineH: 20.0 / 14, Color: P.MutedForeground}, subtitle)
+				return th.cssText(gtx, Txt{Size: 14, LineH: 20.0 / 14, Color: P.MutedForeground}, subtitle)
 			}),
 		}
 		if email != "" {
 			kids = append(kids, rigid(Spacer(0, 8)), rigid(func(gtx C) D {
 				return Row(gtx,
 					rigid(func(gtx C) D {
-						return th.Text(gtx, Txt{Size: 13, LineH: 18.0 / 13, Font: UI(font.Medium), Color: P.ContrastForeground, MaxLines: 1}, email)
+						return th.cssText(gtx, Txt{Size: 13, LineH: 18.0 / 13, Font: UI(font.Medium), Color: P.ContrastForeground, MaxLines: 1}, email)
 					}),
 					rigid(Spacer(4, 0)),
 					rigid(func(gtx C) D {
@@ -171,7 +171,7 @@ func (th *Theme) clerkHeader(title, subtitle, email string) W {
 // clerkLabel is a field's label, 13/18 medium.
 func (th *Theme) clerkLabel(label string) W {
 	return func(gtx C) D {
-		return th.Text(gtx, Txt{Size: 13, LineH: 18.0 / 13, Font: UI(font.Medium), Color: P.ContrastForeground, MaxLines: 1}, label)
+		return th.cssText(gtx, Txt{Size: 13, LineH: 18.0 / 13, Font: UI(font.Medium), Color: P.ContrastForeground, MaxLines: 1}, label)
 	}
 }
 
@@ -183,7 +183,7 @@ func (th *Theme) clerkError(msg string) W {
 			return D{}
 		}
 		return pad(8, 0, 0, 0).Layout(gtx, func(gtx C) D {
-			return th.Text(gtx, Txt{Size: 13, LineH: 18.0 / 13, Color: P.ErrorForeground}, msg)
+			return th.cssText(gtx, Txt{Size: 13, LineH: 18.0 / 13, Color: P.ErrorForeground}, msg)
 		})
 	}
 }
@@ -281,7 +281,7 @@ func (th *Theme) clerkResend(left int) W {
 		label := "Didn't receive a code? Resend"
 		if left > 0 {
 			return layout.N.Layout(gtx, func(gtx C) D {
-				return th.Text(gtx, Txt{Size: 13, LineH: 18.0 / 13, Color: P.MutedForeground, MaxLines: 1}, label+" ("+strconv.Itoa(left)+")")
+				return th.cssText(gtx, Txt{Size: 13, LineH: 18.0 / 13, Color: P.MutedForeground, MaxLines: 1}, label+" ("+strconv.Itoa(left)+")")
 			})
 		}
 		return th.clerkLink("signin.resend", label)(gtx)
@@ -295,7 +295,7 @@ func (th *Theme) clerkLink(id, label string) W {
 		gtx.Constraints.Min.X = gtx.Constraints.Max.X
 		return layout.N.Layout(gtx, func(gtx C) D {
 			c, _ := th.events(gtx, id)
-			td := th.Text(gtx, Txt{Size: 13, LineH: 18.0 / 13, Font: UI(font.Medium), Color: P.UpdateForeground, MaxLines: 1}, label)
+			td := th.cssText(gtx, Txt{Size: 13, LineH: 18.0 / 13, Font: UI(font.Medium), Color: P.UpdateForeground, MaxLines: 1}, label)
 			if c.Hovered() {
 				y := td.Size.Y - td.Baseline + dp(gtx, 2)
 				fill(gtx, P.UpdateForeground, image.Rect(0, y, td.Size.X, y+max(1, dp(gtx, 1))), 0)
@@ -356,7 +356,7 @@ func (th *Theme) clerkFooter(gtx C, w int, bg color.NRGBA) D {
 	lg.Constraints.Min = image.Point{}
 	row := Row(lg,
 		rigid(func(gtx C) D {
-			return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Font: UI(font.Medium), Color: P.MutedForeground, MaxLines: 1}, "Secured by")
+			return th.cssText(gtx, Txt{Size: 12, LineH: 16.0 / 12, Font: UI(font.Medium), Color: P.MutedForeground, MaxLines: 1}, "Secured by")
 		}),
 		rigid(Spacer(4, 0)),
 		rigid(func(gtx C) D { return clerkMark(gtx, over(P.MutedForeground, bg), 14) }),

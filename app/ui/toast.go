@@ -325,7 +325,7 @@ func (th *Theme) toastBody(gtx C, t Toast, w int) D {
 			tg := gtx
 			tg.Constraints = layout.Constraints{Max: image.Pt(max(0, gtx.Constraints.Max.X-lead-titleEnd), 1<<20)}
 			defer op.Offset(image.Pt(lead, 0)).Push(gtx.Ops).Pop()
-			d := th.Text(tg, Txt{Size: 14, LineH: 20.0 / 14, Font: UI(font.Medium), Color: P.PopoverForeground}, t.Title)
+			d := th.cssText(tg, Txt{Size: 14, LineH: 20.0 / 14, Font: UI(font.Medium), Color: P.PopoverForeground}, t.Title)
 			return D{Size: image.Pt(gtx.Constraints.Max.X, d.Size.Y)}
 		}),
 		rigid(func(gtx C) D {
@@ -388,7 +388,7 @@ func (th *Theme) toastDescription(gtx C, t Toast) D {
 		desc.MaxLines = 4
 	}
 	if len(t.Details) == 0 {
-		return th.Text(gtx, desc, t.Description)
+		return th.cssText(gtx, desc, t.Description)
 	}
 	id := "toast.toggle:" + t.ID
 	c, _ := th.events(gtx, id)
@@ -397,7 +397,7 @@ func (th *Theme) toastDescription(gtx C, t Toast) D {
 	m := op.Record(gtx.Ops)
 	tg := gtx
 	tg.Constraints = layout.Constraints{Max: image.Pt(w-chev-dp(gtx, 6), 1<<20)}
-	td := th.Text(tg, desc, t.Description)
+	td := th.cssText(tg, desc, t.Description)
 	call := m.Stop()
 	row := image.Pt(w, td.Size.Y)
 	if c.Hovered() {
@@ -436,11 +436,11 @@ func (th *Theme) toastDescription(gtx C, t Toast) D {
 		kids = append(kids, rigid(func(gtx C) D {
 			dd := Col(gtx,
 				rigid(func(gtx C) D {
-					return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Font: UI(font.Medium), Color: P.Foreground}, d.Title)
+					return th.cssText(gtx, Txt{Size: 12, LineH: 16.0 / 12, Font: UI(font.Medium), Color: P.Foreground}, d.Title)
 				}),
 				rigid(Spacer(0, 2)),
 				rigid(func(gtx C) D {
-					return th.Text(gtx, Txt{Size: 10, LineH: 14.0 / 10, Color: over(pct(P.MutedForeground, 75), P.Popover)}, d.Note)
+					return th.cssText(gtx, Txt{Size: 10, LineH: 14.0 / 10, Color: over(pct(P.MutedForeground, 75), P.Popover)}, d.Note)
 				}),
 			)
 			if last {
