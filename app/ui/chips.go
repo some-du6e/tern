@@ -3,6 +3,7 @@ package ui
 import (
 	"image"
 	"image/color"
+	"math"
 	"strconv"
 	"strings"
 	"unicode"
@@ -272,6 +273,7 @@ func (th *Theme) drawChips(gtx C, t textRegions, size image.Point, bg color.NRGB
 		fill(gtx, bg, image.Rect(b.Min.X, b.Min.Y-dp(gtx, 2), b.Max.X, b.Max.Y+dp(gtx, 3)), 0)
 		pic := chip(c.n)
 		name, sz := chipLabel(pic)
+		nameAt, sizeAt, _ := th.chipParts(name, sz)
 		icon := int(em + 0.5)
 		// The picture centres on the chip's line, the text's ascent over
 		// its descent (line-height: normal).
@@ -281,26 +283,25 @@ func (th *Theme) drawChips(gtx C, t textRegions, size image.Point, bg color.NRGB
 			LucideW("image", ink, sizeSp)(gtx)
 		}
 		off.Pop()
-		x := b.Min.X + icon + int(0.2*em+0.5)
-		for i, part := range []struct {
-			t Txt
-			s string
-		}{{label, name}, {small, sz}} {
+		for _, part := range []struct {
+			t  Txt
+			s  string
+			at float32
+		}{{label, name, nameAt}, {small, sz, sizeAt}} {
 			if part.s == "" {
 				continue
 			}
-			if i > 0 {
-				x += int(0.33*em + 0.5)
-			}
+			// The run holds the chip to a pixel's rounding; a set fill
+			// (ChipText) cuts a longer name short.
+			x := b.Min.X + int(part.at*em+0.5)
 			m := op.Record(gtx.Ops)
 			lg := gtx
-			lg.Constraints = layout.Constraints{Max: image.Pt(max(0, b.Max.X-x), b.Dy())}
+			lg.Constraints = layout.Constraints{Max: image.Pt(max(0, b.Max.X-x+max(1, dp(gtx, 1))), b.Dy())}
 			ld := th.Text(lg, part.t, part.s)
 			call := m.Stop()
 			lo := op.Offset(image.Pt(x, base-(ld.Size.Y-ld.Baseline))).Push(gtx.Ops)
 			call.Add(gtx.Ops)
 			lo.Pop()
-			x += ld.Size.X
 		}
 		if !live {
 			continue
@@ -325,43 +326,51 @@ func chipLabel(t Thumb) (name, size string) {
 	return MiddleTruncate(t.Name, 36), size
 }
 
+// chipEm is the em chips are measured at: ten times the prompt's 14, for
+// the fractions.
+const chipEm = 140
+
+// chipParts is where an image chip's name and its size start and where it
+// ends, in ems of the text it's in: the picture's 1em and 0.2em, the name
+// in medium, 0.33em, then the size at 10 where the text is 14.
+func (th *Theme) chipParts(name, size string) (nameAt, sizeAt, end float32) {
+	nameAt = 1.2
+	end = nameAt
+	if name != "" {
+		end += th.advance(UI(font.Medium), chipEm, name) / chipEm
+	}
+	sizeAt = end
+	if size != "" {
+		sizeAt = end + 0.33
+		end = sizeAt + th.advance(UI(font.Medium), chipEm*10/promptSize, size)/chipEm
+	}
+	return nameAt, sizeAt, end
+}
+
 // ImageChip is picture n's chip in the composer, named name and size
-// bytes big. Its fill comes as close as the fill's steps allow to what
-// drawChips draws over it, so the text after it sits where T3's does.
+// bytes big. Its fill is the shortest the fill's steps make that holds
+// what drawChips draws over it, so the text after it sits where T3's does.
 func (th *Theme) ImageChip(n int, name string, size int) string {
-	// Measured at ten times the prompt's 14, for the fractions.
-	const em = 140
 	nm, sz := chipLabel(Thumb{Name: name, Size: size})
-	want := float32(1.2 * em)
-	if nm != "" {
-		want += th.advance(UI(font.Medium), em, nm)
-	}
-	if sz != "" {
-		want += 0.33*em + th.advance(UI(font.Medium), em*10/promptSize, sz)
-	}
-	have := th.advance(UI(font.Normal), em, string(ChipRune(n)))
-	wide, fine := th.advance(UI(font.Normal), em, string(chipFill)), th.advance(UI(font.Normal), em, string(chipFine))
-	bestA, bestB, bestErr := 1, 0, float32(1<<30)
-	for a := 0; wide > 0 && float32(a-1)*wide <= want-have; a++ {
+	_, _, end := th.chipParts(nm, sz)
+	want := end * chipEm
+	have := th.advance(UI(font.Normal), chipEm, string(ChipRune(n)))
+	wide, fine := th.advance(UI(font.Normal), chipEm, string(chipFill)), th.advance(UI(font.Normal), chipEm, string(chipFine))
+	bestA, bestB, bestOver := 1, 0, float32(1<<30)
+	for a := 0; wide > 0 && have+float32(a-1)*wide < want; a++ {
 		b := 0
 		if rest := want - have - float32(a)*wide; fine > 0 && rest > 0 {
-			b = int(rest/fine + 0.5)
+			b = int(math.Ceil(float64(rest / fine)))
 		}
-		if a+b == 0 {
+		over := have + float32(a)*wide + float32(b)*fine - want
+		if a+b == 0 || over < 0 {
 			continue
 		}
-		if e := abs32(have + float32(a)*wide + float32(b)*fine - want); e < bestErr {
-			bestA, bestB, bestErr = a, b, e
+		if over < bestOver {
+			bestA, bestB, bestOver = a, b, over
 		}
 	}
 	return string(ChipRune(n)) + strings.Repeat(string(chipFill), bestA) + strings.Repeat(string(chipFine), bestB)
-}
-
-func abs32(x float32) float32 {
-	if x < 0 {
-		return -x
-	}
-	return x
 }
 
 // advance is how wide s sets on one line in f at px pixels to the em.
