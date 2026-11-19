@@ -183,6 +183,54 @@ func (th *Theme) Text(gtx C, t Txt, s string) D {
 	return l.Layout(gtx, th.Shaper, t.Font, t.Size, s, mat)
 }
 
+// capText draws s on one line with its capitals centred on y mid (px from
+// the current origin), as T3 trims a label's box to its cap height
+// (text-box: trim-both cap alphabetic) and centres that. It returns the
+// line's width.
+func (th *Theme) capText(gtx C, t Txt, s string, mid int) int {
+	if t.Size == 0 {
+		t.Size = SizeUI
+	}
+	t.MaxLines = 1
+	g := gtx
+	g.Constraints.Min = image.Point{}
+	m := op.Record(gtx.Ops)
+	d := th.Text(g, t, s)
+	call := m.Stop()
+	baseline := d.Size.Y - d.Baseline
+	capH := capEm * float32(gtx.Sp(t.Size))
+	defer op.Offset(image.Pt(0, mid+int(capH/2+0.5)-baseline)).Push(gtx.Ops).Pop()
+	call.Add(gtx.Ops)
+	return d.Size.X
+}
+
+// boxText draws s wrapped in the width gtx allows, up to t.MaxLines lines
+// of CSS line boxes t.LineH tall from the current origin, each line's caps
+// centred in its box as capText centres one (Inter's and SF Pro's caps
+// centre within a twentieth of a dp of where CSS's half-leading puts
+// them). Its size is the line boxes'.
+func (th *Theme) boxText(gtx C, t Txt, s string) D {
+	g := gtx
+	g.Constraints.Min = image.Point{}
+	one := t
+	one.MaxLines = 1
+	m := op.Record(gtx.Ops)
+	first := th.Text(g, one, s)
+	m.Stop()
+	m = op.Record(gtx.Ops)
+	d := th.Text(g, t, s)
+	call := m.Stop()
+	// A label's baseline is its first line's; each line after it adds a
+	// line's height.
+	lineH := float32(gtx.Sp(t.Size)) * t.LineH
+	baseline := first.Size.Y - first.Baseline
+	lines := 1 + int(float32(d.Size.Y-first.Size.Y)/lineH+0.5)
+	capH := capEm * float32(gtx.Sp(t.Size))
+	defer op.Offset(image.Pt(0, int(lineH/2+capH/2+0.5)-baseline)).Push(gtx.Ops).Pop()
+	call.Add(gtx.Ops)
+	return D{Size: image.Pt(d.Size.X, int(lineH*float32(lines)+0.5))}
+}
+
 // Label is the common case: one line of UI text.
 func (th *Theme) Label(gtx C, col color.NRGBA, w font.Weight, s string) D {
 	return th.Text(gtx, Txt{Color: col, Font: UI(w), MaxLines: 1}, s)

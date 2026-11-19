@@ -124,8 +124,6 @@ func base(selected string) *ui.Scene {
 		Tabs:        []string{"Port the T3 Connect clie…", "Gio sidebar: virtualize…", "Watch pairing flow"},
 		Title:       "Port the T3 Connect client to Go",
 		State:       ui.ThreadRunning,
-		StateLabel:  "Running",
-		Project:     "tern  ›  t3/go-client",
 		Provider:    "Claude",
 		Model:       "Claude Opus 5.5",
 		Effort:      "High · Fast",
@@ -137,7 +135,16 @@ func base(selected string) *ui.Scene {
 	sidebar(s, selected)
 	s.Browser = &ui.Browser{Title: "tern", URL: "localhost:8787", Control: "You have control"}
 	s.Items = threadItems()
-	s.Run = &ui.RunInfo{Status: "Running · 1m 08s", Model: "Opus 5.5 · High", Elapsed: "5m 20s total", Mode: "Full access", Branch: "t3/go-client", Worktree: "~/.t3/worktrees/tern"}
+	s.Header = &ui.ChatHeader{Project: "tern", Icon: ternIcon, Server: true, CanRename: true}
+	s.DetailsCard = true
+	s.Card = &ui.ThreadDetails{
+		Run:     &ui.RunContext{Machine: "server", Label: "workstation", Tip: "workstation", Workspace: "folder-git-2", Locked: true},
+		OpenIn:  &ui.OpenIn{Editor: "vscode", Label: "Open in VS Code"},
+		Scripts: &ui.Scripts{Primary: "Test", Icon: "test", Any: true},
+		Branch:  &ui.BranchRow{Label: "t3/go-client"},
+		Git:     &ui.GitActions{Label: "Commit, push & PR", Icon: "provider:github"},
+		Changes: &ui.Changes{Insertions: 2382, Deletions: 14, Base: "vs main"},
+	}
 	s.Changes = []ui.FileChange{
 		{Path: "app/t3/rpc.go", Add: 48, Del: 6, Kind: 'M', Selected: true},
 		{Path: "app/app.go", Add: 112, Kind: 'A'},
@@ -160,8 +167,6 @@ func approvalScene() *ui.Scene {
 	s := base("Port the T3 Connect client to Go")
 	s.Panel = ui.PanelBrowser
 	s.State = ui.ThreadApproval
-	s.StateLabel = "Needs approval"
-	s.Run.Status = "Waiting"
 	for _, it := range s.Sidebar.Items {
 		if r := it.Row; r != nil && r.Active {
 			r.Status, r.Label, r.Timer, r.Recede = ui.StatusApproval, "Approval", "", false
@@ -264,11 +269,12 @@ func questionScene() *ui.Scene {
 	s.Tabs = []string{"Watch pairing flow", "Port the T3 Connect clie…"}
 	s.Title = "Watch pairing flow"
 	s.State = ui.ThreadQuestion
-	s.StateLabel = "Has a question"
-	s.Project = "tern  ›  main"
 	s.MoreAbove = false
-	s.Run.Status = "Waiting for you"
-	s.Run.Branch = "main"
+	// A thread on the default branch with work to commit: it pushes there.
+	s.Card.Run.Workspace = "folder"
+	s.Card.Branch.Label = "main"
+	s.Card.Git = &ui.GitActions{Label: "Commit & push", Icon: "cloud-upload"}
+	s.Card.Changes = &ui.Changes{Insertions: 31, Deletions: 0, Base: "Uncommitted"}
 	s.Items = []ui.Item{
 		{Kind: ui.ItemUser, Text: "design how the watch gets a session without ever touching Clerk"},
 		{Kind: ui.ItemFold, Text: "Worked for 1m 51s", Meta: "9 tool calls"},
@@ -291,8 +297,15 @@ func draftScene() *ui.Scene {
 	s := base("")
 	s.Title = "New thread"
 	s.State = ui.ThreadIdle
-	s.StateLabel = "Draft"
-	s.Project = "in tern  ›  new worktree"
+	// A draft: its title is plain text, its machine row a menu, and it
+	// starts in a new worktree off main, so Git keeps quiet.
+	s.Header.Server = false
+	s.Card = &ui.ThreadDetails{
+		Run:     &ui.RunContext{Machine: "server", Label: "workstation", Tip: "workstation", Workspace: "folder-git-2", WorkspaceTip: "New worktree"},
+		OpenIn:  &ui.OpenIn{Editor: "vscode", Label: "Open in VS Code"},
+		Scripts: &ui.Scripts{},
+		Branch:  &ui.BranchRow{Label: "From main"},
+	}
 	s.Tabs = []string{"New thread", "Port the T3 Connect clie…"}
 	s.MoreAbove = false
 	s.Items = []ui.Item{{Kind: ui.ItemNotice, Text: "The first message starts the thread."}}
@@ -306,10 +319,121 @@ func draftScene() *ui.Scene {
 		{Name: "/frontend:refactor", Hint: "<path>", Desc: "Refactor a component"},
 		{Name: "/pr-comments", Desc: "Fetch review comments on this branch"},
 	}
-	s.Run = nil
 	s.Changes = nil
 	s.Panel = ui.PanelBrowser
 	s.Browser = &ui.Browser{}
+	return s
+}
+
+// gitMenuScene has the details card's Git options menu open: Commit off
+// with a clean tree, Push and Create PR on.
+func gitMenuScene() *ui.Scene {
+	s := runningScene()
+	s.Card.Git = &ui.GitActions{Label: "Push & create PR", Icon: "provider:github"}
+	s.Card.Changes = &ui.Changes{Base: "vs main"}
+	s.Card.Menu = &ui.CardMenu{For: "git", Rows: []ui.MenuRow{
+		{Label: "Commit", Icon: "git-commit-horizontal", Disabled: true, Reason: "Worktree is clean. Make changes before committing."},
+		{Label: "Push", Icon: "cloud-upload"},
+		{Label: "Create PR", Icon: "provider:github"},
+	}}
+	return s
+}
+
+// popoverScene is a window too narrow for the card inline, so it hangs
+// off the header with the branch picker open; the thread is a subagent's,
+// so its parent is crumbed before its title.
+func popoverScene() *ui.Scene {
+	s := runningScene()
+	s.Title = "Check the relay's retry budget"
+	s.Header.Parent = "Port the T3 Connect client to Go"
+	s.Details = true
+	s.Card.Picker = &ui.BranchPicker{Highlight: 1, Status: "Showing 4 of 31 refs", Refs: []ui.BranchRef{
+		{Name: "t3/go-client", Tag: "current"}, {Name: "main", Tag: "default"},
+		{Name: "t3/investigate-release-build-times"}, {Name: "origin/main", Tag: "remote"},
+	}}
+	return s
+}
+
+// gitRunningScene is a short window: the card drops to compact density,
+// losing the machine row, but keeps the Git row while its action runs.
+func gitRunningScene() *ui.Scene {
+	s := runningScene()
+	s.Card.Git.Running = &ui.GitProgress{Status: "Running pre-commit hook...", Output: "eslint: 0 problems", Elapsed: "12s"}
+	return s
+}
+
+// confirmScene asks before pushing to the default branch.
+func confirmScene() *ui.Scene {
+	s := questionScene()
+	s.Confirm = &ui.Confirm{
+		Title:       "Commit & push to default ref?",
+		Description: `This action will commit and push changes on "main". You can continue on this ref or create a feature ref and run the same action there.`,
+		Continue:    "Commit & push to main",
+	}
+	return s
+}
+
+// draftMenuScene is a new thread with its machine row's workspace menu
+// open.
+func draftMenuScene() *ui.Scene {
+	s := draftScene()
+	s.Suggest, s.Composer = nil, ""
+	s.Card.Menu = &ui.CardMenu{For: "run", Rows: []ui.MenuRow{
+		{Kind: ui.MenuGroupLabel, Label: "Workspace"},
+		{Kind: ui.MenuRadioRow, Label: "Current checkout", Icon: "folder"},
+		{Kind: ui.MenuRadioRow, Label: "New worktree", Icon: "folder-git-2", Checked: true},
+	}}
+	return s
+}
+
+// pullRequestsScene has the thread's pull requests under its branch row,
+// unfolded: the open one the agent watches, read in full with its checks
+// passed and Merge on offer, then the merged base it stacks on and an
+// older closed one. A guest watches the thread through its guest link.
+func pullRequestsScene() *ui.Scene {
+	s := runningScene()
+	s.Header.Guest = &ui.GuestLine{Status: "Sam is a guest"}
+	s.Card.PRs = &ui.PullRequests{Others: 2, Expanded: true, Rows: []ui.PullRequestRow{
+		{State: "open", Label: "#214: Retry relay reads on a dropped socket", Tip: "PR #214 - Open: Retry relay reads on a dropped socket", Watching: true,
+			Detail: &ui.PullRequestDetailRow{Title: "Retry relay reads on a dropped socket", Number: 214,
+				Checks: &ui.ChecksMeta{State: "passing"}, Pill: &ui.PullRequestPill{Label: "Merge", Tip: "Merge this pull request (merge)"}}},
+		{State: "merged", Label: "#209: Split the relay out of the RPC client", Tip: "PR #209 - Merged: Split the relay out of the RPC client"},
+		{State: "closed", Label: "#187: Try a second socket for streams", Tip: "PR #187 - Closed: Try a second socket for streams"},
+	}}
+	return s
+}
+
+// checksScene has the thread's pull request still running its checks,
+// their popover open: the failed one first, the running ones, and the
+// finished one folded behind Show all.
+func checksScene() *ui.Scene {
+	s := runningScene()
+	s.Card.PRs = &ui.PullRequests{Rows: []ui.PullRequestRow{{State: "open", Label: "#214: Retry relay reads on a dropped socket",
+		Detail: &ui.PullRequestDetailRow{Title: "Retry relay reads on a dropped socket", Number: 214,
+			Checks: &ui.ChecksMeta{State: "failing", Count: "1/4 checks", Popup: &ui.ChecksPopup{
+				Heading: "Some checks were not successful", Summary: "1 of 4 failing", More: "Show all",
+				Checks: []ui.CheckRow{
+					{Status: "failure", Name: "lint", Label: "Failed", Details: true},
+					{Status: "pending", Name: "test (linux)", Label: "Running", Details: true},
+					{Status: "pending", Name: "test (windows)", Label: "Running", Details: true},
+				},
+			}}}}}}
+	return s
+}
+
+// mergeScene asks before merging the thread's pull request.
+func mergeScene() *ui.Scene {
+	s := pullRequestsScene()
+	s.Alert = &ui.Alert{Title: "Merge pull request?", Description: "This merges #214 using merge.", Action: "Merge"}
+	return s
+}
+
+// renameScene renames the thread in place in the header; the thread came
+// from an agent on a linked machine.
+func renameScene() *ui.Scene {
+	s := runningScene()
+	s.Header.Origin = "laptop"
+	s.Header.Renaming = true
 	return s
 }
 
@@ -320,13 +444,11 @@ func signInScene() *ui.Scene {
 func phoneScene() *ui.Scene {
 	s := base("Port the T3 Connect client to Go")
 	s.Title = "Port the T3 Connect client to Go"
-	s.Project = "tern"
 	s.MoreAbove = false
 	items := threadItems()
 	s.Items = []ui.Item{items[1], items[2], items[3], items[4], items[5], {Kind: ui.ItemTool, Tool: ui.ToolEdit, Title: "app/t3/rpc.go", Meta: "+48 −6"}, items[7], items[8], items[10]}
 	s.Items[7].Open = false // test output wraps badly at phone width
 	s.State = ui.ThreadApproval
-	s.StateLabel = "Needs approval"
 	s.Approval = &ui.Approval{Kind: "command", Detail: "git push -u origin t3/go-client", Cwd: "tern"}
 	s.Placeholder = "Steer or queue…"
 	return s

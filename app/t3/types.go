@@ -17,15 +17,17 @@ type OptionChoice struct {
 }
 
 type Project struct {
-	ID                    string          `json:"id"`
-	Title                 string          `json:"title"`
-	WorkspaceRoot         string          `json:"workspaceRoot"`
-	DefaultModelSelection *ModelSelection `json:"defaultModelSelection"`
-	ProjectIcon           *ProjectIcon    `json:"projectIcon"`
-	PinnedAt              string          `json:"pinnedAt"` // pinned projects lead project pickers
-	ArchivedAt            string          `json:"archivedAt"`
-	CreatedAt             string          `json:"createdAt"`
-	UpdatedAt             string          `json:"updatedAt"`
+	ID                    string              `json:"id"`
+	Title                 string              `json:"title"`
+	WorkspaceRoot         string              `json:"workspaceRoot"`
+	DefaultModelSelection *ModelSelection     `json:"defaultModelSelection"`
+	ProjectIcon           *ProjectIcon        `json:"projectIcon"`
+	Scripts               []ProjectScript     `json:"scripts"`
+	RepositoryIdentity    *RepositoryIdentity `json:"repositoryIdentity"`
+	PinnedAt              string              `json:"pinnedAt"` // pinned projects lead project pickers
+	ArchivedAt            string              `json:"archivedAt"`
+	CreatedAt             string              `json:"createdAt"`
+	UpdatedAt             string              `json:"updatedAt"`
 }
 
 // ProjectIcon is a project's chosen icon: a monogram or a lucide icon in
@@ -39,6 +41,17 @@ type ProjectIcon struct {
 	Color        string `json:"color"`
 	MonogramText string `json:"monogramText"`
 	Monogram     string `json:"monogram"`
+}
+
+// ProjectScript is one of a project's actions, run in a terminal.
+type ProjectScript struct {
+	ID                  string `json:"id"`
+	Name                string `json:"name"`
+	Command             string `json:"command"`
+	Icon                string `json:"icon"` // play, test, lint, configure, build, debug
+	RunOnWorktreeCreate bool   `json:"runOnWorktreeCreate"`
+	RunOnSettle         bool   `json:"runOnSettle"`
+	StopOnSettle        bool   `json:"stopOnSettle"`
 }
 
 type RuntimeRequest struct {
@@ -58,32 +71,6 @@ type Lineage struct {
 type BackgroundTask struct {
 	Kind    string `json:"kind"`
 	Awaited bool   `json:"awaited"`
-}
-
-// PullRequestLink is a pull request linked to a thread, with the server's
-// last snapshot of it.
-type PullRequestLink struct {
-	Number     int                  `json:"number"`
-	Repository string               `json:"repository"` // "owner/repo"
-	URL        string               `json:"url"`
-	Source     string               `json:"source"` // "stack-dismissed" hides it
-	LinkedAt   string               `json:"linkedAt"`
-	Snapshot   *PullRequestSnapshot `json:"snapshot"`
-}
-
-// PullRequestSnapshot is what the server last read of a pull request.
-type PullRequestSnapshot struct {
-	State     string `json:"state"` // "open", "closed", "merged"
-	IsDraft   bool   `json:"isDraft"`
-	Title     string `json:"title"`
-	UpdatedAt string `json:"updatedAt"`
-}
-
-// LinkedPullRequest is the pull request a thread names, by number.
-type LinkedPullRequest struct {
-	Number     int    `json:"number"`
-	Repository string `json:"repository"`
-	URL        string `json:"url"`
 }
 
 type Thread struct {
@@ -133,6 +120,7 @@ type Thread struct {
 	InteractionMode             string             `json:"interactionMode"`
 	Branch                      string             `json:"branch"`
 	WorktreePath                string             `json:"worktreePath"`
+	LinkOrigin                  *LinkOrigin        `json:"linkOrigin"`
 	PullRequests                []PullRequestLink  `json:"pullRequests"`
 	LinkedPullRequest           *LinkedPullRequest `json:"linkedPullRequest"`
 	BranchPullRequest           *LinkedPullRequest `json:"branchPullRequest"`
@@ -159,6 +147,83 @@ type ThreadSearchMatch struct {
 	MessageCreatedAt string   `json:"messageCreatedAt"`
 	Quality          *float64 `json:"quality"`
 	Hits             *int     `json:"hits"`
+}
+
+// LinkOrigin is the linked environment whose agent started a thread.
+type LinkOrigin struct {
+	Label string `json:"label"`
+}
+
+// GuestShare is a thread's guest link (guestShare.ts): when it expires,
+// and the name of the guest who redeemed it, if one has.
+type GuestShare struct {
+	ExpiresAt string `json:"expiresAt"`
+	GuestName string `json:"guestName"`
+}
+
+// ProviderSession is a provider's session attached to a thread
+// (OrchestrationV2ProviderSession); a move to another worktree detaches
+// it, so the agent starts again there.
+type ProviderSession struct {
+	ID string `json:"id"`
+}
+
+// AppThread is the part of a thread's full record (OrchestrationV2AppThread)
+// that its stream's projection and thread events carry beyond the shell.
+type AppThread struct {
+	GuestShare *GuestShare `json:"guestShare"`
+}
+
+// PullRequestLink is a pull request linked to a thread, with the server's
+// last snapshot of it (ThreadPullRequestLink, threadPullRequest.ts:107).
+// Host, Repository and Number are its key.
+type PullRequestLink struct {
+	Host       string               `json:"host"`
+	Repository string               `json:"repository"`
+	Number     int                  `json:"number"`
+	URL        string               `json:"url"`
+	Source     string               `json:"source"` // manual, created, agent, stack, stack-dismissed
+	LinkedAt   string               `json:"linkedAt"`
+	Snapshot   *PullRequestSnapshot `json:"snapshot"`
+	Stack      *PullRequestStack    `json:"stack"`
+	Watch      *PullRequestWatch    `json:"watch"` // set while the agent watches its checks and comments
+}
+
+// PullRequestWatch is the agent watching a linked pull request: it wakes
+// when checks finish, someone comments or the branch conflicts.
+type PullRequestWatch struct {
+	StartedAt string `json:"startedAt"`
+}
+
+// PullRequestSnapshot is what the server last read of a linked pull request.
+type PullRequestSnapshot struct {
+	State      string `json:"state"` // open, closed, merged
+	Title      string `json:"title"`
+	HeadBranch string `json:"headBranch"`
+	BaseBranch string `json:"baseBranch"`
+	IsDraft    bool   `json:"isDraft"`
+	UpdatedAt  string `json:"updatedAt"`
+}
+
+// PullRequestStack is the host's own stack a linked pull request is in,
+// its layers bottom to top.
+type PullRequestStack struct {
+	ID     string                  `json:"id"`
+	Layers []PullRequestStackLayer `json:"layers"`
+}
+
+// PullRequestStackLayer is one pull request of a stack.
+type PullRequestStackLayer struct {
+	Number int `json:"number"`
+}
+
+// LinkedPullRequest is the single pull request older servers link a
+// thread to, and the open one the server finds for its branch.
+type LinkedPullRequest struct {
+	ProjectID  string `json:"projectId"`
+	Repository string `json:"repository"`
+	Number     int    `json:"number"`
+	URL        string `json:"url"`
 }
 
 // ShellItem is one value from orchestration.subscribeShell.
@@ -258,6 +323,8 @@ type Message struct {
 type ThreadItem struct {
 	Kind       string `json:"kind"`
 	Projection *struct {
+		Thread           *AppThread        `json:"thread"`
+		ProviderSessions []ProviderSession `json:"providerSessions"`
 		VisibleTurnItems []struct {
 			Item json.RawMessage `json:"item"`
 		} `json:"visibleTurnItems"`
@@ -289,11 +356,13 @@ type Attachment struct {
 	SizeBytes int    `json:"sizeBytes"`
 }
 
-// ServerConfig is the part of server.getConfig the composer and the
-// sidebar need.
+// ServerConfig is the part of server.getConfig the composer, the sidebar
+// and the thread details card need.
 type ServerConfig struct {
-	Providers            []Provider `json:"providers"`
-	ScratchWorkspaceRoot string     `json:"scratchWorkspaceRoot"` // where "No project" threads live
+	Providers            []Provider         `json:"providers"`
+	AvailableEditors     []string           `json:"availableEditors"`
+	RemoteOpenTargets    []RemoteOpenTarget `json:"remoteOpenTargets"`
+	ScratchWorkspaceRoot string             `json:"scratchWorkspaceRoot"` // where "No project" threads live
 	Settings             struct {
 		DefaultModelSelection *ModelSelection `json:"defaultModelSelection"`
 		DefaultRuntimeMode    string          `json:"defaultRuntimeMode"`
@@ -318,6 +387,7 @@ type ServerConfig struct {
 			ThreadStop                   bool `json:"threadStop"`
 			ThreadAutoSettleOptOut       bool `json:"threadAutoSettleOptOut"`
 			ThreadTitleRegeneration      bool `json:"threadTitleRegeneration"`
+			PullRequestChecks            bool `json:"pullRequestChecks"`
 		} `json:"capabilities"`
 	} `json:"environment"`
 }

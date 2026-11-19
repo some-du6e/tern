@@ -314,14 +314,39 @@ func (v BadgeVariant) colors() (bg, text, border color.NRGBA) {
 	return P.Primary, P.PrimaryForeground, color.NRGBA{}
 }
 
-// T3Badge is T3's default-size Badge: 18 tall, padded 3, radius 4, 12/16
-// medium, with an optional 12dp icon at 80%.
-func (th *Theme) T3Badge(v BadgeVariant, icon, label string, on color.NRGBA) W {
+// BadgeSize is a Badge's size (§3.4).
+type BadgeSize int
+
+const (
+	BadgeSizeDefault BadgeSize = iota // 18 tall, 12/16
+	BadgeSizeSm                       // 16 tall, 10/10
+)
+
+// metrics is the size's height and type.
+func (sz BadgeSize) metrics() (h float32, text, line unit.Sp) {
+	if sz == BadgeSizeSm {
+		return 16, 10, 10
+	}
+	return 18, 12, 16
+}
+
+// badgeSize is how big a badge with label comes out.
+func (th *Theme) badgeSize(gtx C, sz BadgeSize, label string) image.Point {
+	m := op.Record(gtx.Ops)
+	d := th.T3Badge(BadgeDefault, sz, "", label, P.Background)(gtx)
+	m.Stop()
+	return d.Size
+}
+
+// T3Badge is T3's Badge: padded 3, radius 4, medium type, with an optional
+// 12dp icon at 80%, in the default (18 tall, 12/16) or sm (16, 10/10) size.
+func (th *Theme) T3Badge(v BadgeVariant, sz BadgeSize, icon, label string, on color.NRGBA) W {
 	return func(gtx C) D {
 		if on.A == 0 {
 			on = P.Background
 		}
 		bg, text, border := v.colors()
+		bh, ts, tl := sz.metrics()
 		m := op.Record(gtx.Ops)
 		cg := gtx
 		cg.Constraints.Min = image.Point{}
@@ -333,12 +358,12 @@ func (th *Theme) T3Badge(v BadgeVariant, icon, label string, on color.NRGBA) W {
 				return pad(0, 4, 0, 0).Layout(gtx, LucideW(icon, alpha(text, 0xcc), 12))
 			}),
 			layout.Rigid(func(gtx C) D {
-				return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Font: UI(font.Medium), Color: text, MaxLines: 1}, label)
+				return th.Text(gtx, Txt{Size: ts, LineH: float32(tl) / float32(ts), Font: UI(font.Medium), Color: text, MaxLines: 1}, label)
 			}),
 		)
 		call := m.Stop()
 		px := max(1, dp(gtx, 1))
-		h := dp(gtx, 18)
+		h := dp(gtx, bh)
 		w := max(h, cd.Size.X+2*dp(gtx, 3)+2*px)
 		r := image.Rect(0, 0, w, h)
 		fill(gtx, over(bg, on), r, dp(gtx, 4))

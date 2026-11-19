@@ -1106,16 +1106,16 @@ func faded(c color.NRGBA, k float32) color.NRGBA {
 // title is a row's title, or its editor while it's renamed.
 func (th *Theme) title(gtx C, s *Scene, r *ThreadRow, in rowInk, lit, slim bool) D {
 	if s.Sidebar.Renaming == r.ID {
-		return th.renameField(gtx, s.Live)
+		return th.rowRenameField(gtx, s.Live)
 	}
 	return th.rowTitle(gtx, r, in, lit, slim)
 }
 
-// renameField is the title's editor (§3.17): 22dp, padded 0 by 4, radius
-// 4, the card in a 1dp input border that turns the foreground while it's
-// focused, 14px medium. Enter or leaving it commits, Escape cancels. A
+// rowRenameField is a row title's editor (§3.17): 22dp, padded 0 by 4,
+// radius 4, the card in a 1dp input border that turns the foreground while
+// it's focused, 14px medium. Enter or leaving it commits, Escape cancels. A
 // mockup's is focused, as T3's is from the moment it shows.
-func (th *Theme) renameField(gtx C, live bool) D {
+func (th *Theme) rowRenameField(gtx C, live bool) D {
 	const id = "rename"
 	ed := th.Editor(id)
 	ed.SingleLine, ed.Submit = true, true
@@ -2184,31 +2184,42 @@ func splitMiddle(value string) (head, tail string) {
 // doesn't fit, the head is cut after its last whole glyph and "…" sits
 // flush before the tail, which is never cut.
 func (th *Theme) middleTruncate(gtx C, t Txt, value string) D {
-	w := gtx.Constraints.Max.X
 	t.MaxLines = 1
-	width := func(s string) int { return th.textWidth(gtx, t, s) }
-	head, tail := splitMiddle(value)
-	if tail == "" || width(value) <= w {
-		return th.Text(gtx, t, value)
+	if head, tail := th.middleCut(gtx, t, value); tail != "" {
+		value = head + "…" + tail
 	}
-	tw := width("…" + tail)
+	return th.Text(gtx, t, value)
+}
+
+// middleCut is where MiddleTruncate cuts value in t to fit the width gtx
+// allows: the head up to its last whole glyph that leaves room for "…" and
+// the tail. A tail of "" means value is drawn whole, as it fits or has no
+// end worth keeping.
+func (th *Theme) middleCut(gtx C, t Txt, value string) (head, tail string) {
+	w := gtx.Constraints.Max.X
+	head, tail = splitMiddle(value)
+	if tail == "" || th.textWidth(gtx, t, value) <= w {
+		return value, ""
+	}
+	tw := th.textWidth(gtx, t, "…"+tail)
 	hr := []rune(head)
 	lo, hi := 0, len(hr)
 	for lo < hi {
 		mid := (lo + hi + 1) / 2
-		if width(string(hr[:mid]))+tw <= w {
+		if th.textWidth(gtx, t, string(hr[:mid]))+tw <= w {
 			lo = mid
 		} else {
 			hi = mid - 1
 		}
 	}
-	return th.Text(gtx, t, string(hr[:lo])+"…"+tail)
+	return string(hr[:lo]), tail
 }
 
 // textWidth is how wide s sets in t, on one line.
 func (th *Theme) textWidth(gtx C, t Txt, s string) int {
 	m := op.Record(gtx.Ops)
-	gtx.Constraints = layout.Constraints{Max: image.Pt(1<<20, 1<<20)}
+	gtx.Constraints = layout.Constraints{Max: image.Pt(1<<24, 1<<24)}
+	t.MaxLines = 1
 	d := th.Text(gtx, t, s)
 	m.Stop()
 	return d.Size.X

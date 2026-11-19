@@ -122,21 +122,18 @@ func (th *Theme) threadView(gtx C, s *Scene, compact bool) D {
 		}
 		return Col(gtx,
 			rigid(func(gtx C) D {
-				if compact {
-					return th.compactHeader(gtx, s)
-				}
-				if s.Live {
+				if compact || s.Live {
 					// One thread at a time, like T3: the sidebar is the switcher.
 					return D{}
 				}
 				return th.tabs(gtx, s)
 			}),
 			rigid(func(gtx C) D {
-				if compact || (s.Live && s.Title == "") {
+				if s.Header == nil {
 					// Nothing open: no title, so no header either.
 					return D{}
 				}
-				return th.threadHeader(gtx, s)
+				return th.headerRow(gtx, s, compact)
 			}),
 			flexed(func(gtx C) D {
 				if s.Live && s.Hero != "" && len(s.Items) == 0 {
@@ -215,7 +212,7 @@ func (th *Theme) hero(gtx C, s *Scene, compact bool) D {
 	composer.Add(gtx.Ops)
 	t.Pop()
 
-	if s.Projects != nil && s.ProjectsHero {
+	if s.Projects != nil {
 		mm := op.Record(gtx.Ops)
 		md := th.traitsMenu(lg, s, "project", s.Projects)
 		menu := mm.Stop()
@@ -292,103 +289,6 @@ func (th *Theme) tab(gtx C, name string, active, running bool, phase float64, cl
 				)
 			})
 			return D{Size: size}
-		})
-	})
-}
-
-func stateChip(th *Theme, s *Scene) W {
-	switch s.State {
-	case ThreadRunning:
-		return th.Chip(ColAccentHi, s.StateLabel, Spinner(ColAccentHi, 10, s.Phase))
-	case ThreadApproval, ThreadQuestion:
-		return th.Chip(ColAmber, s.StateLabel, Dot(ColAmber, false))
-	case ThreadError:
-		return th.Chip(ColRed, s.StateLabel, nil)
-	}
-	return th.Chip(ColGreen, s.StateLabel, IconW(IconCheck, ColGreen, 10))
-}
-
-func (th *Theme) threadHeader(gtx C, s *Scene) D {
-	return FixedH(gtx, topBarH, func(gtx C) D {
-		gtx.Constraints.Min.X = gtx.Constraints.Max.X
-		return Row(gtx,
-			rigid(func(gtx C) D {
-				// Long titles truncate so the buttons keep their size.
-				gtx.Constraints.Max.X = gtx.Constraints.Max.X / 2
-				return th.Text(gtx, Txt{Size: SizeTitle, Font: UI(font.SemiBold), MaxLines: 1}, s.Title)
-			}),
-			rigid(Spacer(10, 0)),
-			rigid(stateChip(th, s)),
-			rigid(Spacer(10, 0)),
-			flexed(func(gtx C) D {
-				gtx.Constraints.Min.X = gtx.Constraints.Max.X
-				if !s.PickProject {
-					return th.Small(gtx, ColFaint, s.Project)
-				}
-				// A draft's project is a dropdown: the menu drops below it.
-				return Row(gtx,
-					rigid(func(gtx C) D { return th.Small(gtx, ColFaint, "in") }),
-					rigid(Spacer(4, 0)),
-					rigid(func(gtx C) D {
-						dims := th.Click("project", th.footPick(IconW(IconFolder, ColDim, 14), s.Project, s.Projects != nil && !s.ProjectsHero))(gtx)
-						if s.Projects != nil && !s.ProjectsHero {
-							th.deferBelow(gtx, image.Pt(0, dims.Size.Y+dp(gtx, 4)), func(gtx C) D { return th.traitsMenu(gtx, s, "project", s.Projects) })
-						}
-						return dims
-					}),
-				)
-			}),
-			rigid(Spacer(8, 0)),
-			rigid(func(gtx C) D {
-				if s.State != ThreadRunning && s.State != ThreadApproval && s.State != ThreadQuestion {
-					return D{}
-				}
-				return th.Click(liveID(s, "stop"), th.Button(Danger, IconStop, true, "Stop"))(gtx)
-			}),
-		)
-	})
-}
-
-func (th *Theme) compactHeader(gtx C, s *Scene) D {
-	return FixedH(gtx, 52, func(gtx C) D {
-		size := image.Pt(gtx.Constraints.Max.X, gtx.Constraints.Min.Y)
-		fill(gtx, ColPanel, image.Rectangle{Max: size}, 0)
-		hline(gtx, ColBorder, size.Y-max(1, dp(gtx, 1)), 0, size.X)
-		gtx.Constraints.Min.X = size.X
-		return pad(0, 10, 0, 8).Layout(gtx, func(gtx C) D {
-			gtx.Constraints.Min.X = gtx.Constraints.Max.X
-			return Row(gtx,
-				rigid(func(gtx C) D {
-					t := op.Affine(f32.Affine2D{}.Rotate(f32.Pt(float32(dp(gtx, 9)), float32(dp(gtx, 9))), 3.14159)).Push(gtx.Ops)
-					d := DrawIcon(gtx, IconChevronRight, ColText, 18)
-					t.Pop()
-					return d
-				}),
-				rigid(Spacer(6, 0)),
-				flexed(func(gtx C) D {
-					return Col(gtx,
-						rigid(func(gtx C) D {
-							return th.Text(gtx, Txt{Size: 14, Font: UI(font.SemiBold), MaxLines: 1}, s.Title)
-						}),
-						rigid(Spacer(0, 2)),
-						rigid(func(gtx C) D {
-							glyph, col := Spinner(ColAccentHi, 10, s.Phase), ColAccentHi
-							if s.State == ThreadApproval || s.State == ThreadQuestion {
-								glyph, col = Dot(ColAmber, false), ColAmber
-							}
-							return Row(gtx,
-								rigid(glyph),
-								rigid(Spacer(5, 0)),
-								rigid(func(gtx C) D { return th.Small(gtx, col, s.StateLabel) }),
-								rigid(func(gtx C) D { return th.Small(gtx, ColFaint, "  ·  "+s.Project) }),
-							)
-						}),
-					)
-				}),
-				rigid(th.Button(Danger, IconStop, true, "")),
-				rigid(Spacer(6, 0)),
-				rigid(th.Button(Ghost, IconDots, true, "")),
-			)
 		})
 	})
 }
@@ -1030,8 +930,15 @@ func (th *Theme) composer(gtx C, s *Scene, compact bool) D {
 					)
 				}
 				v := Primary
-				if (s.Live && th.EditorText("composer") == "") || (!s.Live && s.Composer == "") {
+				empty := (s.Live && th.EditorText("composer") == "") || (!s.Live && s.Composer == "")
+				if empty {
 					v = Plain
+				}
+				if empty && (s.State == ThreadRunning || s.State == ThreadApproval || s.State == ThreadQuestion) {
+					// With nothing to send, a run's button stops it, as T3's
+					// composer does (ComposerPrimaryActions.tsx).
+					kids = append(kids, rigid(th.Click(liveID(s, "stop"), th.Button(Danger, IconStop, true, ""))))
+					return Row(gtx, kids...)
 				}
 				kids = append(kids, rigid(th.Click(liveID(s, "send"), th.Button(v, IconSend, true, ""))))
 				return Row(gtx, kids...)

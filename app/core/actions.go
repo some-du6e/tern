@@ -22,6 +22,9 @@ func (a *App) Handle(th *ui.Theme, actions []ui.Action) {
 
 func (a *App) handle(th *ui.Theme, act ui.Action) {
 	id := act.ID
+	if a.handleHeader(th, act) {
+		return
+	}
 	switch {
 	case strings.HasPrefix(id, "signin."):
 		a.handleSignIn(th, act)
@@ -107,12 +110,11 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		a.mu.Unlock()
 	case "project", "project.hero":
 		if arg == "" {
-			// The menu opens under whichever was clicked: the header's
-			// dropdown or the name in "What should we build in tern?".
+			// The name in "What should we build in tern?" opens the menu.
 			a.mu.Lock()
-			open := !a.projectsOpen || a.projectsHero != (verb == "project.hero")
+			open := !a.projectsOpen
 			a.closeMenusLocked()
-			a.projectsOpen, a.projectsHero = open, verb == "project.hero"
+			a.projectsOpen = open
 			a.mu.Unlock()
 			return
 		}
@@ -120,8 +122,10 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		a.mu.Lock()
 		if gs := a.projectChoices(); gi >= 0 && gi < len(gs) && ci >= 0 && ci < len(gs[gi].ids) {
 			if a.draftEnv != gs[gi].e.id() || a.draft != gs[gi].ids[ci] {
-				// The model menu is per environment, so start it afresh.
+				// The model menu is per environment, so start it afresh,
+				// and the new project's workspace with it.
 				a.draftEnv, a.draft = gs[gi].e.id(), gs[gi].ids[ci]
+				a.draftWorktree, a.draftBase = false, ""
 				delete(a.choices, "draft")
 			}
 		}
@@ -133,7 +137,14 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		a.errText = ""
 		a.mu.Unlock()
 	case "menus.close":
-		a.closeMenus()
+		a.mu.Lock()
+		details := a.detailsOpen
+		a.closeMenusLocked()
+		a.mu.Unlock()
+		if details {
+			// The details popover hands the focus back to the composer.
+			th.Focus("composer")
+		}
 	case "browser.toggle":
 		a.toggleBrowser()
 		a.mu.Lock()
@@ -185,19 +196,41 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		a.closeTerminal(i)
 	case "details":
 		// T3's thread details: a card in the canvas when it fits, which
-		// stays open until toggled, else a popover from the header.
+		// stays open until toggled (per thread), else a popover from the
+		// header. Opening either sends the focus into it.
 		a.mu.Lock()
-		if arg == "card" {
-			a.detailsCard = !a.detailsCard
-			card := a.detailsCard
+		if arg == "inline" {
+			// The card found room inline: the popover's flag goes, so it
+			// doesn't come back by itself when the room does.
+			a.detailsOpen = false
 			a.mu.Unlock()
-			_ = a.store.Put("details-card", card)
+			return
+		}
+		if arg == "card" {
+			r := a.openID
+			if a.draft != "" {
+				r = "draft"
+			}
+			a.cardHidden[r] = !a.cardHidden[r]
+			if !a.cardHidden[r] {
+				delete(a.cardHidden, r)
+				th.FocusCard()
+			}
+			hidden := map[string]bool{}
+			for k := range a.cardHidden {
+				hidden[k] = true
+			}
+			a.mu.Unlock()
+			_ = a.store.Put("details-hidden", hidden)
 			return
 		}
 		open := !a.detailsOpen
 		a.closeMenusLocked()
 		a.detailsOpen = open
 		a.mu.Unlock()
+		if open {
+			th.FocusCard()
+		}
 	case "sidebar.toggle":
 		a.mu.Lock()
 		a.sidebarHidden = !a.sidebarHidden
@@ -329,6 +362,7 @@ func (a *App) closeMenusLocked() {
 	a.detailsOpen, a.machinesOpen = false, false
 	a.ctxRef, a.ctxBulk, a.ctxDraft, a.ctxKeyboard, a.ctxConfirm = "", false, false, false, false
 	a.filterOpen, a.snoozeRef = false, ""
+	a.cardMenu, a.branchPicker, a.checksOpen = "", nil, ""
 }
 
 // switchTo keeps each thread's unsent text: it saves the composer, runs the
@@ -444,6 +478,7 @@ func (a *App) newDraftLocked() bool {
 	}
 	a.closeThreadLocked()
 	a.draftEnv, a.draft = env.id(), project
+	a.draftWorktree, a.draftBase = false, ""
 	delete(a.choices, "draft")
 	return true
 }
@@ -791,6 +826,7 @@ func (a *App) send(th *ui.Theme, queue bool) {
 	sel, body := a.sendable(c.sel, text)
 	runtime := c.runtime
 	draft := a.draft
+	strategy := a.draftStrategyLocked()
 	t := a.curThread()
 	smart := e.config != nil && e.config.Environment.Capabilities.ServerResolvedCommandContext
 	inline := e.config != nil && e.config.Environment.Capabilities.InlineMessageContext
@@ -803,7 +839,7 @@ func (a *App) send(th *ui.Theme, queue bool) {
 	saveDraft(key, "")
 	a.changed()
 	go func() {
-		err := a.deliver(e, conn, draft, t, sel, runtime, body, text, imgs, queue, smart, inline)
+		err := a.deliver(e, conn, draft, strategy, t, sel, runtime, body, text, imgs, queue, smart, inline)
 		a.mu.Lock()
 		a.notice = ""
 		if err != nil {
@@ -828,7 +864,7 @@ func (a *App) send(th *ui.Theme, queue bool) {
 	}()
 }
 
-func (a *App) deliver(e *envState, conn *t3.Conn, draft string, t *t3.Thread, sel t3.ModelSelection, runtime, body, text string, imgs []pastedImage, queue, smart, inline bool) error {
+func (a *App) deliver(e *envState, conn *t3.Conn, draft string, strategy map[string]any, t *t3.Thread, sel t3.ModelSelection, runtime, body, text string, imgs []pastedImage, queue, smart, inline bool) error {
 	attachments, recs, err := upload(conn, imgs)
 	if err != nil {
 		return err
@@ -854,7 +890,7 @@ func (a *App) deliver(e *envState, conn *t3.Conn, draft string, t *t3.Thread, se
 			"modelSelection":    sel,
 			"runtimeMode":       runtime,
 			"interactionMode":   "default",
-			"workspaceStrategy": map[string]any{"type": "root"},
+			"workspaceStrategy": strategy,
 			"initialMessage":    mergeMap(msg, map[string]any{"messageId": t3.NewID(), "attachments": attachments}),
 		}, &res)
 		if err != nil {

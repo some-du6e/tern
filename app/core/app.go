@@ -59,7 +59,7 @@ type App struct {
 
 	redraw func()
 	// OpenURL opens a URL on this computer: a pull request's, in its
-	// browser.
+	// browser, or an editor's, for a folder on another machine.
 	OpenURL func(string) error
 
 	mu       sync.Mutex
@@ -138,15 +138,41 @@ type App struct {
 	traitsOpen   bool
 	accessOpen   bool
 	projectsOpen bool
-	projectsHero bool // the project menu hangs off the heading, not the header
 	accountOpen  bool
 	detailsOpen  bool // the thread details popover is up
-	// T3's shell: the details card shown inline (on by default), the
-	// sidebar collapsed, and its dragged width in dp (0 for the default).
-	// All three persist.
-	detailsCard   bool
+	// T3's shell: the threads whose inline details card is toggled off
+	// (it's on by default), the sidebar collapsed, and its dragged width in
+	// dp (0 for the default). All three persist.
+	cardHidden    map[string]bool
 	sidebarHidden bool
 	sidebarWidth  float32
+	// The chat header and the details card: the thread whose title is
+	// being renamed; the card's open menu (run, openin, scripts or git)
+	// and branch picker; a Git action asking first; each checkout's Git
+	// status, by environment and folder; the editor last picked (and
+	// whether Open in has said it works over SSH) and each project's last
+	// script, which persist; and the draft's new worktree and its base.
+	renaming      string
+	cardMenu      string
+	cardAtPointer bool            // the card's menu opened at a right-click
+	itemsHidden   map[string]bool // the card's items turned off (persisted)
+	prsOpen       bool            // the pull request rows show the thread's other links
+	// What the card has read of each pull request, by prKeyOf; a merge
+	// waiting on its dialog; the pull request whose checks popover is open,
+	// and whether it shows the finished checks too.
+	prLoads       map[string]*prLoad
+	prAlert       *prAlert
+	checksOpen    string
+	checksAll     bool
+	branchPicker  *refPicker
+	confirm       *pendingGit
+	vcs           map[string]*vcsState
+	lastEditor    string
+	hintSeen      bool
+	lastScripts   map[string]string
+	draftWorktree bool
+	draftBase     string
+	remoteEditors func() []string
 	machinesOpen  bool                // the footer's machines menu is up
 	drawers       map[string]*drawer  // each thread's terminals, by ref
 	browsers      map[string]*browser // each thread's browser panel, by ref
@@ -233,9 +259,17 @@ func NewWithStore(store *t3.Store, redraw func()) (*App, error) {
 		working:  map[string]workingState{},
 		returned: map[string]time.Time{},
 	}
-	_ = store.Delete("env-filter") // from when a machine's chip filtered the inbox
-	a.detailsCard = true
-	_, _ = store.Get("details-card", &a.detailsCard)
+	_ = store.Delete("env-filter")   // from when a machine's chip filtered the inbox
+	_ = store.Delete("details-card") // from when one switch hid every thread's card
+	a.cardHidden, a.lastScripts, a.vcs = map[string]bool{}, map[string]string{}, map[string]*vcsState{}
+	a.prLoads = map[string]*prLoad{}
+	a.itemsHidden = map[string]bool{}
+	a.remoteEditors = probeRemoteEditors
+	_, _ = store.Get("details-hidden", &a.cardHidden)
+	_, _ = store.Get("details-items", &a.itemsHidden)
+	_, _ = store.Get("last-editor", &a.lastEditor)
+	_, _ = store.Get("remote-open-hint", &a.hintSeen)
+	_, _ = store.Get("last-scripts", &a.lastScripts)
 	_, _ = store.Get("sidebar-hidden", &a.sidebarHidden)
 	_, _ = store.Get("sidebar-width", &a.sidebarWidth)
 	// The shelves start folded, as T3's do, and remember being opened.
@@ -771,6 +805,13 @@ type threadView struct {
 	open     map[string]bool // tool and thought rows the user expanded
 	full     map[string]*t3.TurnItem
 	cancel   func()
+	// The thread's guest link, from its record: the header says who it's
+	// shared with. unsharing is the close on its way.
+	guestShare *t3.GuestShare
+	unsharing  bool
+	// The provider sessions attached to it, by id: moving it to another
+	// worktree detaches them.
+	sessions map[string]bool
 }
 
 func newView(e *envState, id string) *threadView {
@@ -827,6 +868,8 @@ func (a *App) closeThreadLocked() {
 	a.view = nil
 	a.openID = ""
 	a.picker, a.traitsOpen, a.accessOpen, a.projectsOpen = nil, false, false, false
+	a.renaming, a.cardMenu, a.branchPicker, a.confirm, a.prsOpen = "", "", nil, nil, false
+	a.prAlert = nil
 }
 
 // openThread shows a thread, by ref, and subscribes to it. Call without the
@@ -913,6 +956,13 @@ func (a *App) subscribeThread(e *envState, conn *t3.Conn, gen int, r string) {
 			for _, m := range it.Projection.Messages {
 				v.messages[m.ID] = m
 			}
+			if th := it.Projection.Thread; th != nil {
+				a.setGuestShare(v, th.GuestShare)
+			}
+			v.sessions = map[string]bool{}
+			for _, ps := range it.Projection.ProviderSessions {
+				v.sessions[ps.ID] = true
+			}
 			v.cursor, v.more, v.loaded = it.HistoryCursor, it.HasMoreHistory, true
 		case it.Kind == "event" && it.Event != nil:
 			switch t := it.Event.Type; {
@@ -929,6 +979,24 @@ func (a *App) subscribeThread(e *envState, conn *t3.Conn, gen int, r string) {
 				var m t3.Message
 				if json.Unmarshal(it.Event.Payload, &m) == nil {
 					v.messages[m.ID] = m
+				}
+			case strings.HasPrefix(t, "thread.") && t != "thread.pull-request-link-updated":
+				// Every other thread event carries the whole record.
+				var th t3.AppThread
+				if json.Unmarshal(it.Event.Payload, &th) == nil {
+					a.setGuestShare(v, th.GuestShare)
+				}
+			case t == "provider-session.attached" || t == "provider-session.updated":
+				var ps t3.ProviderSession
+				if json.Unmarshal(it.Event.Payload, &ps) == nil && ps.ID != "" && v.sessions != nil {
+					v.sessions[ps.ID] = true
+				}
+			case t == "provider-session.detached":
+				var d struct {
+					ID string `json:"providerSessionId"`
+				}
+				if json.Unmarshal(it.Event.Payload, &d) == nil {
+					delete(v.sessions, d.ID)
 				}
 			}
 		}
@@ -948,6 +1016,22 @@ func (a *App) subscribeThread(e *envState, conn *t3.Conn, gen int, r string) {
 	go func() {
 		_ = conn.Dispatch(map[string]any{"type": "thread.visit", "threadId": id, "visitedAt": time.Now().UTC().Format(time.RFC3339Nano), "opened": true})
 	}()
+}
+
+// setGuestShare keeps the thread's guest link from its record. The header
+// says "Guest link expired" from the minute T3's clock reaches its expiry,
+// so a new expiry wants a frame then. Call with the lock held.
+func (a *App) setGuestShare(v *threadView, gs *t3.GuestShare) {
+	same := gs != nil && v.guestShare != nil && gs.ExpiresAt == v.guestShare.ExpiresAt
+	v.guestShare = gs
+	if gs == nil || same {
+		return
+	}
+	if at, err := time.Parse(time.RFC3339Nano, gs.ExpiresAt); err == nil {
+		if d := time.Until(at.Truncate(time.Minute)); d > 0 {
+			time.AfterFunc(d, a.changed)
+		}
+	}
 }
 
 func mergeRun(dst *t3.Run, src t3.Run) {

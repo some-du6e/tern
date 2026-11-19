@@ -42,8 +42,9 @@ type terminal struct {
 	ref, cwd string
 	conn     *t3.Conn
 	threadID string
-	attached bool // the server has the shell: a resize before that is lost
-	closed   bool // the tab was closed: nothing reattaches it
+	attached bool   // the server has the shell: a resize before that is lost
+	closed   bool   // the tab was closed: nothing reattaches it
+	run      string // typed into the shell once it's there: a project script
 }
 
 const (
@@ -65,7 +66,7 @@ func (a *App) toggleTerminal() {
 	}
 	d.open = !d.open
 	if d.open && len(d.terms) == 0 {
-		if err := a.newTerminalLocked(d); err != nil {
+		if err := a.newTerminalLocked(d, ""); err != nil {
 			d.open = false
 			a.fail(err)
 		}
@@ -77,13 +78,15 @@ func (a *App) newTerminal() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if d := a.drawers[a.openID]; d != nil {
-		if err := a.newTerminalLocked(d); err != nil {
+		if err := a.newTerminalLocked(d, ""); err != nil {
 			a.fail(err)
 		}
 	}
 }
 
-func (a *App) newTerminalLocked(d *drawer) error {
+// newTerminalLocked starts a shell in d, in the thread's folder, and types
+// run into it once the server has it.
+func (a *App) newTerminalLocked(d *drawer, run string) error {
 	e, t := a.thread(a.openID)
 	if t == nil {
 		return errors.New("open a thread first")
@@ -100,7 +103,7 @@ func (a *App) newTerminalLocked(d *drawer) error {
 		emu: vt.NewSafeEmulator(termCols, termRows), input: make(chan func(), 256), cols: termCols, rows: termRows}
 	d.terms = append(d.terms, term)
 	d.active = len(d.terms) - 1
-	term.ref, term.cwd, term.conn, term.threadID = a.openID, cwd, e.conn, t.ID
+	term.ref, term.cwd, term.conn, term.threadID, term.run = a.openID, cwd, e.conn, t.ID, run
 	go term.pump(a)
 	go func() {
 		for f := range term.input {
@@ -172,6 +175,10 @@ func (a *App) termEvent(term *terminal, ev t3.TermEvent) {
 			term.attached = true
 			if cols, rows := term.cols, term.rows; cols != termCols || rows != termRows {
 				go term.conn.TerminalResize(term.threadID, term.id, cols, rows)
+			}
+			if term.run != "" {
+				go term.conn.TerminalWrite(term.threadID, term.id, term.run)
+				term.run = ""
 			}
 		}
 		if ev.Snapshot != nil {

@@ -101,6 +101,21 @@ func inked(c color.RGBA, bg color.NRGBA) bool {
 	return off(c.R, bg.R) || off(c.G, bg.G) || off(c.B, bg.B)
 }
 
+// run is the first and last y in [y0, y1) at column x whose pixel is c,
+// give or take a step, or -1, -1 when none is.
+func run(img *image.RGBA, x, y0, y1 int, c color.NRGBA) (first, last int) {
+	first, last = -1, -1
+	for y := y0; y < y1; y++ {
+		if nearPixel(img.RGBAAt(x, y), c) {
+			if first < 0 {
+				first = y
+			}
+			last = y
+		}
+	}
+	return first, last
+}
+
 // The window wears T3's light or dark theme with the system: the
 // conversation on --background, the sidebar on its own --sidebar (black in
 // dark mode, from the sidebar's scoped palette).

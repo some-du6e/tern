@@ -51,6 +51,26 @@ type input struct {
 	termSel    termSel
 	popAt      map[string]time.Time // when each open popover opened, for popIn
 	tipSince   map[string]time.Time // when the pointer came to rest on each tooltip's target
+	fades      map[string]*fade     // transitions in flight, by name
+	// Keyboard focus: whether it shows (Tab brought it; a pointer press
+	// hides it, as :focus-visible does), the targets that tell a double
+	// click from two, and the last press, in window coordinates.
+	keyFocus bool
+	// The details card takes the focus into its first control when it
+	// opens; quietly (no ring) when a pointer opened it.
+	focusCard, quietFocus bool
+	doubles               map[string]bool
+	pressAt               image.Point
+	pressed               bool                   // a press landed this frame
+	anchors               map[string]image.Point // where targets drop their menus, in the window
+	hovers                map[string]*hoverTag
+	// The details card's scroll.
+	cardScroll  int
+	cardScrollG gesture.Scroll
+	// The branch picker's search and highlight last frame: a new search
+	// scrolls its list to the top, a new highlight into view.
+	pickQuery string
+	pickHi    int
 	// The shell: whether the details card fits inline (from the last
 	// layout), and the sidebar rail's drag.
 	cardFits    bool
@@ -72,11 +92,7 @@ type input struct {
 	runs        map[string][2]string          // run buttons' language and code, by click id
 	runFailed   map[string]bool               // a run that couldn't start, for its ✕
 	paste       string                        // an editor to paste text into next frame
-	fades       map[string]*fade              // transitions in flight, by name
 	winSize     image.Point                   // the window, for popups kept inside it
-	// Keyboard focus: whether it shows (Tab brought it; a pointer press
-	// hides it, as :focus-visible does).
-	keyFocus bool
 	// The sidebar's list: its keyboard tree from the last layout, each
 	// row's focus tag, the row to focus once it's laid out and the one the
 	// keyboard moved to, which scrolls into view before the next layout;
@@ -244,6 +260,10 @@ func (th *Theme) events(gtx C, id string) (*gesture.Click, *int) {
 				th.in.focus = f
 				continue
 			}
+			if th.in.doubles[id] && e.NumClicks > 1 {
+				th.push(Action{ID: id, Kind: "double"})
+				continue
+			}
 			th.push(Action{ID: id, Kind: "click", Shift: e.Modifiers.Contain(key.ModShift), Short: e.Modifiers.Contain(key.ModShortcut), Clicks: e.NumClicks})
 		}
 	}
@@ -278,6 +298,7 @@ func (th *Theme) events(gtx C, id string) (*gesture.Click, *int) {
 // window's origin after everything else: the topmost area sees events first,
 // and passes them on.
 func (th *Theme) trackPointer(gtx C, size image.Point) {
+	th.in.pressed = false
 	for {
 		ev, ok := gtx.Event(pointer.Filter{Target: &th.in.ptr, Kinds: pointer.Press})
 		if !ok {
@@ -290,6 +311,7 @@ func (th *Theme) trackPointer(gtx C, size image.Point) {
 		// A press ends keyboard navigation: focus rings show only after the
 		// keyboard moved focus, as :focus-visible does.
 		th.in.keyFocus = false
+		th.in.pressAt, th.in.pressed = e.Position.Round(), true
 		if e.Buttons == pointer.ButtonSecondary {
 			th.in.ctxAt = e.Position.Round()
 		}
@@ -297,6 +319,95 @@ func (th *Theme) trackPointer(gtx C, size image.Point) {
 	defer clip.Rect{Max: size}.Push(gtx.Ops).Pop()
 	defer pointer.PassOp{}.Push(gtx.Ops).Pop()
 	event.Op(gtx.Ops, &th.in.ptr)
+}
+
+// keyTarget makes click target id a stop for Tab: Enter and Space click it
+// while it has the focus. It reports whether the focus ring shows, which
+// is only while focus came from the keyboard.
+func (th *Theme) keyTarget(gtx C, id string) bool {
+	c, _ := th.events(gtx, id)
+	for {
+		ev, ok := gtx.Event(key.FocusFilter{Target: c},
+			key.Filter{Focus: c, Name: key.NameReturn}, key.Filter{Focus: c, Name: key.NameEnter}, key.Filter{Focus: c, Name: key.NameSpace})
+		if !ok {
+			break
+		}
+		switch ev := ev.(type) {
+		case key.FocusEvent:
+			if ev.Focus {
+				th.in.keyFocus, th.in.quietFocus = !th.in.quietFocus, false
+			}
+		case key.Event:
+			if ev.State == key.Press {
+				th.push(Action{ID: id, Kind: "click"})
+			}
+		}
+	}
+	return gtx.Focused(c) && th.in.keyFocus
+}
+
+// focusTarget moves keyboard focus to click target id, as T3 does when a
+// panel opens into its first control.
+func (th *Theme) focusTarget(gtx C, id string) {
+	if c := th.in.clicks[id]; c != nil {
+		gtx.Execute(key.FocusCmd{Tag: c})
+	}
+}
+
+// FocusCard sends the focus into the details card's first control on its
+// next frame, as T3 does when the card opens. Opened from the keyboard,
+// the control shows its ring; opened with the pointer, it doesn't.
+func (th *Theme) FocusCard() {
+	th.in.focusCard, th.in.quietFocus = true, !th.in.keyFocus
+}
+
+// hoverTag is a watch on the pointer that takes none of its events.
+type hoverTag struct{ in bool }
+
+func (th *Theme) hoverTag(id string) *hoverTag {
+	if th.in.hovers == nil {
+		th.in.hovers = map[string]*hoverTag{}
+	}
+	h := th.in.hovers[id]
+	if h == nil {
+		h = new(hoverTag)
+		th.in.hovers[id] = h
+	}
+	return h
+}
+
+// hoverState reports whether the pointer is over the area hoverArea
+// watches as id.
+func (th *Theme) hoverState(gtx C, id string) bool {
+	h := th.hoverTag(id)
+	for {
+		ev, ok := gtx.Event(pointer.Filter{Target: h, Kinds: pointer.Enter | pointer.Leave | pointer.Cancel})
+		if !ok {
+			break
+		}
+		if e, ok := ev.(pointer.Event); ok {
+			h.in = e.Kind == pointer.Enter
+		}
+	}
+	return h.in
+}
+
+// hoverArea watches a size-sized area for the pointer as id, passing every
+// event on to what's under it.
+func (th *Theme) hoverArea(gtx C, id string, size image.Point) {
+	defer clip.Rect{Max: size}.Push(gtx.Ops).Pop()
+	defer pointer.PassOp{}.Push(gtx.Ops).Pop()
+	event.Op(gtx.Ops, th.hoverTag(id))
+}
+
+// contextArea takes right-clicks on a size-sized area for target id
+// without taking anything else: presses pass on to what's under it, like
+// the window's drag area.
+func (th *Theme) contextArea(gtx C, id string, size image.Point) {
+	_, rc := th.events(gtx, id)
+	defer clip.Rect{Max: size}.Push(gtx.Ops).Pop()
+	defer pointer.PassOp{}.Push(gtx.Ops).Pop()
+	event.Op(gtx.Ops, rc)
 }
 
 // Click makes w a click target named id, with a faint highlight on hover.
@@ -341,7 +452,9 @@ func (th *Theme) tipAt(gtx C, id, tip string, size image.Point, up bool, align i
 // tipDelay is tipAt after a rest of delay.
 func (th *Theme) tipDelay(gtx C, id, tip string, size image.Point, up bool, align int, delay time.Duration) {
 	c := th.in.clicks[id]
-	if c == nil || !c.Hovered() || tip == "" {
+	// Keyboard focus opens it at once, without the fade.
+	focused := c != nil && gtx.Focused(c) && th.in.keyFocus
+	if c == nil || !(c.Hovered() || focused) || tip == "" {
 		delete(th.in.tipSince, id)
 		return
 	}
@@ -354,6 +467,9 @@ func (th *Theme) tipDelay(gtx C, id, tip string, size image.Point, up bool, alig
 		th.in.tipSince[id] = since
 	}
 	shown := gtx.Now.Sub(since) - delay
+	if focused {
+		shown = 150 * time.Millisecond
+	}
 	if shown < 0 {
 		gtx.Execute(op.InvalidateCmd{At: since.Add(delay)})
 		return
@@ -380,6 +496,7 @@ func (th *Theme) tipDelay(gtx C, id, tip string, size image.Point, up bool, alig
 	}
 	m2 := op.Record(gtx.Ops)
 	op.Offset(at).Add(gtx.Ops)
+	// Gio's renderer needs every opacity layer closed in the frame.
 	fd := paint.PushOpacity(gtx.Ops, t)
 	// It grows from 98% out of the side facing the trigger.
 	origin := f32.Pt(float32(td.Size.X)/2, 0)

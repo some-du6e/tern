@@ -30,6 +30,9 @@ func systemFaces() []font.FontFace {
 	} {
 		if ft := loadFont(f.path); ft != nil {
 			out = append(out, weightFaces(ft, f.family, f.style)...)
+			if f.family == "SF Pro" && f.style == font.Regular && ft.Upem() > 0 {
+				capEm = fontapi.NewFace(ft).LineMetric(fontapi.CapHeight) / float32(ft.Upem())
+			}
 		}
 	}
 	return out

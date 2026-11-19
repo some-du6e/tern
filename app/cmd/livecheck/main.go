@@ -214,9 +214,9 @@ func main() {
 	h.shot("options")
 	h.c.Handle(h.th, []ui.Action{{ID: "menus.close", Kind: "click"}, {ID: "new", Kind: "click"}})
 	s = h.frame()
-	fmt.Printf("draft in %q\n", s.Project)
+	fmt.Printf("draft in %q\n", s.Header.Project)
 	h.shot("draft")
-	h.c.Handle(h.th, []ui.Action{{ID: "project", Kind: "click"}})
+	h.c.Handle(h.th, []ui.Action{{ID: "project.hero", Kind: "click"}})
 	s = h.frame()
 	if s.Projects == nil || len(s.Projects.Groups) == 0 {
 		log.Fatal("no project menu")
@@ -225,12 +225,12 @@ func main() {
 	if len(s.Projects.Groups[0].Choices) > 1 {
 		h.c.Handle(h.th, []ui.Action{{ID: "project:0:1", Kind: "click"}})
 		s = h.frame()
-		fmt.Printf("draft moved to %q\n", s.Project)
+		fmt.Printf("draft moved to %q\n", s.Header.Project)
 		h.shot("draft-moved")
 	}
 	h.c.Handle(h.th, []ui.Action{{ID: "tabclose:draft", Kind: "click"}, {ID: "tabclose:" + s.TabIDs[0], Kind: "click"}})
 	s = h.frame()
-	fmt.Printf("nothing open: details panel hidden=%v\n", s.Run == nil)
+	fmt.Printf("nothing open: a new thread's header=%v\n", s.Header != nil && !s.Header.Server)
 	// Right-click the first card with the pointer: the thread menu opens there.
 	at := f32.Pt(150*scale, (100+2+24)*scale)
 	h.router.Queue(

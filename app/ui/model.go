@@ -394,6 +394,240 @@ type RunInfo struct {
 	Worktree string
 }
 
+// ChatHeader is the breadcrumb in the chat column's title row
+// (ChatHeader.tsx): the project, a subagent's parent, then the thread's
+// title (Scene.Title).
+type ChatHeader struct {
+	Project   string      // the project crumb, "No project" for the scratch project; "" for none
+	Icon      ProjectIcon // the crumb's mark
+	Parent    string      // a subagent's parent thread, crumbed before the title
+	Server    bool        // a thread on the server: its title opens the thread's menu; a draft's is plain text
+	Origin    string      // the linked environment whose agent started it: "From <Origin>"
+	CanRename bool        // a double-click on the title renames it
+	Renaming  bool        // the title is the "header.title" editor
+	Guest     *GuestLine  // the thread's guest link, after the breadcrumb
+}
+
+// GuestLine is the header's guest link indicator (GuestShareIndicator):
+// who the thread is shared with, and "Stop sharing" ("header.unshare").
+type GuestLine struct {
+	Status  string // "<name> is a guest", "Guest link active" or "Guest link expired"
+	Closing bool   // the close is on its way: Stop sharing is off
+}
+
+// ThreadDetails is the thread details card (ThreadDetailsPanel.tsx): the
+// thread's workspace, then its version control. Rows it doesn't offer are
+// nil.
+type ThreadDetails struct {
+	Run     *RunContext
+	OpenIn  *OpenIn
+	Scripts *Scripts
+	Branch  *BranchRow
+	PRs     *PullRequests // under the branch row, or in its place without one
+	Git     *GitActions
+	InitGit bool // "Initialize Git", for a folder that isn't a repository
+	Initing bool // vcs.init is running: "Initializing...", and it can't be pressed again
+	Changes *Changes
+
+	Menu   *CardMenu     // the menu open off a row
+	Picker *BranchPicker // the branch picker, when open
+}
+
+// RunContext is the machine and workspace row (BranchToolbar.tsx).
+type RunContext struct {
+	Machine      string // the machine's kind for its icon: server, cloud, linux, desktop, laptop, mac-mini, mac-studio; "" leads with the workspace icon
+	Label        string
+	Tip          string // the machine icon's tooltip
+	Workspace    string // its icon: folder, folder-git or folder-git-2
+	WorkspaceTip string // the workspace icon's tooltip, its path
+	Locked       bool   // a started thread: a plain row without a menu
+}
+
+// OpenIn is the Open in editor split (OpenInPicker.tsx).
+type OpenIn struct {
+	Editor       string // the preferred editor's id, "" for none
+	Label        string // "Open in VS Code", "Open in editor"
+	Disabled     bool   // nothing to open it with
+	MenuDisabled bool
+}
+
+// Scripts is the project's scripts (ProjectScriptsControl.tsx): a split
+// that runs the primary one, "Actions" when none is, or a row to add one.
+type Scripts struct {
+	Primary string // the script the split runs, "" for none
+	Icon    string // its icon: play, test, lint, configure, build or debug
+	Any     bool   // the project has scripts
+	CanAdd  bool   // "Add project script" opens the editor for a new one
+}
+
+// BranchRow is the branch picker's trigger (BranchToolbarBranchSelector.tsx).
+type BranchRow struct {
+	Label    string // the branch, "From <branch>" for a new worktree's base, "Select ref"
+	Disabled bool   // until the refs load, and while a branch action runs
+}
+
+// PullRequests are the thread's pull request rows (ThreadDetailsPrRows.tsx):
+// the one it shows, then "Show N more" folding its other linked ones,
+// which Rows holds too while Expanded. Row i's target is "card.pr:<i>",
+// its eye "card.prwatch:<i>", the fold "card.prs".
+type PullRequests struct {
+	Rows     []PullRequestRow
+	Others   int
+	Expanded bool
+}
+
+// PullRequestRow is one pull request: its state's icon in its tone and
+// "#N: <title>". With Detail it's the detailed form instead.
+type PullRequestRow struct {
+	State    string // open, draft, closed or merged; "" until it's read
+	Label    string
+	Tip      string // "PR #12 - Open: <title>"
+	Watching bool   // the agent watches it: an eye after the row stops that
+	Detail   *PullRequestDetailRow
+}
+
+// PullRequestDetailRow is a pull request whose detail has loaded with
+// something to say under its title (ThreadDetailsPrRow.tsx): the title on
+// up to two lines, then a meta line of "#N", its checks, the eye while the
+// agent watches it and the action it's ready for ("card.prpill:<i>").
+type PullRequestDetailRow struct {
+	Title  string
+	Number int
+	Checks *ChecksMeta
+	Pill   *PullRequestPill
+}
+
+// ChecksMeta is a pull request's checks in its meta line, a trigger for
+// their popover ("card.checks:<i>", PullRequestChecksPopover.tsx): the
+// rollup's icon and tone, and a count when there's one to give.
+type ChecksMeta struct {
+	State string // passing, failing or pending
+	Count string // "3/5 checks", "2 failed" or ""
+	Popup *ChecksPopup
+}
+
+// ChecksPopup is the open checks popover: what the checks come to, then
+// each check with its status, and whether a "Show all" ("card.checksall")
+// unfolds the finished ones.
+type ChecksPopup struct {
+	Heading string // "Some checks were not successful"
+	Summary string // "2 of 5 failing"
+	Checks  []CheckRow
+	More    string // "Show all", "Show less" or ""
+}
+
+// CheckRow is a check in the popover: its status's icon and label, and a
+// "Details" link to its page ("card.check:<i>") when it has one.
+type CheckRow struct {
+	Status, Name, Label string
+	Details             bool
+}
+
+// PullRequestPill is the action a pull request is ready for at the end of
+// its meta line, in the primary tone: Merge or Ready.
+type PullRequestPill struct {
+	Label    string // "Merge", "Merging...", "Ready", "Marking..."
+	Tip      string
+	Disabled bool // an action is on its way
+}
+
+// Alert is T3's AlertDialog asking before an action: its question, then
+// Cancel ("alert:cancel") and the action ("alert:ok").
+type Alert struct {
+	Title, Description, Action string
+}
+
+// GitActions is the quick action split (GitActionsControl.tsx).
+type GitActions struct {
+	Label        string // the quick action
+	Icon         string // a lucide icon, or "provider:<kind>" for the host's mark
+	Hint         string // why it can't run now: it explains instead of acting
+	MenuDisabled bool
+	Running      *GitProgress // an action is running
+	Success      *GitSuccess  // one just finished
+}
+
+// GitProgress is a running Git action: its phase, its last output line and
+// how long it has run.
+type GitProgress struct {
+	Status, Output, Elapsed string
+}
+
+// GitSuccess is the line a finished action leaves for ten seconds.
+type GitSuccess struct {
+	Title, Description string
+}
+
+// Changes is the change totals row.
+type Changes struct {
+	Insertions, Deletions int
+	Base                  string // "Uncommitted", "vs <base>"; "" until the status loads
+	Disabled              bool   // there's no diff to open here
+}
+
+// CardMenu is a T3 menu open off one of the card's rows: "run", "openin",
+// "scripts" or "git"; or the card's own "items" menu, from "Choose what to
+// show" or at the pointer after a right-click.
+type CardMenu struct {
+	For       string
+	Rows      []MenuRow
+	AtPointer bool
+}
+
+// MenuRowKind is what a MenuRow draws (menu.tsx).
+type MenuRowKind int
+
+const (
+	MenuItemRow MenuRowKind = iota
+	MenuRadioRow
+	MenuCheckRow // a checkbox row: the check, when Checked, before the label
+	MenuGroupLabel
+	MenuSeparator
+	MenuNote // a 12dp line of explanation, in Tone
+)
+
+// MenuRow is one row of a T3 menu. Its click target is "<menu>:<index>".
+type MenuRow struct {
+	Kind     MenuRowKind
+	Label    string
+	Icon     string // a lucide icon, 16dp at 80% before the label (12dp in radio rows); "provider:<kind>" or "editor:<id>" for a mark
+	Shortcut string
+	Checked  bool
+	Disabled bool
+	Reason   string // why a disabled row is off, in a popover to its left on hover
+	Tone     string // a note's colour: "warning" or "destructive"
+}
+
+// BranchPicker is the branch combobox (BranchPicker.tsx): a search field
+// over the refs it lists ("branch.search"). Near the end of a list with
+// More it asks for the next page ("branch.more").
+type BranchPicker struct {
+	Refs      []BranchRef
+	Create    string // "Create new ref "<name>"" when no ref matches exactly
+	Notice    string // why some refs are off: "Stop the current turn to switch worktrees."
+	Status    string // "Loading refs...", "Showing 50 of 120 refs"
+	Highlight int
+	More      bool // the server has more refs for the search
+	Loading   bool // the search's first page hasn't come yet
+}
+
+// BranchRef is one ref in the picker, with its first tag: current,
+// worktree, remote or default.
+type BranchRef struct {
+	Name, Tag string
+	Disabled  bool
+}
+
+// Confirm is T3's alert dialog for a Git action on the default branch
+// (GitActionsControl.tsx): its question, then Abort, Continue and a
+// feature branch. Its targets are "confirm:abort", "confirm:continue" and
+// "confirm:branch".
+type Confirm struct {
+	Title, Description string
+	Continue           string // the continue button's label
+	BranchOff          string // why the feature branch button is disabled, "" when it isn't
+}
+
 type Scene struct {
 	Envs    []Env
 	Sidebar Sidebar
@@ -412,7 +646,7 @@ type Scene struct {
 	Access        *Traits      // the access-mode menu, open over the lock
 	Account       *Traits      // the account menu, open over the sidebar footer
 	Projects      *Traits      // the new-thread project menu, one group per machine
-	Menu          *ContextMenu // a sidebar row's context menu, at the click
+	Menu          *ContextMenu // a thread's context menu, at the click or under the header's title
 	Details       bool         // the thread details popover is open
 	DetailsCard   bool         // the details card is shown inline, where it fits
 	SidebarHidden bool         // the sidebar is collapsed
@@ -420,31 +654,31 @@ type Scene struct {
 	Machines      *Traits      // the footer's machines menu, when open
 	Term          *TermView    // the open thread's terminal drawer, when open
 	Web           *BrowserView // the open thread's browser panel, when open
-	PickProject   bool         // the header's project is a dropdown (a draft)
 
-	Title      string
-	State      ThreadState
-	StateLabel string
-	Project    string
-	Items      []Item
-	MoreAbove  bool
+	Title     string
+	State     ThreadState
+	Header    *ChatHeader    // the chat header, when a thread or draft is open
+	Card      *ThreadDetails // and its details card
+	Confirm   *Confirm       // a Git action asking first
+	Alert     *Alert         // a pull request action asking first
+	Items     []Item
+	MoreAbove bool
 
-	Composer     string
-	Hero         string // a new thread's project: "What should we build in <Hero>?" over a centered composer
-	ProjectsHero bool   // the Projects menu opens under the heading's project name
-	Placeholder  string
-	Images       int     // mockup placeholders
-	Thumbs       []Thumb // the composer's pasted images, live
-	Provider     string  // "Claude", "Codex", "Gemini": picks the logo
-	Model        string
-	Effort       string // the options button label, values joined with " · "
-	Runtime      string
-	Queue        []string
-	Approval     *Approval
-	Questions    []Question
-	Suggest      []Suggestion
-	SuggestSel   int
-	SuggestHead  string
+	Composer    string
+	Hero        string // a new thread's project: "What should we build in <Hero>?" over a centered composer
+	Placeholder string
+	Images      int     // mockup placeholders
+	Thumbs      []Thumb // the composer's pasted images, live
+	Provider    string  // "Claude", "Codex", "Gemini": picks the logo
+	Model       string
+	Effort      string // the options button label, values joined with " · "
+	Runtime     string
+	Queue       []string
+	Approval    *Approval
+	Questions   []Question
+	Suggest     []Suggestion
+	SuggestSel  int
+	SuggestHead string
 
 	Changes []FileChange
 	Run     *RunInfo

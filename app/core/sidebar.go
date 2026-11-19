@@ -873,7 +873,7 @@ func (a *App) row(st sideThread, shelf string, now time.Time) ui.ThreadRow {
 		Branch:       t.Branch,
 		Worktree:     t.WorktreePath != "",
 		Machine:      e.env.Label,
-		MachineIcon:  machineIcon(e.config),
+		MachineIcon:  machineKind(e.config),
 		Terminals:    a.busyTerminals(st.ref),
 	}
 	a.project(e, t.ProjectID, &r)
@@ -984,7 +984,7 @@ func (a *App) project(e *envState, id string, r *ui.ThreadRow) {
 // without one live.
 func (a *App) scratch(e *envState, id string) bool {
 	p, ok := e.projects[id]
-	return ok && e.config != nil && e.config.ScratchWorkspaceRoot != "" && strings.TrimRight(p.WorkspaceRoot, "/") == strings.TrimRight(e.config.ScratchWorkspaceRoot, "/")
+	return ok && isScratch(p, e.config)
 }
 
 // machineCount is how many machines have threads: past one, rows show
@@ -997,21 +997,6 @@ func (a *App) machineCount() int {
 		}
 	}
 	return n
-}
-
-// machineIcon is the machine's icon (resolveEnvironmentMachineKind), as a
-// name the sidebar draws.
-func machineIcon(cfg *t3.ServerConfig) string {
-	if cfg == nil {
-		return "server"
-	}
-	if k := cfg.Settings.EnvironmentIcon; k != "" {
-		return k
-	}
-	if k := cfg.Environment.Platform.Machine; k != "" {
-		return k
-	}
-	return "server"
 }
 
 // busyTerminals counts the thread's terminals with a command running.

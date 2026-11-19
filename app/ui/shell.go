@@ -79,7 +79,7 @@ func (th *Theme) Desktop(gtx C, s *Scene) D {
 		g.Constraints = layout.Exact(image.Pt(w, size.Y))
 		draw(g)
 	}
-	at(sw, colW, func(gtx C) { th.chatColumn(gtx, s, sw == 0, rp > 0) })
+	at(sw, colW, func(gtx C) { th.chatColumn(gtx, s, sw, rp > 0, size.X < dp(gtx, 640)) })
 	if rp > 0 {
 		at(size.X-rp, rp, func(gtx C) { th.panelHost(gtx, s) })
 	}
@@ -97,12 +97,24 @@ func (th *Theme) Desktop(gtx C, s *Scene) D {
 	if s.Menu != nil {
 		th.contextMenu(gtx, size, s)
 	}
-	sb := &s.Sidebar
-	if s.Live && (s.Picker != nil || s.Traits != nil || s.Access != nil || s.Account != nil || s.Machines != nil || s.Projects != nil ||
-		s.Menu != nil || sb.Filter != nil || sb.Snooze != nil || s.Details) {
+	if m := s.Card; m != nil && m.Menu != nil && m.Menu.AtPointer {
+		// The card's own menu and its rows' copy menus open at the click.
+		w := dp(gtx, 232)
+		if m.Menu.For != "items" {
+			w = dp(gtx, 180)
+		}
+		th.menuAtPointer(gtx, size, func(gtx C) D { return th.cardMenu(gtx, m.Menu, w) })
+	}
+	if s.Live && menuOpen(s) {
 		// A click anywhere outside an open menu closes it. The menus are
 		// deferred, so they sit above this.
 		th.hit(gtx, "menus.close", size)
+	}
+	if s.Confirm != nil {
+		th.confirmDialog(gtx, s.Confirm, size)
+	}
+	if s.Alert != nil {
+		th.alertDialog(gtx, s.Alert, size)
 	}
 	return D{Size: size}
 }
@@ -121,6 +133,7 @@ var shellFilters = func() []event.Filter {
 	fs := []event.Filter{
 		key.Filter{Name: "B", Required: key.ModShortcut, Optional: key.ModShift | key.ModAlt},
 		key.Filter{Name: "J", Required: key.ModShortcut},
+		key.Filter{Name: "O", Required: key.ModShortcut},
 		key.Filter{Name: "N", Required: key.ModShortcut},
 		key.Filter{Name: "[", Required: key.ModShortcut | key.ModShift},
 		key.Filter{Name: "]", Required: key.ModShortcut | key.ModShift},
@@ -141,16 +154,57 @@ var shellFilters = func() []event.Filter {
 	return fs
 }()
 
+// escapeFilters are shellFilters and Escape, which the shell takes only
+// while it's the shell's (escapable): the first to ask for a key gets it,
+// and the shell asks before a text field or the sidebar's menu would.
+var escapeFilters = append(shellFilters[:len(shellFilters):len(shellFilters)], key.Filter{Name: key.NameEscape})
+
+// menuOpen reports whether a menu or popover is up, for a click outside
+// or Escape to close.
+func menuOpen(s *Scene) bool {
+	sb := &s.Sidebar
+	card := s.Card != nil && (s.Card.Menu != nil || s.Card.Picker != nil || checksOpen(s.Card))
+	return s.Picker != nil || s.Traits != nil || s.Access != nil || s.Account != nil || s.Machines != nil ||
+		s.Projects != nil || s.Menu != nil || sb.Filter != nil || sb.Snooze != nil || s.Details || card
+}
+
+// escapable reports whether Escape is the shell's: a dialog is up, or a
+// menu or popover that doesn't take the keyboard itself. The sidebar's
+// menu steps out of a submenu first, its project filter closes from its
+// search field, and a focused text field has its own Escape.
+func escapable(s *Scene) bool {
+	return s.Confirm != nil || s.Alert != nil || (menuOpen(s) && s.Menu == nil && s.Sidebar.Filter == nil)
+}
+
+// checksOpen reports whether a pull request row's checks popover is open.
+func checksOpen(d *ThreadDetails) bool {
+	if d.PRs == nil {
+		return false
+	}
+	for _, r := range d.PRs.Rows {
+		if r.Detail != nil && r.Detail.Checks != nil && r.Detail.Checks.Popup != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // shellKeys handles T3's shell shortcuts (keybindings.ts): mod+B the
 // sidebar, mod+J the terminal, mod+Alt+B the right panel, mod+Shift+B the
-// thread details; and the sidebar's: mod+N a new thread, mod+Shift+[ and ]
-// the thread before and after, mod+1…9 the nth thread, mod+Shift+S settle,
-// mod+Shift+P pin and mod+Z undo the last park. The last four leave a
-// focused terminal alone; a focused text field keeps its own mod+Z. It
-// also keeps which modifier keys are held, for the rows' jump hints.
+// thread details, mod+O Open in editor; the sidebar's: mod+N a new thread,
+// mod+Shift+[ and ] the thread before and after, mod+1…9 the nth thread,
+// mod+Shift+S settle, mod+Shift+P pin and mod+Z undo the last park, the
+// last four leaving a focused terminal alone (a focused text field keeps
+// its own mod+Z); and Escape, while it's the shell's, which closes the open
+// menu or popover, or answers the dialog's Abort. It also keeps which
+// modifier keys are held, for the rows' jump hints.
 func (th *Theme) shellKeys(gtx C, s *Scene) {
+	filters := shellFilters
+	if escapable(s) {
+		filters = escapeFilters
+	}
 	for {
-		ev, ok := gtx.Event(shellFilters...)
+		ev, ok := gtx.Event(filters...)
 		if !ok {
 			return
 		}
@@ -169,6 +223,12 @@ func (th *Theme) shellKeys(gtx C, s *Scene) {
 		}
 		term := gtx.Focused(&th.in.term)
 		switch {
+		case ke.Name == key.NameEscape && s.Confirm != nil:
+			th.push(Action{ID: "confirm:abort", Kind: "click"})
+		case ke.Name == key.NameEscape && s.Alert != nil:
+			th.push(Action{ID: "alert:cancel", Kind: "click"})
+		case ke.Name == key.NameEscape && menuOpen(s):
+			th.push(Action{ID: "menus.close", Kind: "click"})
 		case ke.Name == "N":
 			th.push(Action{ID: "new", Kind: "click"})
 		case ke.Name == "[" || ke.Name == "{":
@@ -183,11 +243,15 @@ func (th *Theme) shellKeys(gtx C, s *Scene) {
 			th.push(Action{ID: "thread.undo", Kind: "click"})
 		case len(ke.Name) == 1 && ke.Name >= "1" && ke.Name <= "9" && !term:
 			th.push(Action{ID: "thread.jump:" + string(ke.Name), Kind: "click"})
-		case ke.Name == "J" && s.Run != nil:
+		case ke.Name == "J" && hasProject(s):
 			th.push(Action{ID: "terminal.toggle", Kind: "click"})
-		case ke.Name == "B" && ke.Modifiers.Contain(key.ModShift) && s.Run != nil:
+		case ke.Name == "O" && s.Card != nil && s.Card.OpenIn != nil && !s.Card.OpenIn.Disabled:
+			th.push(Action{ID: "card.openin", Kind: "click"})
+		case ke.Name == "B" && ke.Modifiers.Contain(key.ModShift) && s.Card != nil:
+			// The keyboard's open shows the card's first row focused.
+			th.in.keyFocus = true
 			th.push(th.detailsAction())
-		case ke.Name == "B" && ke.Modifiers.Contain(key.ModAlt) && s.Run != nil:
+		case ke.Name == "B" && ke.Modifiers.Contain(key.ModAlt) && hasProject(s):
 			th.push(Action{ID: "browser.toggle", Kind: "click"})
 		case ke.Name == "B" && !ke.Modifiers.Contain(key.ModShift|key.ModAlt):
 			th.push(Action{ID: "sidebar.toggle", Kind: "click"})
@@ -391,11 +455,16 @@ func (th *Theme) titleButtonW(id, tip string, b titleButton) W {
 		off := op.Offset(image.Pt((s-dp(gtx, 16))/2, (s-dp(gtx, 16))/2)).Push(gtx.Ops)
 		LucideW(b.icon, icon, 16)(gtx)
 		off.Pop()
-		if !b.disabled {
+		if b.disabled {
+			// It takes no presses but still says why: T3's tooltip sits on
+			// a wrapper around the disabled toggle.
+			id += ".off"
+			th.hover(gtx, id, r.Max)
+		} else {
 			th.hit(gtx, id, r.Max)
-			if tip != "" {
-				th.tipAt(gtx, id, tip, r.Max, false, b.tipAlign)
-			}
+		}
+		if tip != "" {
+			th.tipAt(gtx, id, tip, r.Max, false, b.tipAlign)
 		}
 		return D{Size: r.Max}
 	}
@@ -417,7 +486,6 @@ func (th *Theme) sidebarTrigger(gtx C, s *Scene, visible bool) {
 // details, terminal drawer, right panel. While the right panel is open the
 // details toggle moves into the chat header and Maximize joins them.
 func (th *Theme) titlebarControls(gtx C, s *Scene, size image.Point, panelOpen bool) {
-	none := s.Run == nil
 	type ctl struct {
 		id, tip string
 		b       titleButton
@@ -425,15 +493,16 @@ func (th *Theme) titlebarControls(gtx C, s *Scene, size image.Point, panelOpen b
 	var ctls []ctl
 	if !panelOpen {
 		ctls = append(ctls, ctl{th.detailsID(), "Toggle thread details (" + ShortcutShift("B") + ")",
-			titleButton{icon: "square-menu", pressed: th.detailsShown(s), disabled: none, tipAlign: 1}})
+			titleButton{icon: "square-menu", pressed: th.detailsShown(s), disabled: s.Card == nil, tipAlign: 1}})
 	}
-	term := "Toggle terminal drawer (" + Shortcut("J") + ")"
+	none := !hasProject(s)
+	term, right := "Toggle terminal drawer ("+Shortcut("J")+")", "Toggle right panel ("+ShortcutAlt("B")+")"
 	if none {
-		term = "Terminal drawer is unavailable"
+		term, right = "Terminal drawer is unavailable", "Right panel is unavailable"
 	}
 	ctls = append(ctls,
 		ctl{"terminal.toggle", term, titleButton{icon: "panel-bottom", pressed: s.Term != nil, disabled: none, tipAlign: 1}},
-		ctl{"browser.toggle", "Toggle right panel (" + ShortcutAlt("B") + ")", titleButton{icon: "panel-right", pressed: s.Web != nil, disabled: none, tipAlign: 1}},
+		ctl{"browser.toggle", right, titleButton{icon: "panel-right", pressed: s.Web != nil, disabled: none, tipAlign: 1}},
 	)
 	n := len(ctls)
 	gap := dp(gtx, 4)
@@ -446,6 +515,10 @@ func (th *Theme) titlebarControls(gtx C, s *Scene, size image.Point, panelOpen b
 	}
 }
 
+// hasProject reports whether the open thread or draft is in a project:
+// without one T3 has no terminal or right panel to open.
+func hasProject(s *Scene) bool { return s.Header != nil && s.Header.Project != "" }
+
 // detailsShown reports whether the details card or its popover is up.
 func (th *Theme) detailsShown(s *Scene) bool {
 	if th.in.cardFits {
@@ -457,8 +530,9 @@ func (th *Theme) detailsShown(s *Scene) bool {
 // ---------- the chat column ----------
 
 // chatColumn is the header, the canvas below it and the terminal drawer at
-// the bottom.
-func (th *Theme) chatColumn(gtx C, s *Scene, collapsed, panelOpen bool) {
+// the bottom. x is the column's left edge in the window; narrow is a
+// window under 640dp.
+func (th *Theme) chatColumn(gtx C, s *Scene, x int, panelOpen, narrow bool) {
 	size := gtx.Constraints.Max
 	top := dp(gtx, topBarH)
 	drawer := 0
@@ -477,30 +551,45 @@ func (th *Theme) chatColumn(gtx C, s *Scene, collapsed, panelOpen bool) {
 		g.Constraints = layout.Exact(image.Pt(size.X, top))
 		fill(g, P.Background, image.Rectangle{Max: g.Constraints.Max}, 0)
 		th.dragArea(g, g.Constraints.Max)
-		left := float32(20)
-		if collapsed {
+		left, end := float32(20), float32(20)
+		switch {
+		case narrow:
+			left, end = 56, 12
+		case x == 0:
 			left = th.contentLeft()
 		}
-		// The header's own 20dp end padding plus its content's reserve for
-		// the fixed controls (pr-24), or pr-10 while the panel is open.
-		right := float32(20 + 96)
+		// The header's end padding plus its content's reserve for the
+		// fixed controls (pr-24), or pr-10 while the panel is open.
+		right := end + 96
 		if panelOpen {
-			right = 20 + 40
+			right = end + 40
 		}
-		if s.Title != "" || !s.Live {
-			pad(0, right, 0, left).Layout(g, func(gtx C) D { return th.threadHeader(gtx, s) })
+		if s.Header != nil {
+			at := image.Pt(x+dp(gtx, left), 0)
+			pad(0, right, 0, left).Layout(g, func(gtx C) D { return th.chatHeader(gtx, s, at, narrow) })
 		}
 		// Without room for the card, the details are a popover off the
-		// header's bottom right, 4dp in.
-		th.deferBelow(g, image.Pt(size.X-dp(gtx, 4+cardW), top), func(gtx C) D {
-			origin := f32.Pt(float32(dp(gtx, cardW)), 0)
-			return th.popIn(gtx, "details", !th.in.cardFits && s.Details && s.Run != nil, &origin, func(gtx C) D { return th.details(gtx, s) })
+		// header's bottom right: the card 8dp into a box whose right edge is
+		// 4dp in, as wide as the card and its padding or the header less 8,
+		// at most the window less 104dp tall, its density judged against the
+		// canvas less 52.
+		open := !th.in.cardFits && s.Details && s.Card != nil
+		box := min(dp(gtx, cardW+16), size.X-dp(gtx, 8))
+		w := max(0, box-dp(gtx, 16))
+		th.deferBelow(g, image.Pt(size.X-dp(gtx, 4)-box+dp(gtx, 8), top+dp(gtx, 8)), func(gtx C) D {
+			return th.popover(gtx, "details", open, f32.Pt(float32(w), 0), func(gtx C) D {
+				if s.Card == nil {
+					return D{}
+				}
+				gtx.Constraints = layout.Constraints{Max: image.Pt(w, max(0, size.Y-dp(gtx, 104)))}
+				return th.details(gtx, s, size.Y-top-drawer-dp(gtx, 52))
+			})
 		})
 		if panelOpen {
 			// The details toggle moves into the header while the panel is open.
 			defer op.Offset(image.Pt(size.X-dp(gtx, 12+controlSize), dp(gtx, 12))).Push(gtx.Ops).Pop()
 			th.titleButtonW(th.detailsID(), "Toggle thread details ("+ShortcutShift("B")+")",
-				titleButton{icon: "square-menu", pressed: th.detailsShown(s), disabled: s.Run == nil, tipAlign: 1})(gtx)
+				titleButton{icon: "square-menu", pressed: th.detailsShown(s), disabled: s.Card == nil, tipAlign: 1})(gtx)
 		}
 	}()
 	if drawer > 0 {
@@ -543,7 +632,10 @@ func (th *Theme) canvas(gtx C, s *Scene) {
 	size := gtx.Constraints.Max
 	fill(gtx, P.Background, image.Rectangle{Max: size}, 0)
 	cardX := size.X - dp(gtx, cardW+cardInset)
-	th.in.cardFits = s.Run != nil && cardX-dp(gtx, 32+lanePad) >= dp(gtx, laneMin) && size.Y-dp(gtx, 2*cardInset) >= dp(gtx, 160)
+	th.in.cardFits = s.Card != nil && cardX-dp(gtx, 32+lanePad) >= dp(gtx, laneMin) && size.Y-dp(gtx, 2*cardInset) >= dp(gtx, 160)
+	if th.in.cardFits && s.Details {
+		th.push(Action{ID: "details:inline", Kind: "click"})
+	}
 	cardLeft := -1
 	if th.in.cardFits && s.DetailsCard {
 		cardLeft = cardX
@@ -579,11 +671,27 @@ func (th *Theme) canvas(gtx C, s *Scene) {
 		}()
 	}
 	if cardLeft >= 0 {
+		// Inline, the card's density is judged against its slot.
+		slot := size.Y - dp(gtx, 2*cardInset)
 		defer op.Offset(image.Pt(cardX, dp(gtx, cardInset))).Push(gtx.Ops).Pop()
 		g := gtx
-		g.Constraints = layout.Constraints{Max: image.Pt(dp(gtx, cardW), size.Y-dp(gtx, 2*cardInset))}
-		th.details(g, s)
+		g.Constraints = layout.Constraints{Max: image.Pt(dp(gtx, cardW), slot)}
+		th.details(g, s, slot)
 	}
+}
+
+// popover shows w while open the way T3's popovers come and go (popover.tsx):
+// over 150ms on its ease-in-out it fades and grows in from 98% about origin
+// (in w's box), and fades and shrinks back out the same way once closed.
+func (th *Theme) popover(gtx C, id string, open bool, origin f32.Point, w W) D {
+	t := th.transition(gtx, id+".pop", open, transitionDur)
+	if t == 0 {
+		return D{}
+	}
+	defer paint.PushOpacity(gtx.Ops, t).Pop()
+	k := 0.98 + 0.02*t
+	defer op.Affine(f32.Affine2D{}.Scale(origin, f32.Pt(k, k))).Push(gtx.Ops).Pop()
+	return w(gtx)
 }
 
 // topFade fades the timeline in under the header over 25dp, as T3's mask
