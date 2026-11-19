@@ -354,8 +354,11 @@ func (th *Theme) ImageChip(n int, name string, size int) string {
 	nm, sz := chipLabel(Thumb{Name: name, Size: size})
 	_, _, end := th.chipParts(nm, sz)
 	want := end * chipEm
-	have := th.advance(UI(font.Normal), chipEm, string(ChipRune(n)))
-	wide, fine := th.advance(UI(font.Normal), chipEm, string(chipFill)), th.advance(UI(font.Normal), chipEm, string(chipFine))
+	// The fill is set in the chip rune's face, as spaces never change the
+	// face, so it's measured after the rune.
+	r := string(ChipRune(n))
+	have := th.advance(UI(font.Normal), chipEm, r)
+	wide, fine := th.advance(UI(font.Normal), chipEm, r+string(chipFill))-have, th.advance(UI(font.Normal), chipEm, r+string(chipFine))-have
 	bestA, bestB, bestOver := 1, 0, float32(1<<30)
 	for a := 0; wide > 0 && have+float32(a-1)*wide < want; a++ {
 		b := 0
