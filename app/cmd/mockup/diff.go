@@ -39,7 +39,20 @@ func diffShots() []shot {
 		{"3g-diff-no-access", 1440, 900, draw(diffAccessScene)},
 		{"3h-diff-tree-dark", 1440, 900, selected(dark(diffTreeScene))},
 		{"3i-diff-split-dark", 1440, 900, dark(diffSplitScene)},
+		{"3j-changed-files", 1440, 900, draw(changedFilesScene)},
+		{"3k-changed-files-dark", 1440, 900, dark(changedFilesScene)},
 	}
+}
+
+// changedFilesScene is a reply with its run's changed files card, the
+// Diff surface closed.
+func changedFilesScene() *ui.Scene {
+	s := runningScene()
+	items := threadItems()
+	reply := items[2]
+	reply.Files = changedFiles()
+	s.Items, s.MoreAbove = []ui.Item{items[0], items[1], reply}, false
+	return s
 }
 
 // The Diff surface's mockups: a turn's patch in the right panel, its

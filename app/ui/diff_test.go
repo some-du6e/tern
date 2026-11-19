@@ -273,3 +273,26 @@ func TestFileIcon(t *testing.T) {
 		}
 	}
 }
+
+// The tree's rows are 24dp under its 40dp header: the revealed file's row
+// takes the selection's fill, and its folder's guide shows at full
+// strength without the pointer over the tree (§3.10).
+func TestTreeRows(t *testing.T) {
+	th := NewTheme()
+	paths := []string{"a/x.go", "c/y.go"}
+	d := &DiffPanel{Key: t.Name(), Revealed: "a/x.go", RevealID: 1,
+		Tree: diff.FileTree(paths, map[string]diff.ChangeType{"a/x.go": diff.Change, "c/y.go": diff.New}, nil)}
+	for _, p := range paths {
+		d.Files = append(d.Files, DiffFile{File: diff.File{Name: p}})
+	}
+	bg, c := P.Background, diffLight
+	img := drawn(t, image.Pt(216, 200), 1, func(gtx C) D {
+		th.treePane(gtx, d)
+		return D{}
+	})
+	// Rows: a, x.go, c, y.go; the guides 1dp in plus 16, 6.4 and 8.
+	wantPixel(t, img, image.Pt(196, 76), over(c.treeSel, bg), "the revealed file's row")
+	wantPixel(t, img, image.Pt(196, 124), bg, "another file's row")
+	wantPixel(t, img, image.Pt(31, 76), over(argb(0x4084848a), bg), "its folder's guide")
+	wantPixel(t, img, image.Pt(31, 124), bg, "another folder's guide, the tree not hovered")
+}

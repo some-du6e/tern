@@ -88,12 +88,16 @@ func TestDiffActions(t *testing.T) {
 	a := testApp(t)
 	a.openID = "swiss/t1"
 	a.view = diffView()
+	ds := a.diffFor(a.openID)
+	ds.treeClosed["a/"] = true
 	if !a.diffAction("files.file:r2:a/x.go") {
 		t.Fatal("not a Diff target")
 	}
-	ds := a.diffFor(a.openID)
 	if !ds.open || !ds.active || ds.sel.Kind != "turn" || ds.sel.Run != "r2" || ds.revealed != "a/x.go" || ds.folds["turn:r2"]["a/x.go"] {
 		t.Fatalf("after opening a file: %+v", ds)
+	}
+	if ds.treeClosed["a/"] {
+		t.Error("the revealed file's folder stayed closed in the tree")
 	}
 	ds.files = nil
 	a.diffAction("diff.scope:unstaged")
