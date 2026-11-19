@@ -244,6 +244,90 @@ type sentThumb struct {
 	shown   uint64
 }
 
+// gallery is the image dialog: a message's pictures by attachment id, the
+// one shown, and it decoded whole once fetched.
+type gallery struct {
+	env             *envState
+	ids, names      []string
+	index           int
+	picture         ui.Picture
+	loading, failed bool
+}
+
+// fetchWhole fetches an attachment for the image dialog. Tests replace it.
+var fetchWhole = func(conn *t3.Conn, id string) ([]byte, error) { return conn.FetchAttachment(id) }
+
+// openGallery opens the image dialog on picture n of user message msg, and
+// takes the keyboard's focus off the composer, so the arrows step through
+// the message's pictures (ExpandedImageDialog.tsx).
+func (a *App) openGallery(th *ui.Theme, msg string, n int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	v := a.view
+	if v == nil {
+		return
+	}
+	for _, it := range v.items {
+		if it.Type != "user_message" || it.MessageID != msg {
+			continue
+		}
+		g := &gallery{env: v.env}
+		for _, raw := range it.Attachments {
+			var at t3.Attachment
+			if json.Unmarshal(raw, &at) == nil && at.Type == "image" && at.ID != "" {
+				g.ids, g.names = append(g.ids, at.ID), append(g.names, at.Name)
+			}
+		}
+		if n < 0 || n >= len(g.ids) {
+			return
+		}
+		g.index = n
+		a.gallery = g
+		a.showGallery()
+		if th != nil {
+			th.Unfocus()
+		}
+		return
+	}
+}
+
+// stepGallery shows the image dialog's next picture, or by -1 the one
+// before, round the message's. Call with the lock held.
+func (a *App) stepGallery(by int) {
+	if g := a.gallery; g != nil {
+		g.index = (g.index + by + len(g.ids)) % len(g.ids)
+		a.showGallery()
+	}
+}
+
+// showGallery fetches the image dialog's picture, showing its thumbnail
+// meanwhile. Call with the lock held.
+func (a *App) showGallery() {
+	g := a.gallery
+	conn, id := g.env.conn, g.ids[g.index]
+	g.picture, g.loading, g.failed = ui.Picture{}, true, false
+	if st := a.sent[g.env.id()+"/"+id]; st != nil {
+		g.picture = st.picture
+	}
+	if conn == nil {
+		g.loading, g.failed = false, true
+		return
+	}
+	go func() {
+		data, err := fetchWhole(conn, id)
+		p := ui.Picture{}
+		if err == nil {
+			p = ui.NewFullPicture(data)
+		}
+		a.mu.Lock()
+		if a.gallery == g && g.ids[g.index] == id {
+			g.picture, g.loading, g.failed = p, false, !p.Loaded()
+		}
+		a.mu.Unlock()
+		a.changed()
+	}()
+}
+
 // sentBudget is how many bytes of decoded sent pictures tern keeps: past
 // it, those shown longest ago go, to load again if they're shown again.
 var sentBudget = 48 << 20

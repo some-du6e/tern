@@ -96,6 +96,10 @@ func (th *Theme) Desktop(gtx C, s *Scene) D {
 		// deferred, so they sit above this.
 		th.hit(gtx, "menus.close", size)
 	}
+	// The image dialog goes over all of it (z 60).
+	if s.Gallery != nil {
+		th.gallery(gtx, s.Gallery)
+	}
 	return D{Size: size}
 }
 

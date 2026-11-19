@@ -379,6 +379,14 @@ func phoneScene() *ui.Scene {
 	return s
 }
 
+// galleryScene is the running thread with its picture open in the image
+// dialog, the second of two.
+func galleryScene() *ui.Scene {
+	s := runningScene()
+	s.Gallery = &ui.Gallery{Picture: screenshot(960, 600), Name: "retry-log.png", Index: 1, Count: 2}
+	return s
+}
+
 // settledScene is a finished thread with the timeline's other rows.
 func settledScene() *ui.Scene {
 	s := base("Gio sidebar: virtualize 1k rows")

@@ -52,6 +52,7 @@ func main() {
 			defer ui.SetDark(false)
 			return th.Desktop(gtx, settledScene())
 		}},
+		{"8c-image-dialog", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, galleryScene()) }},
 	}
 	if *anim != "" {
 		if err := renderAnims(th, float32(*scale), *anim); err != nil {

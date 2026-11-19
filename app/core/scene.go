@@ -466,6 +466,10 @@ func (a *App) threadScene(s *ui.Scene) {
 			root = e.projects[t.ProjectID].WorkspaceRoot
 		}
 		a.timeline(s, t, v, root)
+		if g := a.gallery; g != nil {
+			s.Gallery = &ui.Gallery{Picture: g.picture, Name: g.names[g.index], Index: g.index, Count: len(g.ids),
+				Loading: g.loading, Failed: g.failed}
+		}
 		if len(s.Timeline.Rows) == 0 && !v.more {
 			s.Empty = "Send a message to start the conversation."
 		}

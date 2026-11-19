@@ -131,6 +131,56 @@ func TestChipAtTheEnd(t *testing.T) {
 	}
 }
 
+// Clicking a sent picture opens the image dialog on it, whole once
+// fetched, the message's others a step away round them; Escape closes it
+// (ExpandedImageDialog.tsx).
+func TestGallery(t *testing.T) {
+	defer func(f func(*t3.Conn, string) ([]byte, error)) { fetchWhole = f }(fetchWhole)
+	fetched := make(chan string, 4)
+	fetchWhole = func(_ *t3.Conn, id string) ([]byte, error) {
+		fetched <- id
+		return pngBytes(t), nil
+	}
+	pic := func(id, name string) map[string]any {
+		return map[string]any{"type": "image", "id": id, "name": name, "mimeType": "image/png", "sizeBytes": 10}
+	}
+	tt := newTimelineTest(t, nil, turnItem("p", "user_message", 1, 0, "text", "Look", "inputIntent", "turn_start",
+		"attachments", []any{pic("i1", "one.png"), pic("i2", "two.png")}))
+	e, _ := tt.a.thread("swiss/t1")
+	e.conn = new(t3.Conn)
+	// Their thumbnails are in, so the timeline fetches none.
+	tt.a.sent["swiss/i1"], tt.a.sent["swiss/i2"] = &sentThumb{}, &sentThumb{}
+	shown := func() *ui.Gallery {
+		tt.a.mu.Lock()
+		defer tt.a.mu.Unlock()
+		return tt.a.build(t0.Add(time.Hour)).Gallery
+	}
+	loaded := func(want string) *ui.Gallery {
+		t.Helper()
+		if id := <-fetched; id != want {
+			t.Fatalf("fetched %s, want %s", id, want)
+		}
+		g := shown()
+		for i := 0; i < 200 && g.Loading; i++ {
+			time.Sleep(10 * time.Millisecond)
+			g = shown()
+		}
+		return g
+	}
+	tt.click("image.open:p:1")
+	if g := loaded("i2"); g.Name != "two.png" || g.Index != 1 || g.Count != 2 || !g.Picture.Loaded() || g.Failed {
+		t.Fatalf("opened on %+v", g)
+	}
+	tt.click("gallery.next")
+	if g := loaded("i1"); g.Name != "one.png" || g.Index != 0 {
+		t.Fatalf("the next one round is %+v", g)
+	}
+	tt.a.Handle(nil, []ui.Action{{ID: "composer", Kind: "key", Text: "⎋"}})
+	if g := shown(); g != nil {
+		t.Errorf("Escape left the dialog open on %+v", g)
+	}
+}
+
 // Sent pictures stay decoded up to sentBudget: past it, the ones shown
 // longest ago go, but never one the last scene showed.
 func TestSentPicturesBudget(t *testing.T) {

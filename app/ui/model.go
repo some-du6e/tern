@@ -229,10 +229,11 @@ type Scene struct {
 	Panel   int // which right panel tab is open
 	Browser *Browser
 
-	Picker *ModelPicker
-	Traits *Traits
-	Diff   *DiffView
-	Login  *SignIn
+	Picker  *ModelPicker
+	Traits  *Traits
+	Diff    *DiffView
+	Gallery *Gallery // the image dialog, over everything
+	Login   *SignIn
 
 	Phase float64 // spinner angle, so a frame can show motion
 

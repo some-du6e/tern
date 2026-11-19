@@ -80,6 +80,7 @@ type App struct {
 	// reply whose fork is on its way.
 	cited   citedReply
 	forking string
+	gallery *gallery // the image dialog, while it's open
 
 	choices map[string]*choice       // per thread ref, or "draft"
 	images  map[string][]pastedImage // pasted and not sent yet, same keys
@@ -814,6 +815,7 @@ func (a *App) closeThreadLocked() {
 	a.view = nil
 	a.openID = ""
 	a.picker, a.traitsOpen, a.accessOpen, a.projectsOpen = nil, false, false, false
+	a.gallery = nil
 }
 
 // openThread shows a thread, by ref, and subscribes to it. Call without the

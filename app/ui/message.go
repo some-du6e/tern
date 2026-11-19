@@ -6,6 +6,7 @@ import (
 	"image/color"
 	"math"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,16 +30,29 @@ import (
 type Picture struct {
 	Name string
 	op   paint.ImageOp
-	size image.Point
-	ok   bool
+	size image.Point // as decoded
+	// natural is the file's own size, which the image dialog shows it at
+	// when it fits.
+	natural image.Point
+	ok      bool
 }
 
 // Bytes is how much memory the decoded picture takes.
 func (p Picture) Bytes() int { return 4 * p.size.X * p.size.Y }
 
+// Loaded reports whether the picture decoded.
+func (p Picture) Loaded() bool { return p.ok }
+
 // NewPicture decodes an image file's bytes for the timeline. A picture it
 // can't decode shows as its name.
-func NewPicture(data []byte) Picture {
+func NewPicture(data []byte) Picture { return decodePicture(data, 1200, 384) }
+
+// NewFullPicture decodes an image file's bytes for the image dialog: whole,
+// unless it's over 3200px.
+func NewFullPicture(data []byte) Picture { return decodePicture(data, 3200, 3200) }
+
+// decodePicture decodes data scaled down to fit maxW by maxH px.
+func decodePicture(data []byte, maxW, maxH int) Picture {
 	src, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		return Picture{}
@@ -47,14 +61,14 @@ func NewPicture(data []byte) Picture {
 	if b.Empty() {
 		return Picture{}
 	}
-	h := min(b.Dy(), 384)
+	h := min(b.Dy(), maxH)
 	w := max(1, b.Dx()*h/b.Dy())
-	if w > 1200 {
-		w, h = 1200, max(1, b.Dy()*1200/b.Dx())
+	if w > maxW {
+		w, h = maxW, max(1, b.Dy()*maxW/b.Dx())
 	}
 	dst := image.NewRGBA(image.Rect(0, 0, w, h))
 	draw.ApproxBiLinear.Scale(dst, dst.Bounds(), src, b, draw.Src, nil)
-	return Picture{op: paint.NewImageOp(dst), size: image.Pt(w, h), ok: true}
+	return Picture{op: paint.NewImageOp(dst), size: image.Pt(w, h), natural: b.Size(), ok: true}
 }
 
 // cover draws p filling r, cropped to its middle as object-cover does.
@@ -679,6 +693,12 @@ func (th *Theme) media(gtx C, m *Message, words bool) D {
 			off.Pop()
 		}
 	}()
+	// Each opens the image dialog on itself.
+	for i, c := range cells {
+		off := op.Offset(c.Min).Push(gtx.Ops)
+		th.hit(gtx, "image.open:"+m.ID+":"+strconv.Itoa(i), c.Size())
+		off.Pop()
+	}
 	// The 1dp ring inside the edge, over the pictures.
 	px := float32(max(1, dp(gtx, 1)))
 	var ring clip.Path

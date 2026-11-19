@@ -71,7 +71,14 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		a.answer(th)
 		return
 	case act.Kind == "key" && act.Text == "⎋":
-		a.closeMenus()
+		// Escape closes the image dialog first.
+		a.mu.Lock()
+		open := a.gallery != nil
+		a.gallery = nil
+		a.mu.Unlock()
+		if !open {
+			a.closeMenus()
+		}
 		return
 	case act.Kind == "middle":
 		return
@@ -260,6 +267,18 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		a.goToCited(th, arg)
 	case "fork":
 		a.forkFrom(arg)
+	case "image.open":
+		// "<message>:<n>": the message's picture n.
+		i := strings.LastIndexByte(arg, ':')
+		a.openGallery(th, arg[:max(0, i)], atoi(arg[i+1:]))
+	case "gallery.close":
+		a.mu.Lock()
+		a.gallery = nil
+		a.mu.Unlock()
+	case "gallery.prev", "gallery.next":
+		a.mu.Lock()
+		a.stepGallery(map[string]int{"gallery.prev": -1, "gallery.next": 1}[verb])
+		a.mu.Unlock()
 	case "plan.download":
 		a.download(arg, []byte(act.Text))
 	case "file.download":
