@@ -228,7 +228,7 @@ func TestTermDrawerFrame(t *testing.T) {
 		wantPixel(t, img, image.Pt(x, y+11), line, "toolbar's left border")
 		wantPixel(t, img, image.Pt(x+88, y+11), line, "toolbar's right border")
 		wantPixel(t, img, image.Pt(x+22, y+11), line, "first separator")
-		wantPixel(t, img, image.Pt(x+2, y+2), P.Background, "a button")
+		wantPixel(t, img, image.Pt(x+30, y+3), P.Background, "a button, above its icon")
 	}
 }
 
@@ -267,10 +267,19 @@ func TestTermDrawerEmpty(t *testing.T) {
 		return D{Size: gtx.Constraints.Max}
 	})
 	// The text is 20 tall, then 12, then the 24dp button, centred in
-	// 279 less 48 of padding: the button's top is at 1+24+87+32 = 144,
-	// and its label starts a few dp lower.
-	wantPixel(t, img, image.Pt(592, 146), over(P.Popover, P.Background), "New Terminal button")
-	wantPixel(t, img, image.Pt(592, 143), P.Background, "above the button")
+	// 279 less 48 of padding: the button's top border is about
+	// 1+24+87+32 = 144 down the middle, its fill just under it.
+	border := over(P.Input, P.Background)
+	top := -1
+	for y := 136; y < 200 && top < 0; y++ {
+		if c := img.RGBAAt(592, y); c.R == border.R && c.G == border.G && c.B == border.B {
+			top = y
+		}
+	}
+	if top < 141 || top > 147 {
+		t.Fatalf("the button's top border is at %d, want about 144", top)
+	}
+	wantPixel(t, img, image.Pt(592, top+2), over(P.Popover, P.Background), "New Terminal button")
 	wantPixel(t, img, image.Pt(592, 60), P.Background, "above the note")
 }
 
@@ -492,7 +501,7 @@ func TestTermPointerSelection(t *testing.T) {
 		return f32.Pt(termPad+(float32(col)+0.5)*cells.w, 1+termPad+float32(cells.h)/2)
 	}
 	frame(pointer.Event{Kind: pointer.Press, Position: at(0), Buttons: pointer.ButtonPrimary, Source: pointer.Mouse},
-		pointer.Event{Kind: pointer.Drag, Position: at(4), Buttons: pointer.ButtonPrimary, Source: pointer.Mouse},
+		pointer.Event{Kind: pointer.Move, Position: at(4), Buttons: pointer.ButtonPrimary, Source: pointer.Mouse},
 		pointer.Event{Kind: pointer.Release, Position: at(4), Source: pointer.Mouse})
 	p := th.pane(v, v.Panes[0].ID)
 	if got := termSelText(scr, p.g, p.sel); got != "hello" {
