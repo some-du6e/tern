@@ -7,11 +7,13 @@ import (
 	"time"
 
 	"gioui.org/f32"
+	"gioui.org/io/event"
 	gioinput "gioui.org/io/input"
 	"gioui.org/io/key"
 	"gioui.org/io/pointer"
 	"gioui.org/layout"
 	"gioui.org/op"
+	"gioui.org/op/clip"
 	"gioui.org/unit"
 )
 
@@ -218,6 +220,134 @@ func TestComposerSendKeys(t *testing.T) {
 	}
 	if got := th.EditorText("composer"); got != "hi\n" {
 		t.Fatalf("Alt+Enter: %q, want a newline", got)
+	}
+}
+
+// Typed with nothing focused, a letter, a digit or a space goes into the
+// prompt, which takes the focus (composerFocusRedirect.ts); typed in the
+// terminal it's the terminal's, and so are the composer's chords, Mod+S
+// among them (T3's are all "!terminalFocus").
+func TestTypeToFocus(t *testing.T) {
+	th := NewTheme()
+	scene := &Scene{Live: true, Model: "Opus 5.5"}
+	var r gioinput.Router
+	var ops op.Ops
+	term, blur := false, false
+	var got []key.Name
+	frame := func() []Action {
+		ops.Reset()
+		gtx := layout.Context{Ops: &ops, Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Exact(image.Pt(800, 400)), Source: r.Source(), Now: time.Now()}
+		func() {
+			defer op.Offset(image.Pt(0, 250)).Push(gtx.Ops).Pop()
+			g := gtx
+			g.Constraints = layout.Constraints{Max: image.Pt(736, 400)}
+			th.composerArea(g, scene, false)
+		}()
+		// A terminal drawer laid out after the composer, as the shell does.
+		tag := &th.in.term
+		for {
+			ev, ok := gtx.Event(key.FocusFilter{Target: tag}, key.Filter{Focus: tag, Name: "", Optional: key.ModCtrl | key.ModShift | key.ModAlt})
+			if !ok {
+				break
+			}
+			if ke, ok := ev.(key.Event); ok && ke.State == key.Press {
+				got = append(got, ke.Name)
+			}
+		}
+		func() {
+			defer clip.Rect{Max: image.Pt(800, 100)}.Push(gtx.Ops).Pop()
+			event.Op(gtx.Ops, tag)
+		}()
+		switch {
+		case term:
+			gtx.Execute(key.FocusCmd{Tag: tag})
+			term = false
+		case blur:
+			gtx.Execute(key.FocusCmd{})
+			blur = false
+		}
+		r.Frame(&ops)
+		return th.Actions()
+	}
+	press := func(name key.Name, mods key.Modifiers) []Action {
+		r.Queue(key.Event{Name: name, Modifiers: mods, State: key.Press}, key.Event{Name: name, Modifiers: mods, State: key.Release})
+		return frame()
+	}
+	frame()
+	for _, c := range []struct {
+		name key.Name
+		mods key.Modifiers
+		want string
+	}{{"H", key.ModShift, "H"}, {"7", 0, "7"}, {key.NameSpace, 0, " "}} {
+		th.SetEditorText("composer", "")
+		blur = true
+		frame()
+		press(c.name, c.mods)
+		if text := th.EditorText("composer"); text != c.want {
+			t.Fatalf("%s typed with nothing focused: prompt %q, want %q", c.name, text, c.want)
+		}
+	}
+	th.SetEditorText("composer", "")
+	term = true
+	frame()
+	frame()
+	press("L", 0)
+	acts := press("S", key.ModShortcut)
+	if text := th.EditorText("composer"); text != "" || keyed(acts, "stash.save", "click", "") {
+		t.Fatalf("typed in the terminal: prompt %q, actions %+v", text, acts)
+	}
+	if len(got) != 2 || got[0] != "L" || got[1] != "S" {
+		t.Fatalf("the terminal got %v, want L and S", got)
+	}
+}
+
+// With a question open, 1 to 9 pick its options, but not while it's
+// folded away: then a digit is typed into the prompt like any other
+// (ComposerPendingUserInputPanel.tsx).
+func TestQuestionDigits(t *testing.T) {
+	th := NewTheme()
+	q := Question{Header: "Session", Text: "Which one?", Options: []string{"A", "B"}, Chosen: []bool{false, false}}
+	scene := &Scene{Live: true, Model: "Opus 5.5", Questions: []Question{q}}
+	r, frame := composerFrames(th, func() *Scene { return scene })
+	press := func(name key.Name) []Action {
+		r.Queue(key.Event{Name: name, State: key.Press}, key.Event{Name: name, State: key.Release})
+		return frame()
+	}
+	frame()
+	if acts := press("2"); !keyed(acts, "q:0:1", "click", "") {
+		t.Fatalf("2 with the question open: %+v", acts)
+	}
+	th.in.composer.qFolded = q.Header + "\x00" + q.Text
+	frame()
+	if acts := press("2"); keyed(acts, "q:0:1", "click", "") {
+		t.Fatalf("2 with the question folded picked an option: %+v", acts)
+	}
+	if text := th.EditorText("composer"); text != "2" {
+		t.Fatalf("2 with the question folded: prompt %q", text)
+	}
+}
+
+// The stash's open list closes on a press outside it, though the press
+// still reaches what it's on; a press in the list doesn't close it
+// (ComposerStashMenu.tsx).
+func TestStashOutsidePress(t *testing.T) {
+	th := NewTheme()
+	scene := &Scene{Live: true, Model: "Opus 5.5", StashOpen: true, Stash: []Stashed{{Snippet: "first idea", Age: "4m ago"}, {Snippet: "second", Age: "1h ago"}}}
+	r, frame := composerFrames(th, func() *Scene { return scene })
+	click := func(at f32.Point) []Action {
+		r.Queue(pointer.Event{Kind: pointer.Move, Position: at, Source: pointer.Mouse},
+			pointer.Event{Kind: pointer.Press, Position: at, Buttons: pointer.ButtonPrimary, Source: pointer.Mouse},
+			pointer.Event{Kind: pointer.Release, Position: at, Source: pointer.Mouse})
+		return frame()
+	}
+	frame()
+	// The tab puts the card at 284; the list rises 98dp from 17 under its
+	// top: its rows are 231..256 and 256..280.
+	if acts := click(f32.Pt(300, 240)); keyed(acts, "stash.close", "click", "") || !keyed(acts, "stash.restore:0", "click", "") {
+		t.Fatalf("a press on a row: %+v", acts)
+	}
+	if acts := click(f32.Pt(5, 5)); !keyed(acts, "stash.close", "click", "") {
+		t.Fatalf("a press outside: %+v", acts)
 	}
 }
 

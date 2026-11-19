@@ -31,7 +31,8 @@ type ImageRecord struct {
 }
 
 // NewImageRecord describes an uploaded picture. id is the client's own id
-// for it, a UUID; label is what the prompt calls it ("Image 1").
+// for it, a UUID; label is what the prompt calls it, its file's name
+// ("screenshot.png").
 func NewImageRecord(id, label string, a Attachment) ImageRecord {
 	return ImageRecord{Version: 1, Kind: "image", ContextID: "image_" + id, Label: contextLabel(label, "image"),
 		AttachmentID: a.ID, Name: a.Name, MimeType: a.MimeType, SizeBytes: a.SizeBytes}

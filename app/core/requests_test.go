@@ -142,30 +142,46 @@ func TestTypingGuard(t *testing.T) {
 }
 
 // Stop goes to "Stopping" when clicked, "Stopped" once the run can't be
-// stopped, and back once it can, or a new run starts (ComposerPrimaryActions.tsx).
+// stopped, and back once it can, or a new run starts; a stop that never
+// lands times out after 10s (ComposerPrimaryActions.tsx). It's the open
+// thread's: another thread's Stop takes its click whatever happened here.
 func TestStopPhase(t *testing.T) {
 	a := testApp(t)
+	th := ui.NewTheme()
 	a.openThread("swiss/t1")
-	_, th := a.thread("swiss/t1")
-	th.ActiveRunID = "run1"
+	_, t1 := a.thread("swiss/t1")
+	t1.ActiveRunID = "run1"
+	stop := func() ui.StopPhase {
+		a.handle(th, ui.Action{ID: "stop", Kind: "click"})
+		return a.build(time.Now()).Stop
+	}
+	if got := stop(); got != ui.StopPending {
+		t.Fatalf("after a click Stop is %v, want pending", got)
+	}
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	if !a.stopClicked() || a.stopPhase(time.Now()) != ui.StopPending {
-		t.Fatal("a click isn't pending")
+	a.stopping.at = time.Now().Add(-11 * time.Second)
+	a.mu.Unlock()
+	if got := a.build(time.Now()).Stop; got != ui.StopTimedOut {
+		t.Fatalf("10s on Stop is %v, want timed out", got)
 	}
-	if a.stopClicked() {
-		t.Fatal("a second click went through while stopping")
+	t1.ActiveRunID = ""
+	if got := a.build(time.Now()).Stop; got != ui.StopLanded {
+		t.Fatalf("the run stopped, and Stop is %v, want landed", got)
 	}
-	if a.stopPhase(time.Now().Add(11*time.Second)) != ui.StopTimedOut {
-		t.Fatal("10s on, it hasn't timed out")
+	// Another running thread's Stop isn't this one's.
+	a.openThread("swiss/same")
+	_, other := a.thread("swiss/same")
+	other.ActiveRunID = "run9"
+	if got := a.build(time.Now()).Stop; got != ui.StopIdle {
+		t.Fatalf("another thread's Stop is %v, want idle", got)
 	}
-	th.ActiveRunID = ""
-	if a.stopPhase(time.Now()) != ui.StopLanded {
-		t.Fatal("the run stopped, but Stop hasn't landed")
+	if got := stop(); got != ui.StopPending {
+		t.Fatalf("a click on another thread's Stop left it %v, want pending", got)
 	}
-	th.ActiveRunID = "run2"
-	if a.stopPhase(time.Now()) != ui.StopIdle {
-		t.Fatal("a new run, but Stop's still stopped")
+	a.openThread("swiss/t1")
+	t1.ActiveRunID = "run2"
+	if got := a.build(time.Now()).Stop; got != ui.StopIdle {
+		t.Fatalf("a new run, and Stop is %v, want idle", got)
 	}
 }
 

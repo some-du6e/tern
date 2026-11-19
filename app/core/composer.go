@@ -42,9 +42,19 @@ type composerState struct {
 	stashOpen bool         // their list is open
 	stashSel  int          // its highlighted row
 	stashed   time.Time    // when a prompt was last put aside, for the tab's pulse
-	// editing is the queued run whose message is in the composer, and
-	// editSaved the draft it took the place of.
-	editing, editSaved string
+	// edits is the queued messages being edited, by their thread's ref.
+	edits map[string]*queuedEdit
+}
+
+// queuedEdit is a queued message being edited in its thread's composer
+// (useQueuedRunEdit.ts). It's its thread's, so it outlives a switch away
+// and never takes another composer over: while it's on, the thread's own
+// draft waits in draft, and while the thread isn't open, the edit's text
+// waits in text.
+type queuedEdit struct {
+	run, original string // the queued run, and its message's text as it was
+	draft, text   string
+	saving        bool // queued-run.edit is on its way
 }
 
 // pathSearch is what projects.searchEntries found for a query in a
@@ -282,11 +292,11 @@ func rank(items []menuItem) []menuItem {
 
 // slashItems is the / menu (useComposerMenuItems.ts, composerSlashCommandSearch.ts):
 // /model, /clear where a fresh session can start, then the provider's
-// commands (only at the prompt's start, /compact only with nothing before
-// it, and not its own /clear where T3's is: that would clear a session T3
-// still treats as live) and its skills as /skill:name, ranked against the
-// query.
-func slashItems(p *t3.Provider, t *trigger, before string, fresh bool) []menuItem {
+// commands (only at the prompt's start, /compact only where compact says
+// it can go, and not its own /clear where T3's is: that would clear a
+// session T3 still treats as live) and its skills as /skill:name, ranked
+// against the query.
+func slashItems(p *t3.Provider, t *trigger, compact, fresh bool) []menuItem {
 	items := []menuItem{{Suggestion: ui.Suggestion{Label: "/model", Desc: "Switch response model for this thread"}, model: true, tie: "0\x00model"}}
 	if fresh && t.start == 0 {
 		items = append(items, menuItem{Suggestion: ui.Suggestion{Label: "/clear", Desc: "Start a fresh session; earlier messages stay visible"}, clear: true, tie: "0\x01clear"})
@@ -299,7 +309,7 @@ func slashItems(p *t3.Provider, t *trigger, before string, fresh bool) []menuIte
 			names[strings.ToLower(strings.TrimSpace(s.Name))] = true
 		}
 		for _, c := range p.SlashCommands {
-			if t.start != 0 || names[strings.ToLower(strings.TrimSpace(c.Name))] || (c.Name == "compact" && strings.TrimSpace(before) != "") || (c.Name == "clear" && fresh) {
+			if t.start != 0 || names[strings.ToLower(strings.TrimSpace(c.Name))] || (c.Name == "compact" && !compact) || (c.Name == "clear" && fresh) {
 				continue
 			}
 			desc := c.Description
@@ -803,7 +813,10 @@ func (a *App) composerChanged(th *ui.Theme, text string) {
 	p := a.provider(a.choiceFor(a.composerKey()).sel.InstanceID)
 	switch t.kind {
 	case "slash":
-		c.items = slashItems(p, t, string(runes[:t.start]), a.freshCommand())
+		// /compact goes alone, on a thread that can compact now
+		// (compactSlashCommandAvailable).
+		alone := strings.TrimSpace(string(runes[:t.start])) == "" && strings.TrimSpace(string(runes[t.end:])) == "" && len(a.images[a.imageKey()]) == 0
+		c.items = slashItems(p, t, alone && a.canCompact(), a.freshCommand())
 	case "skill":
 		c.items = skillItems(p, t)
 	case "path":
@@ -817,6 +830,16 @@ func (a *App) composerChanged(th *ui.Theme, text string) {
 		}
 	}
 	c.sel = min(c.sel, max(0, len(c.items)-1))
+}
+
+// canCompact is whether the open thread can compact its history now
+// (ChatView.tsx compactThreadUnavailable): a thread, not a new one, with
+// messages, on a connected machine, not working and with no approval or
+// question waiting. Call with the lock held.
+func (a *App) canCompact() bool {
+	e, t := a.thread(a.openID)
+	return a.draft == "" && t != nil && e.conn != nil && a.view != nil && a.view.loaded && len(a.view.messages) > 0 &&
+		threadState(t) != ui.ThreadRunning && len(a.shownApprovals()) == 0 && len(a.questionsLocked()) == 0
 }
 
 // freshSession is whether the open thread's next message can start a
@@ -1120,8 +1143,11 @@ func (a *App) answerAll(th *ui.Theme) {
 		return
 	}
 	pics := map[string][]pastedImage{}
+	var keys []string
 	for _, q := range qs {
-		if imgs := a.images[a.questionKey(req, q.ID)]; len(imgs) > 0 {
+		k := a.questionKey(req, q.ID)
+		keys = append(keys, k)
+		if imgs := a.images[k]; len(imgs) > 0 {
 			pics[q.ID] = imgs
 		}
 	}
@@ -1143,9 +1169,8 @@ func (a *App) answerAll(th *ui.Theme) {
 		if err != nil {
 			a.fail(err)
 		} else {
-			for _, q := range qs {
-				delete(a.images, a.questionKey(req, q.ID))
-			}
+			// The answers have their pictures (questionAttachmentDraftId).
+			a.dropImages(keys)
 		}
 		a.mu.Unlock()
 		a.changed()
@@ -1205,6 +1230,31 @@ func (a *App) answering(req string) bool {
 // (questionAttachmentDraftId). Call with the lock held.
 func (a *App) questionKey(req, id string) string {
 	return a.composerKey() + "\x00" + req + "\x00" + id
+}
+
+// questionKeys is where the pictures for each of req's questions go. Call
+// with the lock held.
+func (a *App) questionKeys(req string) []string {
+	var keys []string
+	if a.view != nil {
+		for _, it := range a.view.items {
+			if it.RequestID == req {
+				for _, q := range it.Questions {
+					keys = append(keys, a.questionKey(req, q.ID))
+				}
+			}
+		}
+	}
+	return keys
+}
+
+// dropImages lets go of the pictures under keys, and the ones their chips'
+// undo could bring back. Call with the lock held.
+func (a *App) dropImages(keys []string) {
+	for _, k := range keys {
+		delete(a.images, k)
+		delete(a.trash, k)
+	}
 }
 
 // imageKey is where the composer's pictures go: its own, or with a

@@ -9,7 +9,12 @@ import (
 	"testing"
 	"time"
 
+	"gioui.org/f32"
+	gioinput "gioui.org/io/input"
+	"gioui.org/io/pointer"
+	"gioui.org/layout"
 	"gioui.org/op"
+	"gioui.org/unit"
 )
 
 // drawComposer draws a thread's composer the way the canvas does, in a
@@ -119,10 +124,304 @@ func TestComposerSendStates(t *testing.T) {
 	sky(drawComposer(t, th, s, 200, 0), "steer")
 	s.Composer = ""
 	wantPixel(t, drawComposer(t, th, s, 200, 0), image.Pt(699, 87), over(alpha(P.Destructive, 0xe6), glass()), "stop")
-	// A stop on its way: Stop stays, off at 64%.
+	// A stop on its way: Stop stays, off at 64% over the glass as Chrome
+	// composites it, #fd868b in light, not the paler #fca8aa Gio's layer
+	// opacity makes.
 	s.Stop = StopPending
-	if c := drawComposer(t, th, s, 200, 0).RGBAAt(699, 87); near(c, over(alpha(P.Destructive, 0xe6), glass())) {
-		t.Errorf("stopping: Stop is %v, still at full strength", c)
+	wantPixel(t, drawComposer(t, th, s, 200, 0), image.Pt(699, 87), rgb(0xfd868b), "stopping")
+}
+
+// With nothing to send the button is at 64% over the glass, the way
+// Chrome composites it in sRGB (§3.5, measured live): its art faded onto
+// the glass and its arrow white at 64%, which on dark's #0e0e0e glass is
+// #a8a8a8.
+func TestDisabledSend(t *testing.T) {
+	defer SetDark(false)
+	data, err := artFiles.ReadFile("art/send-night@1x.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	art, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []bool{false, true} {
+		SetDark(d)
+		th := NewTheme()
+		s := &Scene{Model: "Opus 5.5"}
+		g := glass()
+		sky := color.NRGBAModel.Convert(art.At(5, 9)).(color.NRGBA)
+		wantPixel(t, drawComposer(t, th, s, 200, 0), image.Pt(700, 80), faded(sky, g, 0xa3), "the art at 64%")
+		// The arrow's 1.8dp stroke covers whole pixels at 2x.
+		img := drawn(t, image.Pt(736, 200), 2, func(gtx C) D {
+			fill(gtx, P.Background, image.Rect(0, 0, 1472, 400), 0)
+			return th.composerArea(gtx, s, false)
+		})
+		wantPixel(t, img, image.Pt(1422, 173), faded(rgb(0xffffff), g, 0xa3), "the arrow at 64%")
+	}
+	if c := faded(rgb(0xffffff), rgb(0x0e0e0e), 0xa3); c != rgb(0xa8a8a8) {
+		t.Errorf("white at 64%% over #0e0e0e is %v, want T3's #a8a8a8", c)
+	}
+}
+
+// The question's Submit is off until it has its answer: at 64% over the
+// glass, as Chrome composites it, and without its shadow.
+func TestSubmitDisabled(t *testing.T) {
+	th := NewTheme()
+	s := &Scene{Model: "Opus 5.5", Questions: []Question{{Header: "Session", Text: "Which one?", Options: []string{"A", "B"}, Chosen: []bool{false, false}, NoCustom: true}}}
+	img := drawComposer(t, th, s, 400, 0)
+	if n := countAll(img, faded(P.MessageAction, glass(), 0xa3)); n < 1000 {
+		t.Errorf("%d pixels of the faded Submit, want the pill", n)
+	}
+	if n := countAll(img, P.MessageAction); n != 0 {
+		t.Errorf("%d pixels of --message-action at full strength on a disabled Submit", n)
+	}
+}
+
+// While the answers are on their way the options are at 50% over the
+// glass (§3.12), composited as Chrome does: the picked radio's --primary
+// half way to the glass.
+func TestAnsweringOptions(t *testing.T) {
+	th := NewTheme()
+	s := &Scene{Model: "Opus 5.5", Answering: true, Questions: []Question{{Header: "Session", Text: "Which one?", Options: []string{"A", "B"}, Chosen: []bool{false, true}}}}
+	img := drawComposer(t, th, s, 400, 0)
+	wantPixel(t, img, image.Pt(61, 119), faded(P.Primary, glass(), 0x80), "the picked radio at 50%")
+}
+
+// The trigger's provider mark is its 16dp wrapper at the content's start,
+// the name 22 on (ProviderModelPicker.tsx; measured live: 157.75 wide for
+// Opus 5.5 at Medium, the label at content + 22).
+func TestTriggerGeometry(t *testing.T) {
+	th := NewTheme()
+	s := &Scene{Composer: "hi", Provider: "Claude", Model: "Opus 5.5", Effort: "Medium", Picker: &ModelPicker{Tabs: []PickerTab{{}}}}
+	img := drawComposer(t, th, s, 200, 0)
+	accent := over(P.Accent, glass())
+	// Along a row under its text, the open trigger's fill runs from its
+	// start, less the antialiased edge of its corner.
+	left := 682
+	for left > 45 && near(img.RGBAAt(left-1, 97), accent) {
+		left--
+	}
+	left--
+	if w := 687 - left; w < 155 || w > 161 {
+		t.Errorf("the trigger is %d wide from x %d, want T3's 157.75", w, left)
+	}
+	mark := -1
+	for x := left; x < 687 && mark < 0; x++ {
+		for y := 75; y < 100; y++ {
+			if near(img.RGBAAt(x, y), rgb(0xd97757)) {
+				mark = x
+				break
+			}
+		}
+	}
+	if mark < left+9 || mark > left+11 {
+		t.Errorf("the provider's mark starts at %d, want the content's start, %d", mark, left+9)
+	}
+	if l, _ := ink(img, 78, 96, left+26, 687); l < left+31 || l > left+34 {
+		t.Errorf("the name's ink starts at %d, want the content's start + 22, %d", l, left+31)
+	}
+}
+
+// Dark's top highlight is an inset shadow, 1dp of #ffffff08 down inside
+// the outline: it follows the corners' curve, painted from about x 12 on
+// the row under the top border (§3.2, measured live #151515).
+func TestDarkHighlight(t *testing.T) {
+	defer SetDark(false)
+	SetDark(true)
+	th := NewTheme()
+	img := drawComposer(t, th, &Scene{Model: "Opus 5.5"}, 200, 0)
+	hl := over(alpha(rgb(0xffffff), 0x08), glass())
+	wantPixel(t, img, image.Pt(14, 1), hl, "the highlight into the corner")
+	wantPixel(t, img, image.Pt(300, 1), hl, "the highlight")
+	wantPixel(t, img, image.Pt(300, 2), glass(), "under the highlight")
+}
+
+// hoverOn lays s's live composer out at y in a 736dp lane with the
+// pointer moved to at, so the next drawComposer draws what it's over.
+func hoverOn(th *Theme, s *Scene, h, y int, at f32.Point) {
+	var r gioinput.Router
+	var ops op.Ops
+	frame := func() {
+		ops.Reset()
+		gtx := layout.Context{Ops: &ops, Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Exact(image.Pt(736, h)), Source: r.Source(), Now: time.Now()}
+		func() {
+			defer op.Offset(image.Pt(0, y)).Push(gtx.Ops).Pop()
+			th.composerArea(gtx, s, false)
+		}()
+		r.Frame(&ops)
+		th.Actions()
+	}
+	frame()
+	r.Queue(pointer.Event{Kind: pointer.Move, Position: at, Source: pointer.Mouse})
+	frame()
+}
+
+// A banner's dismiss fills with --accent under the pointer; its x stays
+// the ghost button's muted icon colour (ComposerBanner.tsx Dismiss).
+func TestDismissHover(t *testing.T) {
+	th := NewTheme()
+	s := &Scene{Live: true, Model: "Opus 5.5", Fresh: true}
+	// The dismiss is the banner's last 24dp: x 686..710, y 5..29.
+	hoverOn(th, s, 200, 0, f32.Pt(698, 17))
+	img := drawComposer(t, th, s, 200, 0)
+	wantPixel(t, img, image.Pt(692, 12), over(P.Accent, glass()), "the hovered dismiss")
+	darkest := 0xff
+	for y := 5; y < 29; y++ {
+		for x := 686; x < 710; x++ {
+			darkest = min(darkest, int(img.RGBAAt(x, y).R))
+		}
+	}
+	if darkest < int(P.ContrastMutedForeground.R)-6 {
+		t.Errorf("the hovered x's darkest pixel is %#x, want --contrast-muted-foreground's %#x", darkest, P.ContrastMutedForeground.R)
+	}
+}
+
+// With no rows the menu says why, 14dp under its top and 28 over the
+// card: the surface's own 17dp under that tucks under the card
+// (ComposerCommandMenu.tsx: pt-3.5 pb-7 in a pb-[17px] surface).
+func TestCommandMenuEmpty(t *testing.T) {
+	th := NewTheme()
+	s := &Scene{Composer: "/zz", Model: "Opus 5.5", SuggestEmpty: "No matching command."}
+	img := drawComposer(t, th, s, 300, 200)
+	first, last := inkRows(img, 100, 200, 42, 600)
+	if first < 0 {
+		t.Fatal("no line in the empty menu")
+	}
+	top := firstRow(img, 300, 100, 200, over(alpha(P.Foreground, 0x14), glass()))
+	if first-top < 16 || first-top > 22 {
+		t.Errorf("the line's ink starts %d under the menu's top, want its 14dp padding and the line's own", first-top)
+	}
+	if gap := 200 - last - 1; gap < 24 || gap > 31 {
+		t.Errorf("%ddp between the line's ink and the card, want T3's 28", gap)
+	}
+}
+
+// Under the pointer, a picture's chip underlines its name and size in its
+// own colour, 0.2em under the baseline (ContextChipLabel).
+func TestChipUnderline(t *testing.T) {
+	th := NewTheme()
+	chip := th.ImageChip(1, "shot.png", 2048)
+	s := &Scene{Live: true, Model: "Opus 5.5", Thumbs: []Thumb{{N: 1, Name: "shot.png", Size: 2048}}}
+	th.SetEditorText("composer", "see "+chip+" now")
+	inkOf := func() int {
+		img := drawComposer(t, th, s, 300, 0)
+		n := 0
+		for y := 93; y < 125; y++ {
+			n += count(img, y, 17, 400, P.ContextChipImage)
+		}
+		return n
+	}
+	hoverOn(th, s, 300, 0, f32.Pt(10, 280))
+	plain := inkOf()
+	// The prompt's first line is under the tile row: 17 + 64 + 12, and
+	// the chip is just after "see ".
+	hoverOn(th, s, 300, 0, f32.Pt(60, 104))
+	if c := th.in.composer.clicks["chip:1"]; c == nil || !c.Hovered() {
+		t.Fatal("the pointer isn't on the chip")
+	}
+	if n := inkOf() - plain; n < 30 {
+		t.Errorf("hovered, the chip has %d more pixels of its colour, want its label's underline", n)
+	}
+}
+
+// A tile's remove button is black at 65% over the picture as Chrome
+// composites it, #0d1721 over a #24425f screenshot, its white 20% ring
+// outside it and not under it (button.tsx media-close).
+func TestTileRemove(t *testing.T) {
+	th := NewTheme()
+	pic := image.NewRGBA(image.Rect(0, 0, 64, 64))
+	for i := 0; i < len(pic.Pix); i += 4 {
+		pic.Pix[i], pic.Pix[i+1], pic.Pix[i+2], pic.Pix[i+3] = 0x24, 0x42, 0x5f, 0xff
+	}
+	var b bytes.Buffer
+	if err := png.Encode(&b, pic); err != nil {
+		t.Fatal(err)
+	}
+	img := drawComposer(t, th, &Scene{Model: "Opus 5.5", Thumbs: []Thumb{NewThumb(b.Bytes())}}, 200, 0)
+	// The tile is at 17, 17; its 24dp button 4 in from its top right.
+	got, want := img.RGBAAt(56, 30), rgb(0x0d1721)
+	for _, d := range [][2]uint8{{got.R, want.R}, {got.G, want.G}, {got.B, want.B}} {
+		if diff := int(d[0]) - int(d[1]); diff < -6 || diff > 6 {
+			t.Fatalf("the remove button is #%02x%02x%02x, want about #0d1721", got.R, got.G, got.B)
+		}
+	}
+}
+
+// Short of room, the footer's mode block goes to its icon, then into the
+// "…" menu, so the trigger never runs over the attach button
+// (composerFooterLayout.ts): whole at 736, its 32dp icon at 300, the 34dp
+// "…" at 240.
+func TestFooterOverflow(t *testing.T) {
+	th := NewTheme()
+	s := &Scene{Composer: "hi", Provider: "Claude", Model: "Opus 5.5", Effort: "High", Runtime: "approval-required", RuntimeChip: true,
+		Access: &Permissions{Modes: RuntimeModes, Sel: 0}}
+	accent := over(P.Accent, glass())
+	for _, c := range []struct {
+		w, lo, hi int
+		lock      bool // the mode's own icon, not the "…"
+	}{{736, 90, 130, true}, {300, 27, 33, true}, {240, 29, 35, false}} {
+		img := drawn(t, image.Pt(c.w, 200), 1, func(gtx C) D {
+			fill(gtx, P.Background, image.Rect(0, 0, c.w, 200), 0)
+			return th.composerArea(gtx, s, false)
+		})
+		// The open block is lit, ending 8dp before send; along a row under
+		// its icon its fill runs end to end, less its corners' edges.
+		end := c.w - 1 - 8 - 32 - 8
+		l, r := end-6, end-6
+		for l > 0 && near(img.RGBAAt(l-1, 97), accent) {
+			l--
+		}
+		for r < c.w-1 && near(img.RGBAAt(r+1, 97), accent) {
+			r++
+		}
+		if n := r - l + 1; n < c.lo || n > c.hi {
+			t.Errorf("%ddp lane: the mode block is %d wide, want %d..%d", c.w, n, c.lo, c.hi)
+		}
+		// The lock's ink runs down most of its 16dp; the "…" is one row of dots.
+		rows := 0
+		for y := 75; y < 100; y++ {
+			for x := l; x <= r; x++ {
+				if img.RGBAAt(x, y).R < 0xc8 {
+					rows++
+					break
+				}
+			}
+		}
+		if c.lock != (rows >= 10) {
+			t.Errorf("%ddp lane: the block's ink is %d rows tall, want the mode's icon %v", c.w, rows, c.lock)
+		}
+		if l, _ := ink(img, 75, 100, 32, 45); l >= 0 {
+			t.Errorf("%ddp lane: ink at x %d, between the attach button and the controls", c.w, l)
+		}
+	}
+}
+
+// The prompt's lines sit where Chrome puts them: at 2x it lays text out in
+// device pixels, the font's ascent and descent rounded and the
+// half-leading floored, so 14/22.75 Inter has its baseline 32px under the
+// line's top (§3.3).
+func TestPromptBaseline(t *testing.T) {
+	th := NewTheme()
+	img := drawn(t, image.Pt(736, 200), 2, func(gtx C) D {
+		fill(gtx, P.Background, image.Rect(0, 0, 1472, 400), 0)
+		return th.composerArea(gtx, &Scene{Model: "Opus 5.5", Placeholder: "Ask"}, false)
+	})
+	// The line's top is 17dp down, 34px; "Ask" sits on the baseline.
+	last := -1
+	for y := 34; y < 90; y++ {
+		n := 0
+		for x := 34; x < 200; x++ {
+			if img.RGBAAt(x, y).R < 0xa0 {
+				n++
+			}
+		}
+		if n >= 3 {
+			last = y
+		}
+	}
+	if last != 34+32-1 {
+		t.Errorf("the placeholder's ink ends on row %d, want it on the baseline at %d", last, 34+32)
 	}
 }
 
@@ -237,16 +536,59 @@ func TestNoProviderTrigger(t *testing.T) {
 	}
 }
 
-// The card's light shadow, 0 1px 2px black 5%, at its full strength over
-// the page (§3.2: T3's two rows under the card read about #f4 and #f8 at
-// 1x), not the half Gio's linear blending would make of it.
+// The card's light shadow, 0 1px 2px black 5%, blurred as Chrome blurs
+// it and at its full strength over the page, not the half Gio's linear
+// blending would make of it: at 2x, T3's device rows under the card read
+// #f3 #f5 #f7 #f9 #fb over its first 2.5px (§3.2).
 func TestComposerShadow(t *testing.T) {
 	th := NewTheme()
 	img := drawComposer(t, th, &Scene{Model: "Opus 5.5"}, 200, 0)
-	for _, c := range []struct{ y, lo, hi int }{{112, 0xec, 0xf6}, {113, 0xf2, 0xfa}, {114, 0xfb, 0xfc}} {
+	for _, c := range []struct{ y, lo, hi int }{{112, 0xf1, 0xf5}, {113, 0xf6, 0xfa}, {114, 0xfa, 0xfc}} {
 		if r := int(img.RGBAAt(300, c.y).R); r < c.lo || r > c.hi {
-			t.Errorf("row %d under the card is %#x, want %#x..%#x", c.y, r, c.lo, c.hi)
+			t.Errorf("1x row %d under the card is %#x, want %#x..%#x", c.y, r, c.lo, c.hi)
 		}
+	}
+	img = drawn(t, image.Pt(736, 200), 2, func(gtx C) D {
+		fill(gtx, P.Background, image.Rect(0, 0, 1472, 400), 0)
+		return th.composerArea(gtx, &Scene{Model: "Opus 5.5"}, false)
+	})
+	// The card is 111.5 tall: device rows 0 to 222.
+	for i, want := range []int{0xf3, 0xf5, 0xf7, 0xf9, 0xfb} {
+		if r := int(img.RGBAAt(600, 223+i).R); r < want-2 || r > want+2 {
+			t.Errorf("2x row %d under the card is %#x, want T3's %#x", 223+i, r, want)
+		}
+	}
+}
+
+// A popup's shadow, 0 16px 40px -18px black 55%, is a Gaussian ramp, not
+// bands: #bebebe just under the permissions menu, easing out to the page
+// some 45dp down (§3.8, measured live under T3's menu).
+func TestPopupShadow(t *testing.T) {
+	th := NewTheme()
+	s := &Scene{Access: &Permissions{Modes: RuntimeModes, Sel: 0}}
+	var d D
+	img := drawn(t, image.Pt(600, 400), 1, func(gtx C) D {
+		fill(gtx, P.Background, image.Rect(0, 0, 600, 400), 0)
+		defer op.Offset(image.Pt(100, 50)).Push(gtx.Ops).Pop()
+		d = th.permissionsMenu(gtx, s)
+		return d
+	})
+	x, b := 100+d.Size.X/2, 50+d.Size.Y
+	row := func(i int) int { return int(img.RGBAAt(x, b+i).R) }
+	for _, c := range []struct{ i, lo, hi int }{{0, 0xb9, 0xc3}, {10, 0xd2, 0xdc}, {20, 0xe6, 0xee}, {45, 0xf9, 0xfc}} {
+		if r := row(c.i); r < c.lo || r > c.hi {
+			t.Errorf("%ddp under the menu the shadow is %#x, want %#x..%#x", c.i, r, c.lo, c.hi)
+		}
+	}
+	levels := map[int]bool{}
+	for i := 0; i < 30; i++ {
+		if row(i+1) < row(i) {
+			t.Errorf("the shadow darkens again %ddp down: %#x after %#x", i+1, row(i+1), row(i))
+		}
+		levels[row(i)] = true
+	}
+	if len(levels) < 20 {
+		t.Errorf("the shadow's first 30dp take %d shades, want a smooth ramp", len(levels))
 	}
 }
 
@@ -331,7 +673,7 @@ func TestQueue(t *testing.T) {
 // thread's error isn't one of the composer's banners.
 func TestNoticeBanner(t *testing.T) {
 	th := NewTheme()
-	img := drawComposer(t, th, &Scene{Notice: "Loading earlier turns…", Model: "Opus 5.5"}, 200, 0)
+	img := drawComposer(t, th, &Scene{Fresh: true, Model: "Opus 5.5"}, 200, 0)
 	g := glass()
 	wantPixel(t, img, image.Pt(650, 15), g, "the notice's glass")
 	wantPixel(t, img, image.Pt(22, 15), over(composerOutline(), g), "its edge")
@@ -667,18 +1009,38 @@ func TestCompactAnswers(t *testing.T) {
 }
 
 // The provider's suggestion is the placeholder, with its outline Tab key
-// 8dp after it (ChatComposer.tsx:3571).
+// 8dp after it at its own size (ChatComposer.tsx:3571; T3's "⇥ Tab" is
+// 50.7 wide, 20 tall).
 func TestSuggestion(t *testing.T) {
 	th := NewTheme()
 	s := &Scene{Model: "Opus 5.5", Placeholder: "go ahead set it up", Suggestion: "go ahead set it up"}
 	img := drawComposer(t, th, s, 200, 0)
 	edge := over(alpha(P.Foreground, 0x26), glass())
-	n := 0
-	for y := 10; y < 50; y++ {
-		n += count(img, y, 17, 720, edge)
+	left, right, top, bottom := -1, -1, -1, -1
+	for y := 10; y < 60; y++ {
+		for x := 17; x < 736; x++ {
+			if near(img.RGBAAt(x, y), edge) {
+				if left < 0 || x < left {
+					left = x
+				}
+				right, bottom = max(right, x), y
+				if top < 0 {
+					top = y
+				}
+			}
+		}
 	}
-	if n < 60 {
-		t.Errorf("%d pixels of the key's border after the suggestion, want its outline", n)
+	if left < 0 {
+		t.Fatal("no key after the suggestion")
+	}
+	if w := right - left + 1; w < 44 || w > 58 {
+		t.Errorf("the key spans x %d..%d, %d wide, want about 51", left, right, w)
+	}
+	if h := bottom - top + 1; h < 19 || h > 21 {
+		t.Errorf("the key spans rows %d..%d, want 20 tall", top, bottom)
+	}
+	if _, text := ink(img, 17, 45, 17, left-2); left-text < 7 || left-text > 11 {
+		t.Errorf("the suggestion's ink ends at %d and its key starts at %d, want 8 between", text, left)
 	}
 }
 

@@ -271,7 +271,6 @@ func (a *App) build(now time.Time) *ui.Scene {
 	a.sidebar(s)
 	s.Net = a.net
 	s.Error = a.errText
-	s.Notice = a.notice
 	s.Panel = ui.PanelChanges
 	s.Details = a.detailsOpen
 	s.DetailsCard = a.detailsCard
@@ -461,6 +460,8 @@ func (a *App) threadScene(s *ui.Scene) {
 	if t.Branch != "" {
 		s.Project += "  ›  " + t.Branch
 	}
+	// Mod+Alt+N starts a thread without a project from here too.
+	s.CanScratch = e.config != nil && e.config.ScratchWorkspaceRoot != ""
 	v := a.view
 	if v == nil || !v.loaded {
 		s.Empty = "Loading…"
@@ -752,9 +753,6 @@ func (a *App) items(s *ui.Scene, t *t3.Thread, v *threadView) {
 		s.Items = append(s.Items, ui.Item{Kind: ui.ItemThinking, Live: true})
 	}
 	s.MoreAbove = v.more
-	if v.loading {
-		s.Notice = "Loading earlier turns…"
-	}
 	if len(s.Items) == 0 && !v.more {
 		s.Empty = "No messages yet."
 	}
@@ -884,20 +882,42 @@ func (a *App) pending(s *ui.Scene, t *t3.Thread, v *threadView) {
 		s.Dismissible = asked.ResponseMode == "message" || (known && r.ResponseCapability.Type == "message")
 		s.Answering = a.answering(req)
 	}
+	ed := a.comp.edits[a.openID]
 	editing := false
 	for _, r := range a.queuedRuns() {
 		text := t3.StripContext(v.messages[r.UserMessageID].Text)
 		if text == "" {
 			text = "Queued message"
 		}
-		editing = editing || r.ID == a.comp.editing
-		s.Queue = append(s.Queue, ui.QueuedMessage{Text: firstLine(text), Editing: r.ID == a.comp.editing})
+		on := ed != nil && r.ID == ed.run
+		editing = editing || on
+		s.Queue = append(s.Queue, ui.QueuedMessage{Text: firstLine(text), Editing: on})
 	}
-	if !editing {
-		// It left the queue: it started, or went.
-		a.comp.editing = ""
+	if ed != nil && !editing && !ed.saving {
+		// It left the queue: it started, or went. A save on its way
+		// decides the edit itself.
+		a.leaveEdit(a.openID, ed)
 	}
-	s.EditingQueued = a.comp.editing != ""
+}
+
+// leaveEdit ends the open thread's edit of a message that's no longer
+// queued (recoverQueuedMessageEdit): an edit that changed the message stays
+// in the composer as the thread's draft when that draft was empty, and
+// otherwise the draft comes back. Call with the lock held.
+func (a *App) leaveEdit(key string, ed *queuedEdit) {
+	delete(a.comp.edits, key)
+	a.onUILocked(func(th *ui.Theme) {
+		a.mu.Lock()
+		here := a.composerKey() == key
+		a.mu.Unlock()
+		if !here {
+			return
+		}
+		if text := th.EditorText("composer"); text != ed.original && ui.TrimText(text) != "" && ui.TrimText(ed.draft) == "" {
+			return
+		}
+		th.SetEditorText("composer", ed.draft)
+	})
 }
 
 func (a *App) queuedRuns() []t3.Run {
@@ -1047,6 +1067,7 @@ func (a *App) composerScene(s *ui.Scene, key string) {
 	// thread's strip always does.
 	s.RuntimeChip = a.draft == "" && c.runtime != a.defaultRuntime()
 	s.Sending = a.comp.sending
+	s.EditingQueued = a.draft == "" && a.comp.edits[key] != nil
 	if a.picker != nil {
 		s.Picker = a.pickerScene(c)
 	}
@@ -1087,7 +1108,9 @@ func (a *App) composerScene(s *ui.Scene, key string) {
 	noProvider := a.cfg() != nil && len(a.pickerTabs()) == 0
 	s.NoProvider = noProvider
 	if a.draft == "" {
-		s.Suggestion = a.offeredSuggestion(a.curThread(), a.view, shown != nil || q != nil || noProvider)
+		// An armed /clear's fresh session couldn't see what the
+		// suggestion refers to.
+		s.Suggestion = a.offeredSuggestion(a.curThread(), a.view, shown != nil || q != nil || noProvider || a.comp.fresh[key])
 	}
 	s.Placeholder = placeholder(shown, q, noProvider, s.Suggestion)
 }

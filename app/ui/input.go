@@ -72,6 +72,7 @@ type input struct {
 	hovers      map[string]*gesture.Hover     // areas that only watch the pointer, by id
 	window      image.Point                   // the window's size in px, for T3's viewport breakpoints
 	movers      map[string]*int               // areas that watch the pointer move over them, by id
+	presses     map[string]*int               // window-wide watches for a press outside something, by id
 	selectables map[string]*widget.Selectable // selectable text: sent messages, code blocks
 	copies      map[string]string             // copy buttons' text, by click id
 	copied      map[string]time.Time          // when each was last clicked, for its check
@@ -229,6 +230,44 @@ func (th *Theme) trackPointer(gtx C, size image.Point) {
 	defer clip.Rect{Max: size}.Push(gtx.Ops).Pop()
 	defer pointer.PassOp{}.Push(gtx.Ops).Pop()
 	event.Op(gtx.Ops, &th.in.ptr)
+}
+
+// outsidePress reports a press anywhere in the window outside keep (in
+// the current frame) as a click on id. It's laid over everything and
+// passes every event on, so what's under the press still gets it.
+func (th *Theme) outsidePress(gtx C, id string, keep ...image.Rectangle) {
+	if th.in.presses == nil {
+		th.in.presses = map[string]*int{}
+	}
+	tag := th.in.presses[id]
+	if tag == nil {
+		tag = new(int)
+		th.in.presses[id] = tag
+	}
+	for {
+		ev, ok := gtx.Event(pointer.Filter{Target: tag, Kinds: pointer.Press})
+		if !ok {
+			break
+		}
+		e, ok := ev.(pointer.Event)
+		if !ok || e.Kind != pointer.Press {
+			continue
+		}
+		inside := false
+		for _, r := range keep {
+			inside = inside || e.Position.Round().In(r)
+		}
+		if !inside {
+			th.push(Action{ID: id, Kind: "click"})
+		}
+	}
+	m := op.Record(gtx.Ops)
+	cl := clip.Rect{Min: image.Pt(-1<<15, -1<<15), Max: image.Pt(1<<15, 1<<15)}.Push(gtx.Ops)
+	ps := pointer.PassOp{}.Push(gtx.Ops)
+	event.Op(gtx.Ops, tag)
+	ps.Pop()
+	cl.Pop()
+	op.Defer(gtx.Ops, m.Stop())
 }
 
 // Click makes w a click target named id, with a faint highlight on hover.

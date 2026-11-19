@@ -130,7 +130,15 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		th.Unfocus()
 		return
 	case act.Kind == "key" && act.Text == "⎋":
-		a.closeMenus()
+		// A composer menu Escape closes gives the prompt the focus back
+		// (finalFocus).
+		a.mu.Lock()
+		composerMenu := a.picker != nil || a.accessOpen
+		a.closeMenusLocked()
+		a.mu.Unlock()
+		if composerMenu {
+			th.Focus("composer")
+		}
 		return
 	case act.Kind == "middle":
 		return
@@ -344,6 +352,11 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		a.mu.Lock()
 		a.comp.stashOpen, a.comp.stashSel = !a.comp.stashOpen, 0
 		a.mu.Unlock()
+	case "stash.close":
+		// A press outside the open stash closes it.
+		a.mu.Lock()
+		a.comp.stashOpen = false
+		a.mu.Unlock()
 	case "stash.save":
 		a.stashKey(th)
 	case "stash.restore":
@@ -358,20 +371,30 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		delete(a.comp.fresh, a.composerKey())
 		a.mu.Unlock()
 	case "project.scratch":
-		// From anywhere, Mod+Alt+N: a new thread, then out of its project.
+		// From a thread too, Mod+Alt+N: a new thread there, its prompt kept
+		// as it switches, then out of its project.
 		a.mu.Lock()
-		fresh := a.draft == "" && a.newDraftLocked()
+		fromThread := a.draft == ""
 		a.mu.Unlock()
-		if fresh {
-			a.switchTo(th, func() {})
+		if fromThread {
+			a.switchTo(th, func() {
+				a.mu.Lock()
+				a.newDraftLocked()
+				a.mu.Unlock()
+			})
 		}
 		a.startScratch(th)
 	case "dismiss":
 		a.mu.Lock()
 		req, _ := a.questions()
+		keys := a.questionKeys(req)
 		a.mu.Unlock()
 		if req != "" {
-			a.dispatchOpen("thread.user-input.dismiss", map[string]any{"requestId": req})
+			a.dispatchOpenThen("thread.user-input.dismiss", map[string]any{"requestId": req}, func(err error) {
+				if err == nil {
+					a.dropImages(keys)
+				}
+			})
 		}
 	case "queue":
 		i, rest, _ := strings.Cut(arg, ":")
@@ -412,14 +435,18 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 			a.mu.Unlock()
 			return
 		}
+		// A pick closes the menu, changes the mode where it's another
+		// (ComposerPermissionsSection) and gives the prompt the focus back
+		// (finalFocus).
 		_, ci := split2(arg)
 		a.mu.Lock()
 		c := a.choiceFor(a.composerKey())
-		if modes := a.runtimeModes(c); ci >= 0 && ci < len(modes) {
+		if modes := a.runtimeModes(c); ci >= 0 && ci < len(modes) && modes[ci].ID != c.runtime {
 			c.runtime = modes[ci].ID
 		}
 		a.accessOpen = false
 		a.mu.Unlock()
+		th.Focus("composer")
 	}
 }
 
@@ -541,17 +568,27 @@ func (a *App) threadMenu(th *ui.Theme, j int) {
 }
 
 // switchTo keeps each thread's unsent text: it saves the composer, runs the
-// switch, then restores the new thread's text and focuses the composer.
+// switch, then restores the new thread's text and focuses the composer. A
+// queued message being edited keeps its text for its thread's return, and
+// the thread's own draft stays its draft.
 func (a *App) switchTo(th *ui.Theme, do func()) {
+	text := th.EditorText("composer")
 	a.mu.Lock()
 	old := a.composerKey()
+	if ed := a.comp.edits[old]; ed != nil {
+		ed.text, text = text, ed.draft
+	}
 	a.mu.Unlock()
-	saveDraft(old, th.EditorText("composer"))
+	saveDraft(old, text)
 	do()
 	a.mu.Lock()
 	now := a.composerKey()
+	text = drafts[now]
+	if ed := a.comp.edits[now]; ed != nil {
+		text = ed.text
+	}
 	a.mu.Unlock()
-	th.SetEditorText("composer", drafts[now])
+	th.SetEditorText("composer", text)
 	th.Focus("composer")
 }
 
@@ -699,9 +736,13 @@ func (a *App) signOut() {
 
 func (a *App) dispatchOpen(kind string, fields map[string]any) { a.dispatchOpenThen(kind, fields, nil) }
 
+// errNotConnected is why a command for the open thread didn't go.
+var errNotConnected = errors.New("not connected")
+
 // dispatchOpenThen dispatches a command for the open thread and, once the
-// server has answered it, runs done with the lock held.
-func (a *App) dispatchOpenThen(kind string, fields map[string]any, done func()) {
+// server has answered it (or it couldn't go), runs done with the lock
+// held and the error, if any.
+func (a *App) dispatchOpenThen(kind string, fields map[string]any, done func(error)) {
 	a.mu.Lock()
 	var conn *t3.Conn
 	if e := a.cur(); e != nil && a.draft == "" {
@@ -709,7 +750,7 @@ func (a *App) dispatchOpenThen(kind string, fields map[string]any, done func()) 
 	}
 	_, id := splitRef(a.openID)
 	if (conn == nil || id == "") && done != nil {
-		done()
+		done(errNotConnected)
 	}
 	a.mu.Unlock()
 	if conn == nil || id == "" {
@@ -723,7 +764,7 @@ func (a *App) dispatchOpenThen(kind string, fields map[string]any, done func()) 
 			a.fail(err)
 		}
 		if done != nil {
-			done()
+			done(err)
 		}
 		a.mu.Unlock()
 		a.changed()
@@ -767,23 +808,31 @@ func (a *App) queueAction(th *ui.Theme, i int, what string) {
 	run := runs[i]
 	switch what {
 	case "edit":
-		// The composer takes the message's text in place of the draft,
-		// unless a question has it (editBlockedReason).
-		if req, _ := a.questions(); req == "" && a.comp.editing == "" {
-			a.comp.editing, a.comp.editSaved = run.ID, th.EditorText("composer")
-			text := a.view.messages[run.UserMessageID].Text
+		// The composer takes the message's text in place of the thread's
+		// draft, unless a question has it (queuedRunEditBlockedReason); one
+		// already being edited gives way, the draft still kept.
+		ed := a.comp.edits[a.openID]
+		if req, _ := a.questions(); req != "" || (ed != nil && ed.saving) {
 			a.mu.Unlock()
-			th.SetEditorText("composer", text)
-			th.Focus("composer")
 			return
 		}
+		if ed == nil {
+			ed = &queuedEdit{draft: th.EditorText("composer")}
+			a.comp.edits[a.openID] = ed
+		}
+		ed.run, ed.original = run.ID, a.view.messages[run.UserMessageID].Text
 		a.mu.Unlock()
+		th.SetEditorText("composer", ed.original)
+		th.Focus("composer")
 		return
 	case "cancel-edit":
-		saved := a.comp.editSaved
-		a.comp.editing, a.comp.editSaved = "", ""
+		ed := a.comp.edits[a.openID]
+		delete(a.comp.edits, a.openID)
 		a.mu.Unlock()
-		th.SetEditorText("composer", saved)
+		if ed != nil {
+			th.SetEditorText("composer", ed.draft)
+			th.Focus("composer")
+		}
 		return
 	}
 	a.mu.Unlock()
@@ -988,20 +1037,40 @@ func (a *App) send(th *ui.Theme, alternate, background bool) bool {
 		a.changed()
 		return true
 	}
-	if run := a.comp.editing; run != "" {
-		// The composer holds a queued message: the send updates it
-		// (queued-run.edit), which keeps its pictures, and the draft it
-		// stood in for comes back.
+	if ed := a.comp.edits[key]; ed != nil && a.draft == "" {
+		// The composer holds the thread's queued message: the send updates
+		// it (queued-run.edit), which keeps its pictures. Once the server
+		// has it the thread's draft comes back; if it can't take it, the
+		// edit stays (useQueuedRunEdit.ts saveEdit).
 		if len(a.images[key]) > 0 {
 			a.fail(errors.New("an edited queued message takes new text only; remove the pictures first"))
 			a.mu.Unlock()
 			return false
 		}
-		saved := a.comp.editSaved
-		a.comp.editing, a.comp.editSaved = "", ""
+		ed.saving, a.comp.sending = true, true
 		a.mu.Unlock()
-		th.SetEditorText("composer", saved)
-		a.dispatchOpen("queued-run.edit", map[string]any{"runId": run, "text": text})
+		a.changed()
+		a.dispatchOpenThen("queued-run.edit", map[string]any{"runId": ed.run, "text": text}, func(err error) {
+			ed.saving, a.comp.sending = false, false
+			if err != nil {
+				a.fail(errors.New("Could not save the edited queued message."))
+				return
+			}
+			if a.comp.edits[key] != ed {
+				return // cancelled or begun again meanwhile
+			}
+			delete(a.comp.edits, key)
+			a.onUILocked(func(th *ui.Theme) {
+				a.mu.Lock()
+				here := a.composerKey() == key
+				a.mu.Unlock()
+				if here {
+					th.SetEditorText("composer", ed.draft)
+				} else {
+					saveDraft(key, ed.draft)
+				}
+			})
+		})
 		return true
 	}
 	if conn == nil {
@@ -1069,11 +1138,12 @@ func (a *App) deliver(e *envState, conn *t3.Conn, draft string, t *t3.Thread, se
 	feedback, decline := redirect(approvals)
 	if feedback != "" {
 		// The request takes feedback, so the message is its decline, not a
-		// message of its own (sendApprovalFeedback).
+		// message of its own (sendApprovalFeedback): the text as typed,
+		// without the prefix an outgoing prompt gets.
 		if len(imgs) > 0 {
 			return errors.New("Send approval feedback without attachments or added context.")
 		}
-		return conn.Dispatch(map[string]any{"type": "runtime-request.respond", "threadId": t.ID, "requestId": feedback, "decision": "decline", "feedback": body})
+		return conn.Dispatch(map[string]any{"type": "runtime-request.respond", "threadId": t.ID, "requestId": feedback, "decision": "decline", "feedback": text})
 	}
 	attachments, recs, err := upload(conn, imgs)
 	if err != nil {

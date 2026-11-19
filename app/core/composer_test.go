@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/some-du6e/tern/app/clip"
 	"github.com/some-du6e/tern/app/t3"
 	"github.com/some-du6e/tern/app/ui"
 )
@@ -46,8 +47,8 @@ func TestDetectTrigger(t *testing.T) {
 
 // The / menu ranks like T3's (composerSlashCommandSearch.ts): prefixes
 // before boundaries before descriptions, ties by kind then name; the
-// provider's commands only at the prompt's start, /compact only with
-// nothing before it, and skills that are also commands only once.
+// provider's commands only at the prompt's start, /compact only where it
+// can go, and skills that are also commands only once.
 func TestSlashItems(t *testing.T) {
 	yes := true
 	p := &t3.Provider{
@@ -65,16 +66,19 @@ func TestSlashItems(t *testing.T) {
 		return strings.Join(out, " ")
 	}
 	at := func(q string, start int) *trigger { return &trigger{kind: "slash", query: q, start: start} }
-	if got, want := labels(slashItems(p, at("", 0), "", false)), "/model /compact /review /resume /skill:frontend-refactor"; got != want {
+	if got, want := labels(slashItems(p, at("", 0), true, false)), "/model /compact /review /resume /skill:frontend-refactor"; got != want {
 		t.Errorf("all: %s, want %s", got, want)
 	}
-	if got, want := labels(slashItems(p, at("re", 0), "", false)), "/resume /review /skill:frontend-refactor /model"; got != want {
+	if got, want := labels(slashItems(p, at("", 0), false, false)), "/model /review /resume /skill:frontend-refactor"; got != want {
+		t.Errorf("no compacting now: %s, want %s", got, want)
+	}
+	if got, want := labels(slashItems(p, at("re", 0), true, false)), "/resume /review /skill:frontend-refactor /model"; got != want {
 		t.Errorf(`"re": %s, want %s`, got, want)
 	}
-	if got, want := labels(slashItems(p, at("", 6), "later ", false)), "/model /skill:frontend-refactor"; got != want {
+	if got, want := labels(slashItems(p, at("", 6), true, false)), "/model /skill:frontend-refactor"; got != want {
 		t.Errorf("mid-prompt: %s, want %s", got, want)
 	}
-	if items := slashItems(p, at("skill", 0), "", false); labels(items) != "/skill:frontend-refactor" || items[0].insert != "$frontend-refactor " || items[0].Badge != "Personal" {
+	if items := slashItems(p, at("skill", 0), true, false); labels(items) != "/skill:frontend-refactor" || items[0].insert != "$frontend-refactor " || items[0].Badge != "Personal" {
 		t.Errorf(`"skill": %+v`, items)
 	}
 	if got := labels(skillItems(p, &trigger{kind: "skill", query: "front"})); got != "frontend-refactor" {
@@ -233,8 +237,8 @@ func TestCommandMenu(t *testing.T) {
 	a.handle(th, ui.Action{ID: "suggest", Kind: "key", Text: "⏎"})
 	// The prompt's change goes back to the app the way a frame's actions do.
 	a.Handle(th, th.Actions())
-	if th.EditorText("composer") != "" || a.picker == nil {
-		t.Fatalf("after Enter: %q, picker %v", th.EditorText("composer"), a.picker != nil)
+	if s := a.build(time.Now()); th.EditorText("composer") != "" || s.Picker == nil {
+		t.Fatalf("after Enter: %q, picker %v", th.EditorText("composer"), s.Picker != nil)
 	}
 	typed("/mo")
 	a.handle(th, ui.Action{ID: "suggest", Kind: "key", Text: "⎋"})
@@ -289,8 +293,8 @@ func TestFreshSession(t *testing.T) {
 	}
 	a.handle(th, ui.Action{ID: "suggest", Kind: "key", Text: "⏎"})
 	a.Handle(th, th.Actions())
-	if s := a.build(time.Now()); !s.Fresh || th.EditorText("composer") != "" || a.picker != nil {
-		t.Fatalf("after picking /clear: armed %v, prompt %q", s.Fresh, th.EditorText("composer"))
+	if s := a.build(time.Now()); !s.Fresh || th.EditorText("composer") != "" || s.Picker != nil {
+		t.Fatalf("after picking /clear: armed %v, prompt %q, picker %v", s.Fresh, th.EditorText("composer"), s.Picker != nil)
 	}
 	a.handle(th, ui.Action{ID: "fresh.keep", Kind: "click"})
 	if s := a.build(time.Now()); s.Fresh {
@@ -366,5 +370,205 @@ func TestPromptHistoryIsTheUsers(t *testing.T) {
 	add("m5", "mine again", 5, t3.Message{CreatedBy: "user"})
 	if got := strings.Join(promptHistory(v), ", "); got != "mine, mine again" {
 		t.Fatalf("history = %s", got)
+	}
+}
+
+// queuedView opens swiss/t1 with one message queued behind its run.
+func queuedView(t *testing.T, a *App) *threadView {
+	t.Helper()
+	v := openWith(t, a, nil, nil)
+	_, th := a.thread("swiss/t1")
+	th.ActiveRunID = "r0"
+	v.runs["r0"] = t3.Run{ID: "r0", Status: "running"}
+	v.runs["q1"] = t3.Run{ID: "q1", Status: "queued", UserMessageID: "m1"}
+	v.messages["m1"] = t3.Message{ID: "m1", Role: "user", Text: "queued text"}
+	return v
+}
+
+// A queued message being edited is its thread's (useQueuedRunEdit.ts): a
+// new thread's composer doesn't take it over, so a message sent there
+// stays what was typed; back on the thread the edit is there again, and
+// Cancel brings the thread's own draft back.
+func TestQueuedEditStaysWithItsThread(t *testing.T) {
+	drafts = map[string]string{}
+	a := testApp(t)
+	v := queuedView(t, a)
+	th := ui.NewTheme()
+	th.SetEditorText("composer", "my draft")
+	a.handle(th, ui.Action{ID: "queue:0:edit", Kind: "click"})
+	if s := a.build(time.Now()); th.EditorText("composer") != "queued text" || !s.EditingQueued || !s.Queue[0].Editing {
+		t.Fatalf("editing: prompt %q, editing %v, queue %+v", th.EditorText("composer"), s.EditingQueued, s.Queue)
+	}
+	th.SetEditorText("composer", "queued text, edited")
+	a.handle(th, ui.Action{ID: "new", Kind: "click"})
+	if s := a.build(time.Now()); s.EditingQueued || th.EditorText("composer") != "" {
+		t.Fatalf("a new thread: editing %v, prompt %q", s.EditingQueued, th.EditorText("composer"))
+	}
+	th.SetEditorText("composer", "for the new thread")
+	a.handle(th, ui.Action{ID: "composer", Kind: "submit"})
+	if got := th.EditorText("composer"); got != "for the new thread" {
+		t.Fatalf("sent from the new thread: prompt %q, want what was typed", got)
+	}
+	a.handle(th, ui.Action{ID: "thread:swiss/t1", Kind: "click"})
+	a.view = v // its snapshot, back
+	if s := a.build(time.Now()); th.EditorText("composer") != "queued text, edited" || !s.EditingQueued {
+		t.Fatalf("back on the thread: prompt %q, editing %v", th.EditorText("composer"), s.EditingQueued)
+	}
+	a.handle(th, ui.Action{ID: "queue:0:cancel-edit", Kind: "click"})
+	if s := a.build(time.Now()); th.EditorText("composer") != "my draft" || s.EditingQueued {
+		t.Fatalf("after Cancel: prompt %q, editing %v", th.EditorText("composer"), s.EditingQueued)
+	}
+}
+
+// When the message being edited leaves the queue, a changed edit stays in
+// the composer if the thread's own draft was empty; otherwise that draft
+// comes back (recoverQueuedMessageEdit). An edit the server can't take
+// stays, and says so.
+func TestQueuedEditLeavesTheQueue(t *testing.T) {
+	for _, c := range []struct{ draft, want string }{{"my draft", "my draft"}, {"", "queued text, edited"}} {
+		drafts = map[string]string{}
+		a := testApp(t)
+		v := queuedView(t, a)
+		th := ui.NewTheme()
+		th.SetEditorText("composer", c.draft)
+		a.handle(th, ui.Action{ID: "queue:0:edit", Kind: "click"})
+		th.SetEditorText("composer", "queued text, edited")
+		v.runs["q1"] = t3.Run{ID: "q1", Status: "running", UserMessageID: "m1"}
+		s := a.build(time.Now())
+		a.RunUI(th)
+		if got := th.EditorText("composer"); s.EditingQueued || got != c.want {
+			t.Fatalf("draft %q: after the run started, editing %v, prompt %q, want %q", c.draft, s.EditingQueued, got, c.want)
+		}
+	}
+	a := testApp(t)
+	queuedView(t, a)
+	th := ui.NewTheme()
+	a.handle(th, ui.Action{ID: "queue:0:edit", Kind: "click"})
+	th.SetEditorText("composer", "queued text, edited")
+	a.handle(th, ui.Action{ID: "composer", Kind: "submit"})
+	a.RunUI(th)
+	if s := a.build(time.Now()); !s.EditingQueued || th.EditorText("composer") != "queued text, edited" || s.Error != "Could not save the edited queued message." {
+		t.Fatalf("a save that didn't go: editing %v, prompt %q, error %q", s.EditingQueued, th.EditorText("composer"), s.Error)
+	}
+}
+
+// A stashed prompt keeps its pictures' chips: restored, the picture's a
+// chip again where it was, numbered for this composer (useComposerStash.ts
+// stashes the whole draft).
+func TestStashKeepsChips(t *testing.T) {
+	a := testApp(t)
+	a.openThread("swiss/t1")
+	th := ui.NewTheme()
+	th.SetEditorText("composer", "look ")
+	a.pasted(a.composerKey(), []clip.Image{{Name: "shot.png", Mime: "image/png", Data: pngBytes(t)}}, nil)
+	a.RunUI(th)
+	th.InsertText("composer", " here")
+	a.handle(th, ui.Action{ID: "stash.save", Kind: "click"})
+	if s := a.build(time.Now()); len(s.Stash) != 1 || s.Stash[0].Snippet != "look here" {
+		t.Fatalf("stashed: %+v", s.Stash)
+	}
+	a.handle(th, ui.Action{ID: "stash.save", Kind: "click"})
+	text := th.EditorText("composer")
+	s := a.build(time.Now())
+	if chips := ui.Chips(text); len(chips) != 1 || len(s.Thumbs) != 1 || s.Thumbs[0].N != chips[0] {
+		t.Fatalf("restored: %q, pictures %+v", text, s.Thumbs)
+	}
+	if got := ui.StripChips(text); got != "look  here" {
+		t.Fatalf("restored text around the chip: %q", got)
+	}
+}
+
+// A press outside the open stash closes it.
+func TestStashCloses(t *testing.T) {
+	a := testApp(t)
+	a.openThread("swiss/t1")
+	th := ui.NewTheme()
+	a.handle(th, ui.Action{ID: "stash.save", Kind: "click"})
+	if s := a.build(time.Now()); !s.StashOpen {
+		t.Fatal("Mod+S on an empty stash didn't open its list")
+	}
+	a.handle(th, ui.Action{ID: "stash.close", Kind: "click"})
+	if s := a.build(time.Now()); s.StashOpen {
+		t.Fatal("a press outside left the stash open")
+	}
+}
+
+// While /clear is armed the provider's suggestion isn't offered: the fresh
+// session couldn't see what it refers to (ChatComposer.tsx).
+func TestNoSuggestionWhileFresh(t *testing.T) {
+	a := testApp(t)
+	cfg := &t3.ServerConfig{Providers: []t3.Provider{{InstanceID: "claudeAgent", Driver: "claudeAgent", Enabled: true, Status: "ready", Models: []t3.Model{{Slug: "opus", Name: "Claude Opus 5.5"}}}}}
+	cfg.Environment.Capabilities.FreshContext = true
+	a.envs[0].config = cfg
+	v := openWith(t, a, nil, nil)
+	_, th := a.thread("swiss/t1")
+	th.LatestRunID = "r1"
+	v.runs["r1"] = t3.Run{ID: "r1", Status: "completed", StartedAt: "2026-11-18T10:00:00Z"}
+	v.messages["m1"] = t3.Message{ID: "m1", Role: "user", Text: "hi"}
+	a.suggestion = suggestion{ref: "swiss/t1", run: "r1", text: "go ahead"}
+	if s := a.build(time.Now()); s.Suggestion != "go ahead" || s.Placeholder != "go ahead" {
+		t.Fatalf("idle: suggestion %q, placeholder %q", s.Suggestion, s.Placeholder)
+	}
+	a.comp.fresh["swiss/t1"] = true
+	if s := a.build(time.Now()); s.Suggestion != "" || s.Placeholder != "Ask anything. @ files, $ skills, / commands" {
+		t.Fatalf("with /clear armed: suggestion %q, placeholder %q", s.Suggestion, s.Placeholder)
+	}
+}
+
+// Mod+Alt+N works from a thread too: it opens a new thread, keeping the
+// thread's prompt for when it's back.
+func TestScratchFromThread(t *testing.T) {
+	drafts = map[string]string{}
+	a := testApp(t)
+	a.envs[0].config = &t3.ServerConfig{ScratchWorkspaceRoot: "/srv/scratch"}
+	a.openThread("swiss/t1")
+	if s := a.build(time.Now()); !s.CanScratch {
+		t.Fatal("a thread on a machine with a scratch workspace can't start one without a project")
+	}
+	th := ui.NewTheme()
+	th.SetEditorText("composer", "unsent")
+	a.handle(th, ui.Action{ID: "project.scratch", Kind: "click"})
+	if a.build(time.Now()).Title != "New thread" || th.EditorText("composer") != "" {
+		t.Fatalf("after Mod+Alt+N: prompt %q", th.EditorText("composer"))
+	}
+	a.handle(th, ui.Action{ID: "thread:swiss/t1", Kind: "click"})
+	if got := th.EditorText("composer"); got != "unsent" {
+		t.Fatalf("back on the thread: prompt %q, want its own", got)
+	}
+}
+
+// The provider's /compact is on offer only alone in the prompt, on a
+// thread that can compact now: not while it runs (compactSlashCommandAvailable).
+func TestCompactCommand(t *testing.T) {
+	a := testApp(t)
+	cfg := &t3.ServerConfig{Providers: []t3.Provider{{InstanceID: "claudeAgent", Driver: "claudeAgent", SlashCommands: []t3.SlashCommand{{Name: "compact"}}}}}
+	cfg.Settings.DefaultModelSelection = &t3.ModelSelection{InstanceID: "claudeAgent", Model: "opus"}
+	a.envs[0].config = cfg
+	v := openWith(t, a, nil, nil)
+	v.messages["m1"] = t3.Message{ID: "m1", Role: "user", Text: "hi"}
+	// Connected: a thread compacts on a machine it can reach.
+	a.envs[0].conn = new(t3.Conn)
+	t.Cleanup(func() { a.envs[0].conn = nil })
+	th := ui.NewTheme()
+	menu := func(text string, caret int) string {
+		th.SetEditorText("composer", text)
+		th.Editor("composer").SetCaret(caret, caret)
+		a.handle(th, ui.Action{ID: "composer", Kind: "change", Text: text})
+		var out []string
+		for _, it := range a.build(time.Now()).Suggest {
+			out = append(out, it.Label)
+		}
+		return strings.Join(out, " ")
+	}
+	if got := menu("/com", 4); got != "/compact" {
+		t.Fatalf("alone: %q", got)
+	}
+	if got := menu("/com later", 4); strings.Contains(got, "/compact") {
+		t.Fatalf("with text after it: %q", got)
+	}
+	_, t1 := a.thread("swiss/t1")
+	t1.ActiveRunID = "r1"
+	if got := menu("/comp", 5); strings.Contains(got, "/compact") {
+		t.Fatalf("while it runs: %q", got)
 	}
 }

@@ -258,18 +258,19 @@ func (th *Theme) lip(gtx C, r image.Rectangle, rad int, on color.NRGBA) {
 }
 
 // T3Kbd is T3's Kbd: 20 tall, at least 20 wide, padded 4, radius 4, 12/16
-// medium in muted foreground on foreground at 7% (§3.3).
-func (th *Theme) T3Kbd(label string, on color.NRGBA) W {
+// medium in muted foreground on foreground at 7% (§3.3), at opacity over
+// on (0xff where nothing over it fades it).
+func (th *Theme) T3Kbd(label string, on color.NRGBA, opacity uint8) W {
 	return func(gtx C) D {
 		if on.A == 0 {
 			on = P.Background
 		}
 		m := op.Record(gtx.Ops)
-		td := th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Font: UI(font.Medium), Color: P.MutedForeground, MaxLines: 1}, label)
+		td := th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Font: UI(font.Medium), Color: faded(P.MutedForeground, on, opacity), MaxLines: 1}, label)
 		call := m.Stop()
 		h := dp(gtx, 20)
 		w := max(h, td.Size.X+2*dp(gtx, 4))
-		fill(gtx, over(alpha(P.Foreground, 0x12), on), image.Rect(0, 0, w, h), dp(gtx, 4))
+		fill(gtx, faded(over(alpha(P.Foreground, 0x12), on), on, opacity), image.Rect(0, 0, w, h), dp(gtx, 4))
 		defer op.Offset(image.Pt((w-td.Size.X)/2, (h-td.Size.Y)/2)).Push(gtx.Ops).Pop()
 		call.Add(gtx.Ops)
 		return D{Size: image.Pt(w, h)}
@@ -278,12 +279,13 @@ func (th *Theme) T3Kbd(label string, on color.NRGBA) W {
 
 // T3KbdOutline is the outline Kbd: 20 tall, at least 20 wide, padded 0 6,
 // radius 4, a 1dp border with a 2dp bottom at foreground 15%, 12/16
-// medium in muted foreground (kbd.tsx).
+// medium in muted foreground (kbd.tsx). Its baseline is its text's.
 func (th *Theme) T3KbdOutline(label string, on color.NRGBA) W {
 	return func(gtx C) D {
 		if on.A == 0 {
 			on = P.Background
 		}
+		gtx.Constraints.Min = image.Point{}
 		td := record(gtx, func(gtx C) D {
 			return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Font: UI(font.Medium), Color: P.MutedForeground, MaxLines: 1}, label)
 		})
@@ -295,9 +297,10 @@ func (th *Theme) T3KbdOutline(label string, on color.NRGBA) W {
 		fill(gtx, edge, r, rad)
 		px := max(1, dp(gtx, 1))
 		fill(gtx, on, image.Rect(px, px, w-px, h-2*px), max(0, rad-px))
-		defer op.Offset(image.Pt((w-td.Size.X)/2, (h-px-td.Size.Y)/2)).Push(gtx.Ops).Pop()
+		top := (h - px - td.Size.Y) / 2
+		defer op.Offset(image.Pt((w-td.Size.X)/2, top)).Push(gtx.Ops).Pop()
 		td.call.Add(gtx.Ops)
-		return D{Size: r.Max}
+		return D{Size: r.Max, Baseline: h - top - (td.Size.Y - td.Baseline)}
 	}
 }
 

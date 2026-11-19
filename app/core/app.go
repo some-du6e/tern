@@ -100,7 +100,6 @@ type App struct {
 	ctxRef        string              // the thread whose right-click menu is open
 	ctxConfirm    bool                // Delete was clicked once and wants a second click
 	errText       string
-	notice        string
 	answers       map[string]map[int]bool // question id -> picked option indexes
 
 	uiOps []func(*ui.Theme) // editor and focus changes from goroutines, run on the UI goroutine
@@ -137,6 +136,15 @@ func (a *App) onUI(f func(*ui.Theme)) {
 	a.uiOps = append(a.uiOps, f)
 	a.mu.Unlock()
 	a.changed()
+}
+
+// onUILocked is onUI with the lock held.
+func (a *App) onUILocked(f func(*ui.Theme)) {
+	a.uiOps = append(a.uiOps, f)
+	a.ver.Add(1)
+	if a.redraw != nil {
+		a.redraw()
+	}
 }
 
 // RunUI runs the queued UI work. Call it at the start of each frame.
@@ -199,6 +207,7 @@ func NewWithStore(store *t3.Store, redraw func()) (*App, error) {
 	_ = store.Delete("panel-hidden") // from when details were a side panel
 	_, _ = store.Get(stashFile, &a.comp.stash)
 	a.comp.responding, a.comp.fresh, a.dismissed = map[string]bool{}, map[string]bool{}, map[string]bool{}
+	a.comp.edits = map[string]*queuedEdit{}
 	if len(a.comp.stash) > 0 {
 		go a.decodeStash()
 	}

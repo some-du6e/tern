@@ -34,6 +34,13 @@ func over(c, bg color.NRGBA) color.NRGBA {
 	return color.NRGBA{R: mix(c.R, bg.R), G: mix(c.G, bg.G), B: mix(c.B, bg.B), A: 0xff}
 }
 
+// faded is c in a group at opacity k (disabled:opacity-64 is 0xa3) as
+// Chrome composites the group onto the opaque bg, in sRGB. Gio's layer
+// opacity blends in linear light and would come out paler.
+func faded(c, bg color.NRGBA, k uint8) color.NRGBA {
+	return over(alpha(c, uint8((int(c.A)*int(k)+127)/255)), bg)
+}
+
 // linear is an sRGB channel in linear light, 0 to 1.
 func linear(v uint8) float64 {
 	s := float64(v) / 255

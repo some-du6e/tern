@@ -3,6 +3,7 @@ package ui
 import (
 	"bytes"
 	"image"
+	"image/color"
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
@@ -26,7 +27,8 @@ type Thumb struct {
 	Size int    // and its size in bytes
 	op   paint.ImageOp
 	ok   bool
-	data []byte // the file, for the picture at full size
+	avg  color.NRGBA // its average colour, for what's drawn over it
+	data []byte      // the file, for the picture at full size
 }
 
 // NewThumb decodes an image file's bytes and crops it to a square
@@ -45,7 +47,13 @@ func NewThumb(data []byte) Thumb {
 	sq := image.Rect(0, 0, side, side).Add(b.Min).Add(image.Pt((b.Dx()-side)/2, (b.Dy()-side)/2))
 	dst := image.NewRGBA(image.Rect(0, 0, thumbPx, thumbPx))
 	draw.ApproxBiLinear.Scale(dst, dst.Bounds(), src, sq, draw.Src, nil)
-	return Thumb{Size: len(data), op: paint.NewImageOp(dst), ok: true, data: data}
+	var sum [3]int
+	for i := 0; i < len(dst.Pix); i += 4 {
+		sum[0], sum[1], sum[2] = sum[0]+int(dst.Pix[i]), sum[1]+int(dst.Pix[i+1]), sum[2]+int(dst.Pix[i+2])
+	}
+	n := thumbPx * thumbPx
+	avg := color.NRGBA{R: uint8(sum[0] / n), G: uint8(sum[1] / n), B: uint8(sum[2] / n), A: 0xff}
+	return Thumb{Size: len(data), op: paint.NewImageOp(dst), ok: true, avg: avg, data: data}
 }
 
 // drawThumb paints t sizePx square at the origin, rounded rad, or does

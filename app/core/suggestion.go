@@ -9,26 +9,33 @@ import (
 
 // The provider's guess at the open thread's next prompt
 // (usePromptSuggestion.ts): the server streams it while the thread is
-// open, when its settings turn suggestions on. The composer offers it as
-// its placeholder while the run it came from is the thread's latest and
+// open, when its settings turn suggestions on, on whichever socket is up,
+// so a reconnect subscribes again. The composer offers it as its
+// placeholder while the run it came from is the thread's latest and
 // completed, until Tab takes it or Escape dismisses it.
 
-// suggestion is the open thread's latest guess and its stream.
+// suggestion is the open thread's latest guess and its stream, on conn
+// (nil once that stream ended).
 type suggestion struct {
 	ref, run, text string
+	conn           *t3.Conn
 	cancel         func()
 }
 
-// suggest subscribes to thread r's prompt suggestions when its server
-// offers them. Call without the lock.
+// suggest subscribes to thread r's prompt suggestions on conn when its
+// server offers them, unless that stream is already up. Call without the
+// lock.
 func (a *App) suggest(e *envState, conn *t3.Conn, r string) {
 	a.mu.Lock()
-	on := e.config != nil && e.config.Settings.PromptSuggestionsEnabled && a.openID == r && a.suggestion.ref != r
+	on := e.config != nil && e.config.Settings.PromptSuggestionsEnabled && a.openID == r && (a.suggestion.ref != r || a.suggestion.conn != conn)
 	if on {
 		if a.suggestion.cancel != nil {
 			a.suggestion.cancel()
 		}
-		a.suggestion = suggestion{ref: r}
+		if a.suggestion.ref != r {
+			a.suggestion = suggestion{ref: r}
+		}
+		a.suggestion.conn, a.suggestion.cancel = conn, nil
 	}
 	a.mu.Unlock()
 	if !on {
@@ -52,9 +59,17 @@ func (a *App) suggest(e *envState, conn *t3.Conn, r string) {
 		}
 		a.mu.Unlock()
 		a.changed()
-	}, func(error) {})
+	}, func(error) {
+		// The socket went: the next one subscribes again (subscribeThread,
+		// loadConfig).
+		a.mu.Lock()
+		if a.suggestion.ref == r && a.suggestion.conn == conn {
+			a.suggestion.conn, a.suggestion.cancel = nil, nil
+		}
+		a.mu.Unlock()
+	})
 	a.mu.Lock()
-	if a.suggestion.ref == r {
+	if a.suggestion.ref == r && a.suggestion.conn == conn {
 		a.suggestion.cancel = cancel
 	} else {
 		cancel()
@@ -74,8 +89,8 @@ func (a *App) dropSuggestion() {
 // offeredSuggestion is the suggestion the composer shows, if any: its run
 // is the thread's latest to have run, and completed (offeredPromptSuggestion),
 // it isn't dismissed, and the composer is idle and empty of everything but
-// typing: no pictures, no approval or question, a provider to send to.
-// Call with the lock held.
+// typing: no pictures, no approval or question, no armed /clear, a
+// provider to send to (blocked says otherwise). Call with the lock held.
 func (a *App) offeredSuggestion(t *t3.Thread, v *threadView, blocked bool) string {
 	sg := a.suggestion
 	if blocked || t == nil || v == nil || sg.ref != a.openID || sg.text == "" || a.dismissed[a.openID+"\x00"+sg.run] {

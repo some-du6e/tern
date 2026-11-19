@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"math"
 	"strconv"
 	"strings"
 
@@ -18,8 +19,10 @@ import (
 	"gioui.org/op"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
+	"gioui.org/text"
 	"gioui.org/unit"
 	"gioui.org/widget"
+	"golang.org/x/image/math/fixed"
 )
 
 // T3's chat composer (docs/ui/07-composer.md, ChatComposer.tsx): a glass
@@ -163,7 +166,12 @@ func (th *Theme) composerStack(gtx C, s *Scene, strip bool) D {
 	case len(s.Suggest) > 0 || s.SuggestEmpty != "":
 		th.commandMenu(gtx, s, w)
 	case s.StashOpen:
-		th.stashDrawer(gtx, s, w)
+		drawer := th.stashDrawer(gtx, s, w)
+		if s.Live {
+			// A press outside it closes it, but not one on its tab
+			// (ComposerStashMenu.tsx).
+			th.outsidePress(gtx, "stash.close", drawer, ui.tab.Sub(image.Pt(0, top)))
+		}
 	}
 	off.Pop()
 	return D{Size: image.Pt(w, top+h)}
@@ -229,11 +237,27 @@ func (th *Theme) composerCard(gtx C, s *Scene, at *composerAnchors) D {
 	call.Add(gtx.Ops)
 	strokeRect(gtx, over(composerOutline(), g), r, rad, float32(px))
 	if dark {
-		// The outline's inset-shadow-2xs: 1dp of --chat-composer-highlight
-		// inside the top edge.
-		hline(gtx, over(alpha(rgb(0xffffff), 0x08), g), px, rad, w-rad)
+		// The outline's inset-shadow-2xs: --chat-composer-highlight 1dp
+		// down inside the border.
+		insetHighlight(gtx, over(alpha(rgb(0xffffff), 0x08), g), r, rad, px)
 	}
 	return D{Size: r.Max}
+}
+
+// insetHighlight paints CSS's inset 0 1px 0 col in the rounded rect r
+// inside its border: the padding box less itself moved 1dp down, a sliver
+// along the top that follows the corners down their curve.
+func insetHighlight(gtx C, col color.NRGBA, r image.Rectangle, rad, border int) {
+	in := r.Inset(border)
+	ir := float32(max(0, rad-border))
+	defer clip.UniformRRect(in, int(ir)).Push(gtx.Ops).Pop()
+	x0, y0, x1, y1 := float32(in.Min.X), float32(in.Min.Y), float32(in.Max.X), float32(in.Max.Y)
+	d := float32(max(1, dp(gtx, 1)))
+	var p clip.Path
+	p.Begin(gtx.Ops)
+	rrect(&p, x0, y0, x1, y1, ir, true)
+	rrect(&p, x0, y0+d, x1, y1+d, ir, false)
+	paint.FillShape(gtx.Ops, col, clip.Outline{Path: p.End()}.Op())
 }
 
 // composerBody is the attachment tiles and the prompt editor, padded 16
@@ -273,10 +297,13 @@ func promptText(col color.NRGBA) Txt {
 }
 
 // lineBox is how CSS sets t's lines and Gio doesn't: each LineH × Size
-// tall with the glyphs centred in it. Gio puts the first line's ascent at
-// the top and rounds each line's advance; lead is how far down the text
-// goes to centre it, and height turns Gio's laid out height into lines ×
-// the exact line height.
+// tall with the glyphs centred in it. Gio puts the first line's baseline
+// its ascent, rounded up, under the top and rounds each line's advance;
+// lead is how far down the text goes to sit where Chrome puts it, and
+// height turns Gio's laid out height into lines × the exact line height.
+// Chrome lays text out in device pixels with the font's ascent and
+// descent rounded, and floors the half-leading over them
+// (CalculateLeadingSpace).
 type lineBox struct {
 	lead, one, adv int
 	exact          float32
@@ -289,7 +316,18 @@ func (th *Theme) lineBox(gtx C, t Txt) lineBox {
 	g.Constraints = layout.Constraints{Max: image.Pt(1<<20, 1<<20)}
 	one := th.Text(g, t, "x").Size.Y
 	m.Stop()
-	return lineBox{lead: int((exact-float32(one))/2 + 0.5), one: one, adv: int(exact + 0.5), exact: exact}
+	f := t.Font
+	if f.Typeface == "" {
+		f = UI(f.Weight)
+	}
+	th.Shaper.LayoutString(text.Parameters{Font: f, PxPerEm: fixed.I(gtx.Sp(t.Size)), MaxLines: 1, MaxWidth: 1 << 24}, "x")
+	var asc, desc fixed.Int26_6
+	for gl, ok := th.Shaper.NextGlyph(); ok; gl, ok = th.Shaper.NextGlyph() {
+		asc, desc = max(asc, gl.Ascent), max(desc, gl.Descent)
+	}
+	a, d := math.Round(float64(asc)/64), math.Round(float64(desc)/64)
+	baseline := math.Floor((float64(exact)-a-d)/2) + a
+	return lineBox{lead: int(baseline) - asc.Ceil(), one: one, adv: int(exact + 0.5), exact: exact}
 }
 
 // height is the CSS height of text Gio laid out gioH tall.
@@ -363,9 +401,11 @@ func (th *Theme) prompt(gtx C, s *Scene, w int) D {
 		pg.Constraints.Min = image.Point{}
 		pd := th.Text(pg, promptText(P.ContrastPlaceholder), s.Placeholder)
 		if s.Suggestion != "" && s.Placeholder == s.Suggestion {
-			// The suggestion's key, 8dp after it and a pixel up (align-[1px]).
-			kd := record(gtx, th.T3KbdOutline("⇥ Tab", glass()))
-			ko := op.Offset(image.Pt(pd.Size.X+dp(gtx, 8), (int(b.exact+0.5)-kd.Size.Y)/2-b.lead-dp(gtx, 1))).Push(gtx.Ops)
+			// The suggestion's key, 8dp after it, its own size, its
+			// baseline a pixel over the text's (align-[1px]).
+			kd := record(pg, th.T3KbdOutline("⇥ Tab", glass()))
+			y := (pd.Size.Y - pd.Baseline) - dp(gtx, 1) - (kd.Size.Y - kd.Baseline)
+			ko := op.Offset(image.Pt(pd.Size.X+dp(gtx, 8), y)).Push(gtx.Ops)
 			kd.call.Add(gtx.Ops)
 			ko.Pop()
 		}
@@ -488,13 +528,19 @@ func caretLines(ed *widget.Editor) (first, last bool) {
 	return line == 0, int(ed.CaretCoords().Y+0.5) >= t.Bounds.Max.Y-t.Baseline
 }
 
-// composerChords are the composer's shortcuts from anywhere
-// (composerShortcuts.ts, keybindings.ts): Mod+Shift+M the model picker,
-// Mod+Shift+E the same picker, for its effort column, Mod+Shift+A the
-// permissions, Mod+S the stash, Mod+Shift+Enter sends the first queued
-// message now, Mod+Alt+N starts a thread without a project; and a letter
-// typed while nothing has the focus goes into the prompt.
+// composerChords are the composer's shortcuts from anywhere but the
+// terminal or a page in the browser, whose keys are their own (T3's are
+// all "!terminalFocus"; composerShortcuts.ts, keybindings.ts): Mod+Shift+M
+// the model picker, Mod+Shift+E the same picker, for its effort column,
+// Mod+Shift+A the permissions, Mod+S the stash, Mod+Shift+Enter sends the
+// first queued message now, Mod+Alt+N starts a thread without a project.
+// And a letter, digit or space typed, or a paste, while nothing has the
+// focus and no menu is open goes into the prompt (composerFocusRedirect.ts),
+// but for the digits an open question takes.
 func (th *Theme) composerChords(gtx C, s *Scene) {
+	if gtx.Focused(&th.in.term) || gtx.Focused(&th.in.browser) {
+		return
+	}
 	filters := []event.Filter{
 		key.Filter{Name: "M", Required: key.ModShortcut | key.ModShift},
 		key.Filter{Name: "E", Required: key.ModShortcut | key.ModShift},
@@ -503,13 +549,22 @@ func (th *Theme) composerChords(gtx C, s *Scene) {
 		key.Filter{Name: key.NameReturn, Required: key.ModShortcut | key.ModShift},
 		key.Filter{Name: key.NameEnter, Required: key.ModShortcut | key.ModShift},
 		key.Filter{Name: "N", Required: key.ModShortcut | key.ModAlt},
-		key.Filter{Name: key.NameSpace},
 		// ⌘ or Ctrl held swaps the send button's steer for queue.
 		key.Filter{Name: key.NameCtrl, Optional: key.ModCtrl | key.ModShift | key.ModAlt | key.ModCommand},
 		key.Filter{Name: key.NameCommand, Optional: key.ModCtrl | key.ModShift | key.ModAlt | key.ModCommand},
 	}
-	for c := 'A'; c <= 'Z'; c++ {
-		filters = append(filters, key.Filter{Name: key.Name(string(c)), Optional: key.ModShift})
+	redirect := !th.typing(gtx) && s.Picker == nil && s.Access == nil && s.Projects == nil && s.Context == nil &&
+		s.Account == nil && s.Machines == nil && !s.Details && th.in.composer.approvalMenu == "" && th.in.preview == nil
+	if redirect {
+		filters = append(filters, key.Filter{Name: key.NameSpace}, key.Filter{Name: "V", Required: key.ModShortcut})
+		for c := 'A'; c <= 'Z'; c++ {
+			filters = append(filters, key.Filter{Name: key.Name(string(c)), Optional: key.ModShift})
+		}
+		if !th.questionTakesDigits(s) {
+			for c := '0'; c <= '9'; c++ {
+				filters = append(filters, key.Filter{Name: key.Name(string(c))})
+			}
+		}
 	}
 	for {
 		ev, ok := gtx.Event(filters...)
@@ -530,11 +585,8 @@ func (th *Theme) composerChords(gtx C, s *Scene) {
 		short := ke.Modifiers.Contain(key.ModShortcut)
 		switch {
 		case !short && !ke.Modifiers.Contain(key.ModAlt):
-			// Type to focus (composerFocusRedirect.ts), for the keys whose
-			// text Gio's names give whatever the keyboard.
-			if th.typing(gtx) || s.Picker != nil || s.Access != nil || s.Projects != nil || th.in.preview != nil {
-				continue
-			}
+			// Type to focus, for the keys whose text Gio's names give
+			// whatever the keyboard.
 			r := " "
 			if ke.Name != key.NameSpace {
 				r = string(ke.Name)
@@ -547,6 +599,13 @@ func (th *Theme) composerChords(gtx C, s *Scene) {
 			ed.SetCaret(n, n)
 			th.InsertText("composer", r)
 			th.Focus("composer")
+		case ke.Name == "V" && !ke.Modifiers.Contain(key.ModShift):
+			// A paste lands at the prompt's end, as typing does.
+			ed := th.Editor("composer")
+			n := ed.Len()
+			ed.SetCaret(n, n)
+			th.Focus("composer")
+			th.push(Action{ID: "composer", Kind: "paste"})
 		case ke.Name == "N":
 			if s.CanScratch {
 				th.push(Action{ID: "project.scratch", Kind: "click"})
@@ -598,16 +657,48 @@ func (th *Theme) composerFooter(gtx C, s *Scene, at *composerAnchors, formW int)
 		po.Pop()
 		end -= pd.Size.X + dp(gtx, 8)
 
-		// The controls, right to left: the chip, then the trigger.
+		// The controls, right to left: the mode block, then the trigger, 2
+		// apart, the trigger taking what's left and truncating its name. As
+		// room runs out the block goes icon-only, then into the "…" menu;
+		// it comes back only with a pixel to spare (composerFooterLayout.ts).
 		cy := (h - dp(gtx, 28)) / 2
+		ui := &th.in.composer
 		if s.RuntimeChip {
-			cd := record(gtx, func(gtx C) D { return th.permissionsChip(gtx, s, false) })
-			end -= cd.Size.X
+			gap := dp(gtx, 2)
+			free := gtx
+			free.Constraints = layout.Constraints{Max: image.Pt(1<<20, dp(gtx, 28))}
+			trigger := record(free, func(gtx C) D { return th.modelTrigger(gtx, s) }).Size.X
+			mode := runtimeMode(s.Runtime)
+			chip := composerControl{on: glass(), icon: mode.Icon, iconLabel: true, label: mode.Label, padStart: 6}
+			natural := record(free, func(gtx C) D { return th.composerControlW(gtx, chip) }).Size.X
+			chip.label = ""
+			iconOnly := record(free, func(gtx C) D { return th.composerControlW(gtx, chip) }).Size.X
+			more := record(free, func(gtx C) D { return th.composerControlW(gtx, composerControl{on: glass(), icon: "ellipsis"}) }).Size.X
+			blocks := [3]int{natural, iconOnly, more}
+			step, host := 0, end-x
+			for step < 2 {
+				slack := 0
+				if step < ui.footerStep {
+					slack = dp(gtx, 1)
+				}
+				if trigger+gap+blocks[step] <= host-slack {
+					break
+				}
+				step++
+			}
+			ui.footerStep = step
+			bd := record(gtx, func(gtx C) D {
+				if step == 2 {
+					return th.moreControls(gtx, s)
+				}
+				return th.permissionsChip(gtx, s, false, step == 1)
+			})
+			end -= bd.Size.X
 			co := op.Offset(image.Pt(end, cy)).Push(gtx.Ops)
-			cd.call.Add(gtx.Ops)
+			bd.call.Add(gtx.Ops)
 			co.Pop()
-			at.access = image.Rectangle{Min: image.Pt(end+dp(gtx, 8), cy+left), Max: image.Pt(end+cd.Size.X+dp(gtx, 8), cy+left+cd.Size.Y)}
-			end -= dp(gtx, 2)
+			at.access = image.Rectangle{Min: image.Pt(end+dp(gtx, 8), cy+left), Max: image.Pt(end+bd.Size.X+dp(gtx, 8), cy+left+bd.Size.Y)}
+			end -= gap
 		}
 		mg := gtx
 		mg.Constraints = layout.Constraints{Max: image.Pt(max(0, end-x), dp(gtx, 28))}
@@ -693,11 +784,10 @@ func (th *Theme) composerControlW(gtx C, c composerControl) D {
 		ps = c.padStart
 	}
 	gtx.Constraints.Min = image.Point{}
-	// opacity-64 as Chrome composites it, in sRGB over the surface; Gio's
-	// layer opacity would blend in linear light and come out paler.
+	// opacity-64, as Chrome composites it over the surface.
 	fade := func(col color.NRGBA) color.NRGBA {
 		if c.off {
-			return over(alpha(col, 0xa3), c.on)
+			return faded(col, c.on, 0xa3)
 		}
 		return col
 	}
@@ -741,8 +831,9 @@ func (th *Theme) composerControlW(gtx C, c composerControl) D {
 }
 
 // permissionsChip is the permissions control: the mode's icon and label,
-// in the footer (sm, ps-1.5) or the new thread's strip (xs).
-func (th *Theme) permissionsChip(gtx C, s *Scene, xs bool) D {
+// in the footer (sm, ps-1.5; the icon alone where the footer's short of
+// room) or the new thread's strip (xs).
+func (th *Theme) permissionsChip(gtx C, s *Scene, xs, iconOnly bool) D {
 	mode := runtimeMode(s.Runtime)
 	id := liveID(s, "access")
 	hot := s.Access != nil
@@ -758,6 +849,9 @@ func (th *Theme) permissionsChip(gtx C, s *Scene, xs bool) D {
 	if !xs {
 		cc.padStart = 6
 	}
+	if iconOnly {
+		cc.label = ""
+	}
 	d := th.composerControlW(gtx, cc)
 	if id != "" {
 		th.hit(gtx, id, d.Size)
@@ -766,6 +860,23 @@ func (th *Theme) permissionsChip(gtx C, s *Scene, xs bool) D {
 			tip = "Permissions · " + ShortcutShift("A")
 		}
 		th.tipAt(gtx, id, tip, d.Size, true, 0)
+	}
+	return d
+}
+
+// moreControls is "More composer controls", the "…" the footer's mode
+// block goes into when it's short of room (CompactComposerControlsMenu.tsx):
+// its menu is the permissions'.
+func (th *Theme) moreControls(gtx C, s *Scene) D {
+	id := liveID(s, "access")
+	hot := s.Access != nil
+	if id != "" {
+		c, _ := th.events(gtx, id)
+		hot = hot || c.Hovered()
+	}
+	d := th.composerControlW(gtx, composerControl{hot: hot, on: glass(), icon: "ellipsis"})
+	if id != "" {
+		th.hit(gtx, id, d.Size)
 	}
 	return d
 }
@@ -938,10 +1049,11 @@ func (th *Theme) modelTrigger(gtx C, s *Scene) D {
 	}
 	suffix := record(sg, func(gtx C) D { return layout.Flex{Alignment: layout.Middle}.Layout(gtx, parts...) })
 
-	// The label truncates to what's left, at most 224.
+	// The label truncates to what's left, at most 224. The mark's 16dp
+	// wrapper takes in its svg's -2dp side margins.
 	icon := 0
 	if s.Provider != "" {
-		icon = dp(gtx, 16-4) + gap // its -2dp side margins
+		icon = dp(gtx, 16) + gap
 	}
 	tail := 0
 	if suffix.Size.X > 0 {
@@ -960,7 +1072,7 @@ func (th *Theme) modelTrigger(gtx C, s *Scene) D {
 	}
 	x := px + padX
 	if s.Provider != "" {
-		off := op.Offset(image.Pt(x-dp(gtx, 2), (h-dp(gtx, 16))/2)).Push(gtx.Ops)
+		off := op.Offset(image.Pt(x, (h-dp(gtx, 16))/2)).Push(gtx.Ops)
 		ProviderLogo(s.Provider, 16)(gtx)
 		off.Pop()
 		x += icon
@@ -1014,19 +1126,24 @@ func (th *Theme) hasContent(s *Scene) bool {
 	return s.Composer != ""
 }
 
-// sendArt is the send button's nightly artwork at 1x and 2x, and the same
-// at 110% brightness for hover (send-night@*.png, from tools/t3ui/sendart.py).
-var sendArt = map[[2]int]paint.ImageOp{}
+// artLook is how the send button wears its art: at 1x or 2x, at 110%
+// brightness for hover, or at 64% over the glass under it while there's
+// nothing to send.
+type artLook struct {
+	scale  int
+	bright bool
+	fadeOn color.NRGBA // the surface a disabled button fades onto; none while it's on
+}
 
-func sendArtImage(scale int, bright bool) paint.ImageOp {
-	k := [2]int{scale, 0}
-	if bright {
-		k[1] = 1
-	}
-	if im, ok := sendArt[k]; ok {
+// sendArt is the send button's nightly artwork in each look it's worn in
+// (send-night@*.png, from tools/t3ui/sendart.py).
+var sendArt = map[artLook]paint.ImageOp{}
+
+func sendArtImage(look artLook) paint.ImageOp {
+	if im, ok := sendArt[look]; ok {
 		return im
 	}
-	data, err := artFiles.ReadFile("art/send-night@" + strconv.Itoa(scale) + "x.png")
+	data, err := artFiles.ReadFile("art/send-night@" + strconv.Itoa(look.scale) + "x.png")
 	if err != nil {
 		panic(err)
 	}
@@ -1038,26 +1155,30 @@ func sendArtImage(scale int, bright bool) paint.ImageOp {
 	for y := src.Bounds().Min.Y; y < src.Bounds().Max.Y; y++ {
 		for x := src.Bounds().Min.X; x < src.Bounds().Max.X; x++ {
 			c := color.NRGBAModel.Convert(src.At(x, y)).(color.NRGBA)
-			if bright {
+			if look.bright {
 				// filter: brightness(1.1), in sRGB as Chrome applies it.
 				up := func(v uint8) uint8 { return uint8(min(255, int(float32(v)*1.1+0.5))) }
 				c.R, c.G, c.B = up(c.R), up(c.G), up(c.B)
+			}
+			if look.fadeOn.A != 0 {
+				c = faded(c, look.fadeOn, 0xa3)
 			}
 			img.SetNRGBA(x, y, c)
 		}
 	}
 	im := paint.NewImageOp(img)
-	sendArt[k] = im
+	sendArt[look] = im
 	return im
 }
 
 // sendButton is the 32dp round send button. tern runs against T3's
 // nightly, whose button wears the stage art (StageBackdropButtonArt):
 // the nightly sky behind a white arrow, brightened and grown to 105% on
-// hover, at 64% while there's nothing to send. While a run works it
-// steers (corner-up-right), or queues (list-plus) with ⌘ or Ctrl held
-// and on a ⌘- or Ctrl-click; for a queued message being edited it's a
-// check; a spinner while it sends, when it's off.
+// hover, at 64% over the glass, without its shadows, while there's
+// nothing to send. While a run works it steers (corner-up-right), or
+// queues (list-plus) with ⌘ or Ctrl held and on a ⌘- or Ctrl-click; for
+// a queued message being edited it's a check; a spinner while it sends,
+// when it's off.
 func (th *Theme) sendButton(gtx C, s *Scene, running bool) D {
 	id := liveID(s, "send")
 	enabled := th.hasContent(s) && !s.Sending
@@ -1096,25 +1217,27 @@ func (th *Theme) sendButton(gtx C, s *Scene, running bool) D {
 			defer op.Affine(f32.Affine2D{}.Scale(c, f32.Pt(1.05, 1.05))).Push(gtx.Ops).Pop()
 		}
 		on := glass()
+		scale := 1
+		if gtx.Metric.PxPerDp >= 1.5 {
+			scale = 2
+		}
+		look := artLook{scale: scale, bright: hovered}
+		fg := rgb(0xffffff)
 		if !enabled {
-			defer paint.PushOpacity(gtx.Ops, 0.64).Pop()
+			look.fadeOn, fg = on, faded(fg, on, 0xa3)
 		} else {
-			// The control highlight is a 1dp line under it, not inset.
+			shadowOn(gtx, r, sz/2, on, []boxShadow{{0, 1, 2, 0, alpha(rgb(0), 0x3d)}})
+			// The control highlight is a 1dp line under it, not inset, over
+			// the drop shadow.
 			fill(gtx, over(alpha(rgb(0xffffff), 0x29), on), r.Add(image.Pt(0, max(1, dp(gtx, 1)))), sz/2)
-			shadow(gtx, r, sz/2, []boxShadow{{0, 1, 2, 0, alpha(rgb(0), 0x3d)}})
 		}
 		func() {
 			defer clip.Ellipse{Max: r.Max}.Push(gtx.Ops).Pop()
-			scale := 1
-			if gtx.Metric.PxPerDp >= 1.5 {
-				scale = 2
-			}
 			k := float32(sz) / float32(32*scale)
 			defer op.Affine(f32.Affine2D{}.Scale(f32.Point{}, f32.Pt(k, k))).Push(gtx.Ops).Pop()
-			sendArtImage(scale, hovered).Add(gtx.Ops)
+			sendArtImage(look).Add(gtx.Ops)
 			paint.PaintOp{}.Add(gtx.Ops)
 		}()
-		fg := rgb(0xffffff)
 		icon := ""
 		switch {
 		case s.Sending:
@@ -1216,7 +1339,8 @@ func sendArrow(gtx C, col color.NRGBA, at image.Point) {
 // stopButton is Stop: a round button in --destructive at 90% (full on
 // hover) with a 12dp white square, 32dp or 28 in the answer row (size-8
 // sm:size-7). After a click it's "Stopping…", then "Stopped" once the run
-// can't be stopped, both off at 64% until it can again (or 10s pass).
+// can't be stopped, both off, shadows and all at 64% over the glass,
+// until it can again (or 10s pass).
 func (th *Theme) stopButton(gtx C, s *Scene, inRow bool) D {
 	id := liveID(s, "stop")
 	off := s.Stop == StopPending || s.Stop == StopLanded
@@ -1231,7 +1355,11 @@ func (th *Theme) stopButton(gtx C, s *Scene, inRow bool) D {
 	}
 	r := image.Rect(0, 0, sz, sz)
 	on := glass()
-	bg := over(alpha(P.Destructive, 0xe6), on)
+	opacity := uint8(0xff)
+	if off {
+		opacity = 0xa3
+	}
+	bg := alpha(P.Destructive, 0xe6)
 	if hovered {
 		bg = P.Destructive
 	}
@@ -1242,18 +1370,13 @@ func (th *Theme) stopButton(gtx C, s *Scene, inRow bool) D {
 	case StopLanded:
 		tip = "Stopped"
 	}
-	func() {
-		if off {
-			defer paint.PushOpacity(gtx.Ops, 0.64).Pop()
-		}
-		fill(gtx, over(alpha(rgb(0xffffff), 0x29), on), r.Add(image.Pt(0, max(1, dp(gtx, 1)))), sz/2)
-		shadow(gtx, r, sz/2, []boxShadow{{0, 1, 2, 0, alpha(P.Destructive, 0x3d)}})
-		fill(gtx, bg, r, sz/2)
-		k := float32(dp(gtx, 12)) / 12
-		o := image.Pt((sz-dp(gtx, 12))/2, (sz-dp(gtx, 12))/2)
-		sq := image.Rect(o.X+int(2*k+0.5), o.Y+int(2*k+0.5), o.X+int(10*k+0.5), o.Y+int(10*k+0.5))
-		fill(gtx, rgb(0xffffff), sq, int(1.5*k+0.5))
-	}()
+	shadowOn(gtx, r, sz/2, on, []boxShadow{{0, 1, 2, 0, alpha(P.Destructive, uint8(0x3d*int(opacity)/255))}})
+	fill(gtx, faded(alpha(rgb(0xffffff), 0x29), on, opacity), r.Add(image.Pt(0, max(1, dp(gtx, 1)))), sz/2)
+	fill(gtx, faded(bg, on, opacity), r, sz/2)
+	k := float32(dp(gtx, 12)) / 12
+	o := image.Pt((sz-dp(gtx, 12))/2, (sz-dp(gtx, 12))/2)
+	sq := image.Rect(o.X+int(2*k+0.5), o.Y+int(2*k+0.5), o.X+int(10*k+0.5), o.Y+int(10*k+0.5))
+	fill(gtx, faded(rgb(0xffffff), on, opacity), sq, int(1.5*k+0.5))
 	if id != "" {
 		if off {
 			hovered = th.hoverArea(gtx, id+".tip", r.Max)
@@ -1329,22 +1452,25 @@ func (th *Theme) submitPill(gtx C, s *Scene, compact bool) D {
 		c, _ := th.events(gtx, id)
 		hovered = c.Hovered()
 	}
+	on := glass()
+	bg, fg := P.MessageAction, P.MessageActionForeground
+	switch {
+	case !enabled:
+		// opacity-64 over the glass, without the shadow.
+		bg, fg = faded(bg, on, 0xa3), faded(fg, on, 0xa3)
+	case hovered:
+		bg = P.MessageActionHover
+	}
 	td := record(gtx, func(gtx C) D {
-		return th.Text(gtx, Txt{Size: 14, LineH: 20.0 / 14, Font: UI(font.Medium), Color: P.MessageActionForeground, MaxLines: 1}, label)
+		return th.Text(gtx, Txt{Size: 14, LineH: 20.0 / 14, Font: UI(font.Medium), Color: fg, MaxLines: 1}, label)
 	})
 	h, padX := dp(gtx, 28), dp(gtx, 16)
 	if compact {
 		padX = dp(gtx, 12)
 	}
 	r := image.Rect(0, 0, td.Size.X+2*padX, h)
-	if !enabled {
-		defer paint.PushOpacity(gtx.Ops, 0.64).Pop()
-	} else {
-		shadow(gtx, r, h/2, []boxShadow{{0, 1, 2, 0, alpha(P.MessageAction, 0x3d)}})
-	}
-	bg := P.MessageAction
-	if hovered {
-		bg = P.MessageActionHover
+	if enabled {
+		shadowOn(gtx, r, h/2, on, []boxShadow{{0, 1, 2, 0, alpha(P.MessageAction, 0x3d)}})
 	}
 	fill(gtx, bg, r, h/2)
 	off := op.Offset(image.Pt(padX, (h-td.Size.Y)/2)).Push(gtx.Ops)
@@ -1377,8 +1503,8 @@ func (th *Theme) answered(s *Scene, i int) bool {
 }
 
 // composerTile is a picture of the composer's as T3's 64dp tile: rounded
-// 8, a border at 80%, a click that opens it ("Preview <name>") and its
-// remove button in the corner (ComposerAttachmentStrip.tsx).
+// 8, a border at 80%, a click that opens it and its remove button in the
+// corner (ComposerAttachmentStrip.tsx).
 func (th *Theme) composerTile(t Thumb, i int, live bool) W {
 	return func(gtx C) D {
 		sz := dp(gtx, tileSize)
@@ -1391,23 +1517,26 @@ func (th *Theme) composerTile(t Thumb, i int, live bool) W {
 			off.Pop()
 		}
 		strokeRect(gtx, over(alpha(P.Border, uint8(int(P.Border.A)*8/10)), glass()), r, rad, float32(max(1, dp(gtx, 1))))
+		under := t.avg
+		if !t.ok {
+			under = P.Background
+		}
 		if !live {
 			// The mockups show the remove button too, with nothing behind it.
 			defer op.Offset(image.Pt(sz-dp(gtx, 24+4), dp(gtx, 4))).Push(gtx.Ops).Pop()
-			mediaClose(gtx, 24, 14, false)
+			mediaClose(gtx, 24, 14, false, under)
 			return D{Size: r.Max}
 		}
-		pid := "image.preview:" + strconv.Itoa(i)
-		if clicked, hovered := th.localClick(gtx, pid, r.Max); clicked && t.ok {
+		// A click opens it. T3 names it "Preview <name>" for screen readers
+		// alone, and its zoom-in cursor is one Gio doesn't have.
+		if clicked, _ := th.localClick(gtx, "image.preview:"+strconv.Itoa(i), r.Max); clicked && t.ok {
 			th.openPreview(t)
-		} else {
-			th.tipShow(gtx, pid, hovered && t.Name != "", "Preview "+t.Name, r.Max, true, 0)
 		}
 		// media-close: 24dp, black at 65% (80% on hover), a white x.
 		id := "image.remove:" + strconv.Itoa(i)
 		c, _ := th.events(gtx, id)
 		defer op.Offset(image.Pt(sz-dp(gtx, 24+4), dp(gtx, 4))).Push(gtx.Ops).Pop()
-		mediaClose(gtx, 24, 14, c.Hovered())
+		mediaClose(gtx, 24, 14, c.Hovered(), under)
 		th.hit(gtx, id, image.Pt(dp(gtx, 24), dp(gtx, 24)))
 		return D{Size: r.Max}
 	}

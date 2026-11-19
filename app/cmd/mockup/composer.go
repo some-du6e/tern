@@ -14,7 +14,8 @@ import (
 // questions, the trigger's speeds and no provider, an armed /clear, and a
 // new thread's hero, with and without a project.
 
-// pictures is n made-up screenshots, as the composer's tiles.
+// pictures is n made-up screenshots, as the composer's tiles, named
+// for their files.
 func pictures(n int) []ui.Thumb {
 	var out []ui.Thumb
 	tints := []color.RGBA{{0x24, 0x42, 0x5f, 0xff}, {0x3b, 0x2b, 0x52, 0xff}, {0x1f, 0x4d, 0x3a, 0xff}}
@@ -36,29 +37,37 @@ func pictures(n int) []ui.Thumb {
 		if err := png.Encode(&b, img); err != nil {
 			panic(err)
 		}
-		out = append(out, ui.NewThumb(b.Bytes()))
+		t := ui.NewThumb(b.Bytes())
+		t.Name = "header-" + string(rune('a'+i)) + ".png"
+		out = append(out, t)
 	}
 	return out
 }
 
-// composerScene is an idle thread whose prompt holds a picture as a chip,
-// with another picture as a tile alone, and a mode that isn't the default.
-func composerScene() *ui.Scene {
+// idleScene is an idle thread with nothing in its composer.
+func idleScene() *ui.Scene {
 	s := base("Gio sidebar: virtualize 1k rows")
 	s.State, s.StateLabel, s.Run.Status = ui.ThreadIdle, "Idle", "Idle"
 	s.Items = s.Items[:4]
+	return s
+}
+
+// composerScene is an idle thread whose prompt holds a picture as T3's
+// chip, its name and size, with another picture as a tile alone, and a
+// mode that isn't the default.
+func composerScene(th *ui.Theme) *ui.Scene {
+	s := idleScene()
 	thumbs := pictures(2)
 	thumbs[0].N = 1
 	s.Thumbs = thumbs
-	s.Composer = "compare " + ui.ChipText(1) + " with the header we had before the port, and keep the gaps"
+	s.Composer = "compare " + th.ImageChip(1, thumbs[0].Name, thumbs[0].Size) + " with the header we had before the port, and keep the gaps"
 	s.Runtime, s.RuntimeChip = "approval-required", true
 	return s
 }
 
 // mentionScene is the @ menu over the composer, its second row lit.
 func mentionScene() *ui.Scene {
-	s := composerScene()
-	s.Thumbs, s.RuntimeChip, s.Runtime = nil, false, "full-access"
+	s := idleScene()
 	s.Composer = "look at @comp"
 	s.Suggest = []ui.Suggestion{
 		{Icon: "folder", Label: "components", Desc: "app/ui"},
@@ -71,8 +80,8 @@ func mentionScene() *ui.Scene {
 }
 
 // busyScene is a run with nothing typed: Stop, the queue past three at
-// the timeline's foot, a notice attached over the card and the thread's
-// error in the banner lane over the conversation.
+// the timeline's foot and the thread's error in the banner lane over the
+// conversation.
 func busyScene() *ui.Scene {
 	s := base("Port the T3 Connect client to Go")
 	s.Queue = []ui.QueuedMessage{
@@ -82,7 +91,6 @@ func busyScene() *ui.Scene {
 		{Text: "write it up in the README"},
 	}
 	s.Error = "Couldn't upload the picture: the server said 413"
-	s.Notice = "Loading earlier turns…"
 	return s
 }
 
@@ -90,7 +98,7 @@ func busyScene() *ui.Scene {
 // with Cancel, and the send button updates it; a stop was just clicked.
 func queueEditScene() *ui.Scene {
 	s := busyScene()
-	s.Error, s.Notice = "", ""
+	s.Error = ""
 	s.Queue = s.Queue[:2]
 	s.Queue[1].Editing = true
 	s.EditingQueued = true
@@ -101,8 +109,8 @@ func queueEditScene() *ui.Scene {
 
 // permissionsScene is the permissions menu open over its chip, T3's
 // segmented modes.
-func permissionsScene() *ui.Scene {
-	s := composerScene()
+func permissionsScene(th *ui.Theme) *ui.Scene {
+	s := composerScene(th)
 	s.Access = &ui.Permissions{Modes: ui.RuntimeModes, Sel: 0}
 	return s
 }
@@ -110,8 +118,7 @@ func permissionsScene() *ui.Scene {
 // suggestionScene is a settled thread whose provider guessed the next
 // prompt: the placeholder, with its Tab key.
 func suggestionScene() *ui.Scene {
-	s := composerScene()
-	s.Thumbs, s.Composer, s.RuntimeChip = nil, "", false
+	s := idleScene()
 	s.Suggestion = "go ahead and set it up"
 	s.Placeholder = s.Suggestion
 	return s
@@ -120,8 +127,7 @@ func suggestionScene() *ui.Scene {
 // ultrafastScene is a Codex model on its Ultrafast tier with Ultracode
 // on: the trigger's echoed bolt and workflow icon.
 func ultrafastScene() *ui.Scene {
-	s := composerScene()
-	s.Thumbs, s.Composer, s.RuntimeChip = nil, "", false
+	s := idleScene()
 	s.Provider, s.Model, s.Effort = "Codex", "GPT-5.5", "Extra high"
 	s.Speed, s.Ultracode = "Ultrafast", true
 	return s
@@ -130,8 +136,7 @@ func ultrafastScene() *ui.Scene {
 // noProviderScene has no provider to send to: the trigger says so, off,
 // and the placeholder says where to enable one.
 func noProviderScene() *ui.Scene {
-	s := composerScene()
-	s.Thumbs, s.Composer, s.RuntimeChip = nil, "", false
+	s := idleScene()
 	s.Provider, s.Model, s.Effort, s.Speed = "", "", "", ""
 	s.NoProvider = true
 	s.Placeholder = "Enable a provider in Settings to send a message"
@@ -141,8 +146,7 @@ func noProviderScene() *ui.Scene {
 // freshScene has /clear armed: its banner over the card says the next
 // message starts a fresh session.
 func freshScene() *ui.Scene {
-	s := composerScene()
-	s.Thumbs, s.Composer, s.RuntimeChip = nil, "", false
+	s := idleScene()
 	s.Fresh = true
 	return s
 }
@@ -155,11 +159,10 @@ func heroStashScene() *ui.Scene {
 }
 
 // stashScene is the stash's list open over the composer, its tab beside
-// a notice.
+// the armed /clear's banner.
 func stashScene() *ui.Scene {
-	s := composerScene()
-	s.Thumbs, s.Composer, s.RuntimeChip = nil, "", false
-	s.Notice = "Loading earlier turns…"
+	s := idleScene()
+	s.Fresh = true
 	s.Stash = []ui.Stashed{
 		{Snippet: "try the sidebar's rows at 1k threads with the hover card open", Age: "4m ago"},
 		{Snippet: "(2 images)", Thumbs: pictures(2), Age: "1h ago"},

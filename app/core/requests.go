@@ -125,7 +125,7 @@ func (a *App) respondApproval(req, decision string) {
 	if !ok {
 		return
 	}
-	a.dispatchOpenThen("runtime-request.respond", map[string]any{"requestId": req, "decision": decision}, func() {
+	a.dispatchOpenThen("runtime-request.respond", map[string]any{"requestId": req, "decision": decision}, func(error) {
 		delete(a.comp.responding, req)
 	})
 }
@@ -134,18 +134,20 @@ func (a *App) respondApproval(req, decision string) {
 // (STOP_PENDING_MAX_MS).
 const stopWait = 10 * time.Second
 
-// stopState is where a click on Stop has got, for one thread's run.
+// stopState is where a click on Stop has got, for one thread's run. It's
+// the open thread's composer's: T3 keys the primary actions by thread, so
+// another thread's Stop starts afresh.
 type stopState struct {
 	thread, run string
 	phase       ui.StopPhase
 	at          time.Time
 }
 
-// stopClicked notes a click on Stop: it's off, "Stopping…", until the run
-// stops or 10s pass. Call with the lock held.
+// stopClicked notes a click on the open thread's Stop: it's off,
+// "Stopping…", until the run stops or 10s pass. Call with the lock held.
 func (a *App) stopClicked() bool {
 	t := a.curThread()
-	if t == nil || a.stopping.phase == ui.StopPending || a.stopping.phase == ui.StopLanded {
+	if t == nil || a.stopPhase(time.Now()) == ui.StopPending || a.stopping.phase == ui.StopLanded {
 		return false
 	}
 	a.stopping = stopState{thread: a.openID, run: t.ActiveRunID, phase: ui.StopPending, at: time.Now()}
@@ -156,10 +158,14 @@ func (a *App) stopClicked() bool {
 // stopPhase moves the open thread's stop along (ComposerPrimaryActions.tsx):
 // pending or timed out becomes landed once the run can't be stopped; landed
 // goes back to idle once it can again, as does a new run; pending times out
-// after 10s. Call with the lock held.
+// after 10s. Another thread's stop is forgotten, as T3's goes with its
+// thread's composer. Call with the lock held.
 func (a *App) stopPhase(now time.Time) ui.StopPhase {
+	if a.stopping.thread != a.openID {
+		a.stopping = stopState{}
+	}
 	t := a.curThread()
-	if t == nil || a.stopping.thread != a.openID {
+	if t == nil || a.stopping.phase == ui.StopIdle {
 		return ui.StopIdle
 	}
 	running := threadState(t) == ui.ThreadRunning

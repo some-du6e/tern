@@ -245,7 +245,8 @@ func mix(a, b color.NRGBA, t float32) color.NRGBA {
 // image. bg is what the text sits on, to hide the run the chip holds. The
 // regions are in the view's frame, scroll taken off, so the chips follow
 // a scrolled editor. Live, a chip is a button: its tooltip is the name
-// over the size, and a click opens the picture.
+// over the size, its label is underlined while the pointer's on it, and a
+// click opens the picture.
 func (th *Theme) drawChips(gtx C, t textRegions, size image.Point, bg color.NRGBA, sizeSp float32, chip func(n int) Thumb, live bool) {
 	spans := chipSpans(t.Text())
 	if len(spans) == 0 {
@@ -283,6 +284,14 @@ func (th *Theme) drawChips(gtx C, t textRegions, size image.Point, bg color.NRGB
 			LucideW("image", ink, sizeSp)(gtx)
 		}
 		off.Pop()
+		var clicked, hovered bool
+		if live {
+			id := "chip:" + strconv.Itoa(c.n)
+			co := op.Offset(b.Min).Push(gtx.Ops)
+			clicked, hovered = th.localClick(gtx, id, b.Size())
+			th.tipShow(gtx, id, hovered, strings.TrimSpace(pic.Name+"\n"+sz), b.Size(), true, 0)
+			co.Pop()
+		}
 		for _, part := range []struct {
 			t  Txt
 			s  string
@@ -302,15 +311,13 @@ func (th *Theme) drawChips(gtx C, t textRegions, size image.Point, bg color.NRGB
 			lo := op.Offset(image.Pt(x, base-(ld.Size.Y-ld.Baseline))).Push(gtx.Ops)
 			call.Add(gtx.Ops)
 			lo.Pop()
+			if hovered {
+				// ContextChipLabel's underline, 1px at 0.2em under the
+				// baseline in the chip's colour, under each of its texts.
+				y := base + int(0.2*em+0.5)
+				fill(gtx, ink, image.Rect(x, y, x+ld.Size.X, y+max(1, dp(gtx, 1))), 0)
+			}
 		}
-		if !live {
-			continue
-		}
-		id := "chip:" + strconv.Itoa(c.n)
-		co := op.Offset(b.Min).Push(gtx.Ops)
-		clicked, hovered := th.localClick(gtx, id, b.Size())
-		th.tipShow(gtx, id, hovered, strings.TrimSpace(pic.Name+"\n"+sz), b.Size(), true, 0)
-		co.Pop()
 		if clicked && pic.ok {
 			th.openPreview(pic)
 		}

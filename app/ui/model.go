@@ -293,7 +293,6 @@ type Scene struct {
 	Live                     bool
 	Booting                  bool         // live: still reading the saved session; draw a blank window
 	Error                    string       // shown as a dismissable banner
-	Notice                   string       // a quiet status line over the composer, like "Sending…"
 	Empty                    string       // shown instead of messages when no thread is open
 	Access                   *Permissions // the permissions menu, open over its chip
 	Account                  *Traits      // the account menu, open over the sidebar footer
@@ -321,7 +320,7 @@ type Scene struct {
 	Composer     string
 	Hero         string // a new thread's project: "What should we build in <Hero>?" over a centered composer
 	Scratch      bool   // the draft has no project: "What should we work on?"
-	CanScratch   bool   // the hero offers "or start without a project"
+	CanScratch   bool   // a thread without a project can start: Mod+Alt+N, and the hero's "or start without a project"
 	ProjectsHero bool   // the Projects menu opens under the heading's project name
 	Placeholder  string
 	Suggestion   string          // the provider's guess at the next prompt, on offer: the placeholder, which Tab takes

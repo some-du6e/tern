@@ -14,9 +14,10 @@ import (
 )
 
 // The composer's prompt stash (useComposerStash.ts, promptStashStore.ts):
-// Mod+S puts the composer's prompt and pictures aside and clears it; with
-// nothing in the composer it brings back the only entry, or opens the
-// list. Entries persist, 20 at most, newest first.
+// Mod+S puts the composer's whole draft aside, its prompt with the chips
+// in it and its pictures, and clears it; with nothing in the composer it
+// brings back the only entry, or opens the list. Entries persist, 20 at
+// most, newest first.
 
 const (
 	stashMax = 20 // promptStashStore.ts
@@ -25,11 +26,14 @@ const (
 	stashImageBytes = 8 << 20
 )
 
-// stashEntry is one stashed prompt. Its pictures come back as tiles.
+// stashEntry is one stashed prompt, its pictures' chips in it: Chips
+// is, for each picture, the number its chip had in Prompt, 0 for a tile
+// alone.
 type stashEntry struct {
 	ID      string       `json:"id"`
 	Prompt  string       `json:"prompt"`
 	Images  []clip.Image `json:"images,omitempty"`
+	Chips   []int        `json:"chips,omitempty"`
 	Dropped int          `json:"dropped,omitempty"`
 	Created time.Time    `json:"createdAt"`
 	thumbs  []ui.Thumb
@@ -86,9 +90,14 @@ func (a *App) stashKey(th *ui.Theme) {
 // stashLocked puts the composer's prompt and pictures at the top of the
 // stash. Call with the lock held.
 func (a *App) stashLocked(th *ui.Theme, key string) {
-	e := stashEntry{ID: t3.NewID(), Prompt: ui.TrimText(ui.StripChips(th.EditorText("composer"))), Created: time.Now()}
+	e := stashEntry{ID: t3.NewID(), Prompt: ui.TrimText(th.EditorText("composer")), Created: time.Now()}
 	for _, p := range a.images[key] {
+		n := 0
+		if p.chip {
+			n = p.n
+		}
 		e.Images = append(e.Images, p.img)
+		e.Chips = append(e.Chips, n)
 		e.thumbs = append(e.thumbs, p.thumb)
 	}
 	delete(a.images, key)
@@ -110,8 +119,10 @@ func (a *App) saveStashLocked() {
 		e := &a.comp.stash[i]
 		var keep []clip.Image
 		var thumbs []ui.Thumb
+		var chips []int
 		for j, im := range e.Images {
 			if len(im.Data) > room {
+				// Its chip stays in the prompt, and goes when it's restored.
 				e.Dropped++
 				continue
 			}
@@ -120,9 +131,12 @@ func (a *App) saveStashLocked() {
 			if j < len(e.thumbs) {
 				thumbs = append(thumbs, e.thumbs[j])
 			}
+			if j < len(e.Chips) {
+				chips = append(chips, e.Chips[j])
+			}
 		}
 		if len(keep) < len(e.Images) {
-			e.Images, e.thumbs = keep, thumbs
+			e.Images, e.thumbs, e.Chips = keep, thumbs, chips
 		}
 	}
 	a.stashWrites++
@@ -164,8 +178,9 @@ func (a *App) decodeStash() {
 }
 
 // restoreStash brings entry i back: its text after the composer's (a
-// blank line between), its pictures as tiles, and takes it off the stash.
-// When the composer hasn't room for all its pictures it stays stashed.
+// blank line between), its pictures, as chips where they were chips,
+// numbered afresh for this composer, and takes it off the stash. When the
+// composer hasn't room for all its pictures it stays stashed.
 func (a *App) restoreStash(th *ui.Theme, i int) {
 	a.mu.Lock()
 	if i < 0 || i >= len(a.comp.stash) {
@@ -183,6 +198,7 @@ func (a *App) restoreStash(th *ui.Theme, i int) {
 	a.comp.stash = append(a.comp.stash[:i:i], a.comp.stash[i+1:]...)
 	a.comp.stashOpen = false
 	a.saveStashLocked()
+	chips := map[int]pastedImage{}
 	for j, im := range e.Images {
 		p := pastedImage{id: t3.NewID(), n: a.freeNumber(key), img: im}
 		if j < len(e.thumbs) {
@@ -192,10 +208,19 @@ func (a *App) restoreStash(th *ui.Theme, i int) {
 			p.thumb.Name = im.Name
 		}
 		p.thumb.N = 0
+		if j < len(e.Chips) && e.Chips[j] != 0 {
+			p.chip, p.thumb.N = true, p.n
+			chips[e.Chips[j]] = p
+		}
 		a.images[key] = append(a.images[key], p)
 	}
 	a.mu.Unlock()
-	text := e.Prompt
+	text := ui.ReplaceChips(e.Prompt, func(n int) string {
+		if p, ok := chips[n]; ok {
+			return th.ImageChip(p.n, p.img.Name, len(p.img.Data))
+		}
+		return ""
+	})
 	if cur := strings.TrimRightFunc(th.EditorText("composer"), unicode.IsSpace); cur != "" {
 		text = cur + "\n\n" + text
 	}

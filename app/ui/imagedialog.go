@@ -3,6 +3,7 @@ package ui
 import (
 	"bytes"
 	"image"
+	"image/color"
 
 	"gioui.org/f32"
 	"gioui.org/io/key"
@@ -109,25 +110,29 @@ func (th *Theme) imageDialog(gtx C) {
 	if clicked, hovered := th.localClick(gtx, "preview.close", image.Pt(dp(gtx, 28), dp(gtx, 28))); clicked {
 		th.closePreview()
 	} else {
-		mediaClose(gtx, 28, 16, hovered)
+		mediaClose(gtx, 28, 16, hovered, over(alpha(rgb(0), 0xbf), P.Background))
 	}
 }
 
 // mediaClose is the media-close button variant at size dp with its x at
-// icon dp: black at 65% (80% hovered) inside a white 20% ring, a white x.
-func mediaClose(gtx C, size, icon float32, hovered bool) {
+// icon dp, over on, what's under it (a picture's average colour): black
+// at 65% (80% hovered), a white x, and outside the box its white 20% ring
+// and shadow-sm. Gio blends in linear light, so each translucent colour
+// goes on at the alpha that paints over on what Chrome's sRGB blend
+// would.
+func mediaClose(gtx C, size, icon float32, hovered bool, on color.NRGBA) {
 	b := dp(gtx, size)
 	br := image.Rect(0, 0, b, b)
 	rad := dp(gtx, 8)
 	px := max(1, dp(gtx, 1))
-	// ring-1 and shadow-sm paint outside the box.
-	shadow(gtx, br, rad, []boxShadow{{0, 1, 3, 0, alpha(rgb(0), 0x1a)}, {0, 1, 2, -1, alpha(rgb(0), 0x1a)}})
-	fill(gtx, alpha(rgb(0xffffff), 0x33), br.Inset(-px), rad+px)
+	as := func(c color.NRGBA) color.NRGBA { return alpha(c, gioAlpha(c, on, over(c, on))) }
+	shadowOn(gtx, br, rad, on, []boxShadow{{0, 1, 3, 0, alpha(rgb(0), 0x1a)}, {0, 1, 2, -1, alpha(rgb(0), 0x1a)}})
+	strokeRect(gtx, as(alpha(rgb(0xffffff), 0x33)), br.Inset(-px), rad+px, float32(px))
 	bg := alpha(rgb(0), 0xa6)
 	if hovered {
 		bg = alpha(rgb(0), 0xcc)
 	}
-	fill(gtx, bg, br, rad)
+	fill(gtx, as(bg), br, rad)
 	defer op.Offset(image.Pt((b-dp(gtx, icon))/2, (b-dp(gtx, icon))/2)).Push(gtx.Ops).Pop()
 	LucideW("x", rgb(0xffffff), icon)(gtx)
 }

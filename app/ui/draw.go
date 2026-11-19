@@ -6,6 +6,7 @@ import (
 	"math"
 	"runtime"
 	"strings"
+	"sync"
 
 	"gioui.org/f32"
 	"gioui.org/font"
@@ -675,32 +676,214 @@ func shadow(gtx C, r image.Rectangle, radius int, shadows []boxShadow) {
 }
 
 // shadowOn paints CSS box shadows for the rounded rect r cast on the
-// surface on. Gio has no blur, so each shadow's blurred edge is a stack of
-// rounded rects, from the edge of the blur in to its middle, each adding
-// its share of the shadow's colour. Gio blends in linear light, so each
-// band's alpha is the one that darkens on as a browser's sRGB share would
-// (gioAlpha); else the shadow comes out at about half its strength.
+// surface on. CSS blurs a shadow's box with a Gaussian of half its blur
+// radius, which reaches out as far again as the radius; Gio has no blur,
+// so each shadow is drawn from a texture of its box blurred that way
+// (shadowTexture), each pixel at the alpha that, blended in Gio's linear
+// light, paints over on the colour a browser's sRGB blend would.
 func shadowOn(gtx C, r image.Rectangle, radius int, on color.NRGBA, shadows []boxShadow) {
 	for _, sh := range shadows {
-		off := image.Pt(dp(gtx, sh.x), dp(gtx, sh.y))
-		blur := float32(dp(gtx, sh.blur))
 		spread := dp(gtx, sh.spread)
-		n := max(1, min(8, int(blur)))
-		share := float64(sh.col.A) / 255 / float64(n)
-		prev := on
-		for i := 0; i < n; i++ {
-			// A browser stacks i+1 shares: 1 - (1 - share)^(i+1).
-			next := over(alpha(sh.col, uint8((1-math.Pow(1-share, float64(i+1)))*255+0.5)), on)
-			c := alpha(sh.col, max(1, gioAlpha(sh.col, prev, next)))
-			prev = next
-			grow := spread + int(blur*(0.5-float32(i)/float32(n)))
-			rr := r.Add(off).Inset(-grow)
-			if rr.Dx() <= 0 || rr.Dy() <= 0 {
-				continue
-			}
-			fill(gtx, c, rr, max(0, radius+grow))
+		box := r.Add(image.Pt(dp(gtx, sh.x), dp(gtx, sh.y))).Inset(-spread)
+		if box.Dx() <= 0 || box.Dy() <= 0 {
+			continue
+		}
+		rad := max(0, radius+spread)
+		sigma := float64(sh.blur) * float64(gtx.Metric.PxPerDp) / 2
+		if sigma < 0.25 {
+			fill(gtx, alpha(sh.col, gioAlpha(sh.col, on, over(sh.col, on))), box, rad)
+			continue
+		}
+		t := shadowTexture(box.Dx(), box.Dy(), rad, sigma, sh.col, on)
+		ninePatch(gtx, t, box)
+	}
+}
+
+// shadowTex is a blurred box's texture: the box at its core, cw by ch, in
+// a margin m wide on every side. A box wider or taller than its corners
+// need is drawn from a core that narrow, its middle row and column
+// stretched (ninePatch), since the blur along a straight edge doesn't
+// change.
+type shadowTex struct {
+	im        paint.ImageOp
+	cw, ch, m int
+}
+
+type shadowKey struct {
+	cw, ch, rad, sigma16 int
+	col, on              color.NRGBA
+}
+
+// shadowCache keeps the textures drawn, up to shadowCacheMax pixels.
+var (
+	shadowMu       sync.Mutex
+	shadowCache    = map[shadowKey]shadowTex{}
+	shadowPixels   int
+	shadowCacheMax = 16 << 20
+)
+
+// shadowTexture is the texture of a w by h box rounded rad, blurred by a
+// Gaussian of sigma px, in col over on.
+func shadowTexture(w, h, rad int, sigma float64, col, on color.NRGBA) shadowTex {
+	m := int(math.Ceil(3 * sigma))
+	rad = min(rad, w/2, h/2)
+	cw, ch := min(w, 2*(rad+m)+1), min(h, 2*(rad+m)+1)
+	k := shadowKey{cw, ch, rad, int(sigma*16 + 0.5), col, on}
+	shadowMu.Lock()
+	defer shadowMu.Unlock()
+	if t, ok := shadowCache[k]; ok {
+		return t
+	}
+	iw, ih := cw+2*m, ch+2*m
+	// The box's coverage, antialiased: its signed distance, half a pixel
+	// either way of its edge.
+	v := make([]float32, iw*ih)
+	hw, hh := float64(cw)/2, float64(ch)/2
+	cx, cy := float64(m)+hw, float64(m)+hh
+	for y := 0; y < ih; y++ {
+		qy := math.Abs(float64(y)+0.5-cy) - (hh - float64(rad))
+		for x := 0; x < iw; x++ {
+			qx := math.Abs(float64(x)+0.5-cx) - (hw - float64(rad))
+			d := math.Hypot(max(qx, 0), max(qy, 0)) + min(max(qx, qy), 0) - float64(rad)
+			v[y*iw+x] = float32(min(1, max(0, 0.5-d)))
 		}
 	}
+	blur(v, iw, ih, sigma)
+	var lut [256]uint8
+	for i := range lut {
+		lut[i] = gioAlpha(col, on, over(alpha(col, uint8((i*int(col.A)+127)/255)), on))
+	}
+	img := image.NewNRGBA(image.Rect(0, 0, iw, ih))
+	for i, a := range v {
+		img.Pix[4*i], img.Pix[4*i+1], img.Pix[4*i+2] = col.R, col.G, col.B
+		img.Pix[4*i+3] = lut[int(min(1, max(0, a))*255+0.5)]
+	}
+	if shadowPixels += iw * ih; shadowPixels > shadowCacheMax {
+		clear(shadowCache)
+		shadowPixels = iw * ih
+	}
+	t := shadowTex{im: paint.NewImageOp(img), cw: cw, ch: ch, m: m}
+	t.im.Filter = paint.FilterNearest
+	shadowCache[k] = t
+	return t
+}
+
+// ninePatch draws t for box: its corners as they are, its middle row and
+// column stretched to box's size.
+func ninePatch(gtx C, t shadowTex, box image.Rectangle) {
+	// The source's spans along one axis and where they go: before the
+	// middle, the middle, after it.
+	spans := func(core, size int) (src, dst [4]int) {
+		l, total := t.m+core/2, core+2*t.m
+		r := total - l - 1
+		return [4]int{0, l, l + 1, total}, [4]int{0, l, size + 2*t.m - r, size + 2*t.m}
+	}
+	sx, dx := spans(t.cw, box.Dx())
+	sy, dy := spans(t.ch, box.Dy())
+	o := box.Min.Sub(image.Pt(t.m, t.m))
+	for j := 0; j < 3; j++ {
+		for i := 0; i < 3; i++ {
+			src := image.Rect(sx[i], sy[j], sx[i+1], sy[j+1])
+			dst := image.Rect(dx[i], dy[j], dx[i+1], dy[j+1]).Add(o)
+			if src.Empty() || dst.Empty() {
+				continue
+			}
+			func() {
+				defer clip.Rect(dst).Push(gtx.Ops).Pop()
+				k := f32.Pt(float32(dst.Dx())/float32(src.Dx()), float32(dst.Dy())/float32(src.Dy()))
+				a := f32.Affine2D{}.Offset(f32.Pt(-float32(src.Min.X), -float32(src.Min.Y))).Scale(f32.Point{}, k).Offset(f32.Pt(float32(dst.Min.X), float32(dst.Min.Y)))
+				defer op.Affine(a).Push(gtx.Ops).Pop()
+				t.im.Add(gtx.Ops)
+				paint.PaintOp{}.Add(gtx.Ops)
+			}()
+		}
+	}
+}
+
+// blur blurs v, w by h, with a Gaussian of sigma px in each direction:
+// exactly while it's narrow, then as three box blurs, which come to the
+// same within a step.
+func blur(v []float32, w, h int, sigma float64) {
+	line := make([]float32, max(w, h))
+	tmp := make([]float32, max(w, h))
+	pass := func(n int, get func(i int) float32, set func(i int, x float32)) {
+		for i := 0; i < n; i++ {
+			line[i] = get(i)
+		}
+		blurLine(line[:n], tmp[:n], sigma)
+		for i := 0; i < n; i++ {
+			set(i, line[i])
+		}
+	}
+	for y := 0; y < h; y++ {
+		row := v[y*w : (y+1)*w]
+		pass(w, func(i int) float32 { return row[i] }, func(i int, x float32) { row[i] = x })
+	}
+	for x := 0; x < w; x++ {
+		pass(h, func(i int) float32 { return v[i*w+x] }, func(i int, f float32) { v[i*w+x] = f })
+	}
+}
+
+// blurLine blurs one line in place, nothing beyond its ends.
+func blurLine(l, tmp []float32, sigma float64) {
+	if sigma <= 3 {
+		r := int(math.Ceil(3 * sigma))
+		k := make([]float32, 2*r+1)
+		var sum float32
+		for i := range k {
+			d := float64(i - r)
+			k[i] = float32(math.Exp(-d * d / (2 * sigma * sigma)))
+			sum += k[i]
+		}
+		copy(tmp, l)
+		for i := range l {
+			var acc float32
+			for j, kv := range k {
+				if s := i + j - r; s >= 0 && s < len(l) {
+					acc += tmp[s] * kv
+				}
+			}
+			l[i] = acc / sum
+		}
+		return
+	}
+	for _, b := range boxesForGauss(sigma) {
+		copy(tmp, l)
+		half := b / 2
+		var acc float32
+		for i := 0; i < min(half, len(l)); i++ {
+			acc += tmp[i]
+		}
+		for i := range l {
+			if j := i + half; j < len(l) {
+				acc += tmp[j]
+			}
+			if j := i - half - 1; j >= 0 {
+				acc -= tmp[j]
+			}
+			l[i] = acc / float32(b)
+		}
+	}
+}
+
+// boxesForGauss is the widths of three box blurs that together blur like
+// a Gaussian of sigma: odd, and as near the same as can be.
+func boxesForGauss(sigma float64) [3]int {
+	ideal := math.Sqrt(12*sigma*sigma/3 + 1)
+	wl := int(math.Floor(ideal))
+	if wl%2 == 0 {
+		wl--
+	}
+	wu := wl + 2
+	m := int(math.Round((12*sigma*sigma - float64(3*wl*wl) - float64(12*wl) - 9) / float64(-4*wl-4)))
+	var out [3]int
+	for i := range out {
+		out[i] = wu
+		if i < m {
+			out[i] = wl
+		}
+	}
+	return out
 }
 
 // recording is a widget laid out but not drawn: its size, and the ops

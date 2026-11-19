@@ -15,8 +15,7 @@ import (
 
 // A new thread's hero (DraftHeroHeadline.tsx, docs/ui/07-composer.md
 // §2.16): the composer and its context strip centred in the canvas, the
-// question 16dp over them (flush with the stash's tab when it shows) and
-// any notices 16dp under.
+// question 16dp over them (flush with the stash's tab when it shows).
 
 // heroSize is the heading's type: text-3xl, 30/36, tracked tight
 // (−0.025em); below 640 it's text-2xl, 24/32.
@@ -62,10 +61,6 @@ func (th *Theme) hero(gtx C, s *Scene, compact bool) D {
 
 	off = op.Offset(image.Pt(0, top)).Push(gtx.Ops)
 	stack.call.Add(gtx.Ops)
-	off.Pop()
-
-	off = op.Offset(image.Pt(0, top+stack.Size.Y)).Push(gtx.Ops)
-	th.heroNotices(sg, s)
 	off.Pop()
 	return D{Size: size}
 }

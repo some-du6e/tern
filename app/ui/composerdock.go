@@ -79,20 +79,19 @@ func composerShadow() []boxShadow {
 }
 
 // composerDock is what sits on the card's top edge (ComposerBanner.Dock):
-// a column of the armed /clear's banner and the status notice (not while
-// a question is open, which keeps only the machine's own banners), then
-// the agent's question, and
-// at its end the stash's tab, their bottoms lined up. A new thread's
-// notices go under its composer (heroNotices); its tab still shows here.
+// a column of the armed /clear's banner (not while a question is open)
+// and the agent's question, and at its end the stash's tab, their bottoms
+// lined up. A new thread's hero shows neither; its tab still shows here.
 func (th *Theme) composerDock(gtx C, s *Scene) D {
 	w := gtx.Constraints.Max.X
 	inset := dp(gtx, drawerInset)
 	cw := w - 2*inset
 	var tab func()
-	tabH := 0
+	tabW, tabH := 0, 0
+	th.in.composer.tab = image.Rectangle{}
 	if len(s.Stash) > 0 {
 		td := record(gtx, func(gtx C) D { return th.stashTab(gtx, s) })
-		tabH = td.Size.Y
+		tabW, tabH = td.Size.X, td.Size.Y
 		cw -= td.Size.X + dp(gtx, 4)
 		tab = func() {
 			defer op.Offset(image.Pt(w-inset-td.Size.X, 0)).Push(gtx.Ops).Pop()
@@ -113,11 +112,6 @@ func (th *Theme) composerDock(gtx C, s *Scene) D {
 		}
 		if s.Fresh && !hero && len(s.Questions) == 0 {
 			attach(func(gtx C, joined bool) D { return th.noticeCard(gtx, freshNotice(s), joined, false) })
-		}
-		if s.Notice != "" && !hero && len(s.Questions) == 0 {
-			attach(func(gtx C, joined bool) D {
-				return th.noticeCard(gtx, notice{icon: "info", title: s.Notice}, joined, false)
-			})
 		}
 		if len(s.Questions) > 0 && !hero {
 			attach(func(gtx C, joined bool) D { return th.questionDrawer(gtx, s, joined) })
@@ -141,6 +135,7 @@ func (th *Theme) composerDock(gtx C, s *Scene) D {
 		off := op.Offset(image.Pt(0, h-tabH)).Push(gtx.Ops)
 		tab()
 		off.Pop()
+		th.in.composer.tab = image.Rect(w-inset-tabW, h-tabH, w-inset, h)
 	}
 	return D{Size: image.Pt(w, h)}
 }
@@ -257,7 +252,8 @@ func (th *Theme) bannerRow(gtx C, icon, content, count string, col, countCol col
 // at the end, then the stashed prompts' rows (snippet, pictures, age,
 // delete) in a scroll area at most min(384, 40% of the window) tall, the
 // highlighted one filled with --accent; or the line saying how to stash.
-func (th *Theme) stashDrawer(gtx C, s *Scene, w int) {
+// It returns where it is.
+func (th *Theme) stashDrawer(gtx C, s *Scene, w int) image.Rectangle {
 	inset := dp(gtx, drawerInset)
 	cw := w - 2*inset
 	g := glass()
@@ -312,12 +308,14 @@ func (th *Theme) stashDrawer(gtx C, s *Scene, w int) {
 	}
 	pad4 := dp(gtx, 4)
 	h := pad4 + head.Size.Y + view + pad4 + dp(gtx, tuck)
-	defer op.Offset(image.Pt(inset, dp(gtx, tuck)-h)).Push(gtx.Ops).Pop()
+	at := image.Pt(inset, dp(gtx, tuck)-h)
+	defer op.Offset(at).Push(gtx.Ops).Pop()
 	attachedGlass(gtx, image.Rect(0, 0, cw, h), false, true)
 	defer op.Offset(image.Pt(pad4, pad4)).Push(gtx.Ops).Pop()
 	head.call.Add(gtx.Ops)
 	defer op.Offset(image.Pt(0, head.Size.Y)).Push(gtx.Ops).Pop()
 	th.vscroll(gtx, "stash", image.Pt(inner, view), rows.Size.Y, rows.call)
+	return image.Rectangle{Min: at, Max: at.Add(image.Pt(cw, h))}
 }
 
 // stashRow is one stashed prompt: 24dp, rounded 4, a click restores it;
@@ -509,8 +507,10 @@ func (th *Theme) noticeCard(gtx C, n notice, joined, detached bool) D {
 }
 
 // bannerDismiss is a banner's ghost icon-xs dismiss: 24dp, the x at 14,
-// rounded 8 but for its top-right corner, which follows the card's. With
-// no id (a mockup) it's drawn and takes no clicks.
+// rounded 8 but for its top-right corner, which follows the card's; on
+// hover only its fill changes, to --accent, the x staying the ghost
+// variant's icon colour. With no id (a mockup) it's drawn and takes no
+// clicks.
 func (th *Theme) bannerDismiss(gtx C, id string, on color.NRGBA, corner, bottom int) {
 	hovered := false
 	if id != "" {
@@ -518,27 +518,16 @@ func (th *Theme) bannerDismiss(gtx C, id string, on color.NRGBA, corner, bottom 
 		hovered = c.Hovered()
 	}
 	sz := dp(gtx, 24)
-	col := P.ContrastMutedForeground
 	if hovered {
 		rad := dp(gtx, 8)
 		paint.FillShape(gtx.Ops, over(P.Accent, on), clip.RRect{Rect: image.Rect(0, 0, sz, sz), NW: rad, NE: corner, SE: bottom, SW: rad}.Op(gtx.Ops))
-		col = P.Foreground
 	}
 	off := op.Offset(image.Pt((sz-dp(gtx, 14))/2, (sz-dp(gtx, 14))/2)).Push(gtx.Ops)
-	LucideW("x", col, 14)(gtx)
+	LucideW("x", P.ContrastMutedForeground, 14)(gtx)
 	off.Pop()
 	if id != "" {
 		th.hit(gtx, id, image.Pt(sz, sz))
 	}
-}
-
-// heroNotices are a new thread's notices, detached under its composer:
-// 16dp below it, 4 apart.
-func (th *Theme) heroNotices(gtx C, s *Scene) D {
-	if s.Notice == "" {
-		return D{}
-	}
-	return pad(16, 0, 0, 0).Layout(gtx, func(gtx C) D { return th.noticeCard(gtx, notice{icon: "info", title: s.Notice}, false, true) })
 }
 
 // threadError is T3's ThreadErrorBanner in the chat's banner lane
@@ -766,7 +755,8 @@ func (th *Theme) questionBody(gtx C, s *Scene, q Question) D {
 
 // questionOption is one option: padded 6 0 6 6, 10 between its parts,
 // rounded 6; the picked one in foreground, the rest at 70% and lit by
-// --muted at 30% under the pointer.
+// --muted at 30% under the pointer; all of it at 50% over the glass while
+// the answers are on their way.
 func (th *Theme) questionOption(gtx C, s *Scene, q Question, i int, label string) D {
 	w := gtx.Constraints.Max.X
 	gtx.Constraints.Min = image.Point{}
@@ -778,10 +768,15 @@ func (th *Theme) questionOption(gtx C, s *Scene, q Question, i int, label string
 		c, _ := th.events(gtx, id)
 		hovered = c.Hovered()
 	}
+	opacity := uint8(0xff)
+	if s.Answering {
+		opacity = 0x80
+	}
 	text := over(alpha(P.Foreground, 0xb3), g)
 	if chosen {
 		text = P.Foreground
 	}
+	text = faded(text, g, opacity)
 	desc := ""
 	if i < len(q.Descs) && q.Descs[i] != label {
 		desc = q.Descs[i]
@@ -801,16 +796,13 @@ func (th *Theme) questionOption(gtx C, s *Scene, q Question, i int, label string
 				return D{}
 			}
 			return pad(2, 0, 0, 0).Layout(gtx, func(gtx C) D {
-				return th.cssText(gtx, Txt{Size: 11, LineH: 16.0 / 11, Color: P.SecondaryLabel}, desc)
+				return th.cssText(gtx, Txt{Size: 11, LineH: 16.0 / 11, Color: faded(P.SecondaryLabel, g, opacity)}, desc)
 			})
 		}),
 	)
 	call := m.Stop()
 	h := ld.Size.Y + dp(gtx, 12)
 	r := image.Rect(0, 0, w, h)
-	if s.Answering {
-		defer paint.PushOpacity(gtx.Ops, 0.5).Pop()
-	}
 	if hovered && !chosen {
 		fill(gtx, over(alpha(P.Muted, uint8(int(P.Muted.A)*3/10)), g), r, dp(gtx, 6))
 	}
@@ -818,9 +810,9 @@ func (th *Theme) questionOption(gtx C, s *Scene, q Question, i int, label string
 	func() {
 		defer op.Offset(image.Pt(dp(gtx, 6), py+(slot-dp(gtx, 16))/2)).Push(gtx.Ops).Pop()
 		if q.MultiSel {
-			checkMark(gtx, chosen, g)
+			checkMark(gtx, chosen, g, opacity)
 		} else {
-			optionRadio(gtx, chosen, g)
+			optionRadio(gtx, chosen, g, opacity)
 		}
 	}()
 	off := op.Offset(image.Pt(lx, py)).Push(gtx.Ops)
@@ -828,7 +820,7 @@ func (th *Theme) questionOption(gtx C, s *Scene, q Question, i int, label string
 	off.Pop()
 	if i < 9 {
 		m := op.Record(gtx.Ops)
-		kd := th.T3Kbd(strconv.Itoa(i+1), g)(gtx)
+		kd := th.T3Kbd(strconv.Itoa(i+1), g, opacity)(gtx)
 		kc := m.Stop()
 		ko := op.Offset(image.Pt(w-kw+(kw-kd.Size.X)/2, py+(slot-kd.Size.Y)/2)).Push(gtx.Ops)
 		kc.Add(gtx.Ops)
@@ -842,35 +834,37 @@ func (th *Theme) questionOption(gtx C, s *Scene, q Question, i int, label string
 
 // optionRadio is the drawer's radio, drawn with ui/radio-group's look: a
 // 16dp circle with a border at foreground 55% on --background (on
-// --input at 32% in dark); picked, --primary with a 6dp white dot.
-func optionRadio(gtx C, on bool, bg color.NRGBA) {
+// --input at 32% in dark); picked, --primary with a 6dp white dot. All of
+// it is at opacity over bg.
+func optionRadio(gtx C, on bool, bg color.NRGBA, opacity uint8) {
 	sz := dp(gtx, 16)
 	r := image.Rect(0, 0, sz, sz)
 	if on {
-		circle(gtx, P.Primary, image.Pt(sz/2, sz/2), sz/2)
-		circle(gtx, P.PrimaryForeground, image.Pt(sz/2, sz/2), dp(gtx, 3))
+		circle(gtx, faded(P.Primary, bg, opacity), image.Pt(sz/2, sz/2), sz/2)
+		circle(gtx, faded(P.PrimaryForeground, bg, opacity), image.Pt(sz/2, sz/2), dp(gtx, 3))
 		return
 	}
 	fillc := P.Background
 	if dark {
 		fillc = over(alpha(P.Input, uint8(int(P.Input.A)*32/100)), bg)
 	} else {
-		shadow(gtx, r, sz/2, []boxShadow{{0, 1, 2, 0, alpha(rgb(0), 0x0d)}})
+		shadowOn(gtx, r, sz/2, bg, []boxShadow{{0, 1, 2, 0, alpha(rgb(0), uint8(0x0d*int(opacity)/255))}})
 	}
-	circle(gtx, fillc, image.Pt(sz/2, sz/2), sz/2)
-	strokeRect(gtx, over(alpha(P.Foreground, 0x8c), fillc), r, sz/2, float32(max(1, dp(gtx, 1))))
+	circle(gtx, faded(fillc, bg, opacity), image.Pt(sz/2, sz/2), sz/2)
+	strokeRect(gtx, faded(over(alpha(P.Foreground, 0x8c), fillc), bg, opacity), r, sz/2, float32(max(1, dp(gtx, 1))))
 }
 
 // checkMark is the multi-select's checkbox: a 16dp square rounded 4,
-// bordered like the radio; picked, --primary with a white check.
-func checkMark(gtx C, on bool, bg color.NRGBA) {
+// bordered like the radio; picked, --primary with a white check. All of
+// it is at opacity over bg.
+func checkMark(gtx C, on bool, bg color.NRGBA, opacity uint8) {
 	sz := dp(gtx, 16)
 	r := image.Rect(0, 0, sz, sz)
 	rad := dp(gtx, 4)
 	if on {
-		fill(gtx, P.Primary, r, rad)
+		fill(gtx, faded(P.Primary, bg, opacity), r, rad)
 		off := op.Offset(image.Pt((sz-dp(gtx, 12))/2, (sz-dp(gtx, 12))/2)).Push(gtx.Ops)
-		LucideW("check", P.PrimaryForeground, 12)(gtx)
+		LucideW("check", faded(P.PrimaryForeground, bg, opacity), 12)(gtx)
 		off.Pop()
 		return
 	}
@@ -878,14 +872,25 @@ func checkMark(gtx C, on bool, bg color.NRGBA) {
 	if dark {
 		fillc = over(alpha(P.Input, uint8(int(P.Input.A)*32/100)), bg)
 	}
-	fill(gtx, fillc, r, rad)
-	strokeRect(gtx, over(alpha(P.Foreground, 0x8c), fillc), r, rad, float32(max(1, dp(gtx, 1))))
+	fill(gtx, faded(fillc, bg, opacity), r, rad)
+	strokeRect(gtx, faded(over(alpha(P.Foreground, 0x8c), fillc), bg, opacity), r, rad, float32(max(1, dp(gtx, 1))))
+}
+
+// questionTakesDigits reports whether 1 to 9 pick the open question's
+// options: it's on show, unfolded, and its answers aren't on their way
+// (ComposerPendingUserInputPanel.tsx).
+func (th *Theme) questionTakesDigits(s *Scene) bool {
+	if !s.Live || len(s.Questions) == 0 || s.Answering {
+		return false
+	}
+	q := s.Questions[min(s.Question, len(s.Questions)-1)]
+	return th.in.composer.qFolded != q.Header+"\x00"+q.Text
 }
 
 // questionKeys picks the question's options with 1 to 9, while the focus
-// isn't in a text field (T3 leaves digits to fields).
+// isn't in a text field, the terminal or a page (T3 leaves digits to them).
 func (th *Theme) questionKeys(gtx C, s *Scene) {
-	if !s.Live || len(s.Questions) == 0 || s.Answering {
+	if !th.questionTakesDigits(s) || gtx.Focused(&th.in.term) || gtx.Focused(&th.in.browser) {
 		return
 	}
 	var filters []event.Filter
@@ -1134,6 +1139,10 @@ type composerUI struct {
 	menuShown, menuWas, stashShown, stashWas bool
 	menuSel, stashSel                        int
 	menuKey                                  string
+	tab                                      image.Rectangle // the stash's tab, in the stack's frame
+	// footerStep is how far the footer's mode block gave way last frame: 0
+	// whole, 1 its icon alone, 2 into the "…" menu.
+	footerStep int
 }
 
 // localClick makes a size-sized area a target for ui state alone: it
@@ -1223,7 +1232,7 @@ func (th *Theme) contextStrip(gtx C, s *Scene, access *image.Rectangle) D {
 	h := dp(gtx, 32)
 	fill(gtx, stripGlass(), image.Rect(0, 0, w, h), 0)
 	m := op.Record(gtx.Ops)
-	cd := th.permissionsChip(gtx, s, true)
+	cd := th.permissionsChip(gtx, s, true, false)
 	call := m.Stop()
 	at := image.Pt(w-dp(gtx, 8)-cd.Size.X, dp(gtx, 8))
 	off := op.Offset(at).Push(gtx.Ops)
@@ -1249,7 +1258,8 @@ func (th *Theme) commandMenu(gtx C, s *Scene, w int) {
 	view := 0
 	if len(s.Suggest) == 0 {
 		list = record(g, func(gtx C) D {
-			return pad(14, 20, 28-float32(tuck), 20).Layout(gtx, func(gtx C) D {
+			// px-5 pt-3.5 pb-7, over the surface's own pb that the card covers.
+			return pad(14, 20, 28, 20).Layout(gtx, func(gtx C) D {
 				gtx.Constraints.Min.X = gtx.Constraints.Max.X
 				return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: P.SecondaryLabel}, s.SuggestEmpty)
 			})
