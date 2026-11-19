@@ -183,7 +183,7 @@ func TestHeaderTitleClicks(t *testing.T) {
 	x := float32(lay.project + lay.gap + lay.sep + lay.gap + 10)
 	l.click(x, 26)
 	acts := l.frame(10 * time.Millisecond)
-	if len(acts) != 1 || acts[0] != (Action{ID: "header.title", Kind: "click"}) {
+	if len(acts) != 1 || acts[0] != (Action{ID: "header.title", Kind: "click", Clicks: 1}) {
 		t.Fatalf("click: %+v", acts)
 	}
 	l.th.MenuFrom("header.title")
@@ -285,7 +285,7 @@ func TestHeaderGuestShare(t *testing.T) {
 		t.Errorf("Stop sharing's label under the pointer is %#x, want foreground", ink)
 	}
 	l.click(float32(bx+3), 26)
-	if acts := l.frame(10 * time.Millisecond); len(acts) != 1 || acts[0] != (Action{ID: "header.unshare", Kind: "click"}) {
+	if acts := l.frame(10 * time.Millisecond); len(acts) != 1 || acts[0] != (Action{ID: "header.unshare", Kind: "click", Clicks: 1}) {
 		t.Fatalf("click: %+v", acts)
 	}
 
