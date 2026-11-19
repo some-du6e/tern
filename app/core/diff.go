@@ -715,7 +715,7 @@ func (a *App) diffAction(id string) bool {
 		}
 		a.openDiffLocked(ds)
 	case "diff.tab":
-		ds.active = true
+		a.openDiffLocked(ds)
 	case "diff.close":
 		a.hideDiffLocked()
 	case "diff.scope":

@@ -617,6 +617,19 @@ func (th *Theme) fileBody(gtx C, d *DiffPanel, f *DiffFile, at image.Point, w, v
 			}
 		}()
 	}
+	// Unwrapped, a file scrolls across on its own: its 6dp scrollbar sits
+	// 2dp under its last row, the thumb showing while the file is hovered.
+	if d.Wrap || d.Split || th.dv.hover != f.Path() {
+		return
+	}
+	view, full := w-numW, int(float32(l.cols+2)*ch)
+	if full <= view {
+		return
+	}
+	tw := max(dp(gtx, 16), view*view/full)
+	tx := numW + (view-tw)*x/max(1, full-view)
+	y := at.Y + l.h - dp(gtx, fileBottom) + dp(gtx, 2)
+	fill(gtx, dc().context, image.Rect(tx, y, tx+tw, y+dp(gtx, 6)), dp(gtx, 3))
 }
 
 // SelectDiffLines selects rows a to b of file in the code view, as a

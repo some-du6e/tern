@@ -18,6 +18,7 @@ type diffColors struct {
 	selRow, selNumBg, selNum   color.NRGBA // selected lines
 	selBar                     color.NRGBA
 	bufferGutter               color.NRGBA // split view's gutter beside a missing line
+	context                    color.NRGBA // Pierre's --diffs-bg-context: a scrollbar thumb
 	edge                       color.NRGBA // a hovered header's 3dp left edge, translucent
 	title, titleHot            color.NRGBA // the file name, and on hover
 	modified, added, deleted   color.NRGBA // change icons
@@ -33,8 +34,8 @@ var diffLight = diffColors{
 	addWord: argb(0x2618a46c), delWord: argb(0x26d52c36),
 	sepBg: rgb(0xf5f5f6), sepText: rgb(0x8a8a8c), expandHot: rgb(0xeaeaea),
 	selRow: rgb(0xeff7fd), selNumBg: rgb(0xf0f7fd), selNum: rgb(0x20649e), selBar: rgb(0x009fff),
-	bufferGutter: rgb(0xf8f8f8),
-	edge:         argb(0x3d18181b), title: rgb(0x18181b), titleHot: rgb(0x182139),
+	bufferGutter: rgb(0xf8f8f8), context: rgb(0xf8f8f8),
+	edge: argb(0x3d18181b), title: rgb(0x18181b), titleHot: rgb(0x182139),
 	modified: rgb(0x425cb1), added: rgb(0x007a55), deleted: rgb(0xc10007),
 	treeModified: rgb(0x1ca1c7), treeAdded: rgb(0x16a994), treeDeleted: rgb(0xff2e3f), treeRenamed: rgb(0xd5a910),
 	treeHover: argb(0x14009fff), treeSel: argb(0x1f18181b), treeFg: rgb(0x84848a),
@@ -47,8 +48,8 @@ var diffDark = diffColors{
 	addWord: argb(0x3307c480), delWord: argb(0x33ff2e3f),
 	sepBg: rgb(0x070707), sepText: rgb(0x7a7a7a), expandHot: rgb(0x141414),
 	selRow: rgb(0x060e15), selNumBg: rgb(0x080e15), selNum: rgb(0x72b6ff), selBar: rgb(0x009fff),
-	bufferGutter: rgb(0x0c0c0c),
-	edge:         argb(0x3df5f5f5), title: rgb(0xf5f5f5), titleHot: rgb(0xd6dff4),
+	bufferGutter: rgb(0x0c0c0c), context: rgb(0x171717),
+	edge: argb(0x3df5f5f5), title: rgb(0xf5f5f5), titleHot: rgb(0xd6dff4),
 	modified: argb(0xa650a2ff), added: rgb(0x00d492), deleted: rgb(0xff2e3f),
 	treeModified: rgb(0x08c0ef), treeAdded: rgb(0x00cab1), treeDeleted: rgb(0xff6762), treeRenamed: rgb(0xffd452),
 	treeHover: argb(0x1a009fff), treeSel: argb(0x1ff5f5f5), treeFg: rgb(0x84848a),
