@@ -283,6 +283,40 @@ func TestTermDrawerEmpty(t *testing.T) {
 	wantPixel(t, img, image.Pt(592, 60), P.Background, "above the note")
 }
 
+// The close confirmation: the backdrop over the whole window lifts even
+// the terminal's cursor toward the background, and the popup in the
+// middle has its own fill, then the footer's, muted at 72%.
+func TestTermConfirm(t *testing.T) {
+	defer SetDark(false)
+	th := NewTheme()
+	s := &Scene{Term: termTestView([]TermScreen{vt.NewSafeEmulator(120, 30)})}
+	edge := image.Pt(256+termPad, 621+termPad+9) // the hollow cursor's left edge
+	before := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, s) })
+	s.Term.Confirm = &TermConfirm{Title: `Close terminal "Terminal 1"?`, Description: "This stops the running process and clears its history."}
+	after := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, s) })
+	if b, a := before.RGBAAt(edge.X, edge.Y), after.RGBAAt(edge.X, edge.Y); int(a.R) < int(b.R)+60 {
+		t.Errorf("under the backdrop the cursor's edge is %v, from %v; it should lift toward #fcfcfc", a, b)
+	}
+	SetDark(true)
+	th = NewTheme()
+	img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, s) })
+	fill, foot := -1, -1
+	for y := 250; y < 650; y++ {
+		switch c := img.RGBAAt(520, y); {
+		case fill < 0 && c.R == P.Popover.R && c.G == P.Popover.G && c.B == P.Popover.B:
+			fill = y
+		case fill >= 0 && foot < 0 && c.R == 0x17 && c.G == 0x17 && c.B == 0x17:
+			foot = y
+		}
+	}
+	if want := over(faded(P.Muted, 0.72), P.Popover); want != rgb(0x171717) {
+		t.Fatalf("the footer's fill is %v", want)
+	}
+	if fill < 0 || foot < fill+60 {
+		t.Errorf("down the popup: its fill from %d, its footer from %d; want the footer under a header", fill, foot)
+	}
+}
+
 // termPaneShot draws a pane of scr into w by h dp at scale 1, and the
 // pane's own state for what the test sets.
 func termPaneShot(t *testing.T, th *Theme, scr TermScreen, w, h int, set func(p *termPane)) *image.RGBA {

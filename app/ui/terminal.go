@@ -934,16 +934,19 @@ func (th *Theme) openTermMenu(pane string, at image.Point, items []termMenuItem,
 // (ConfirmDialogHost.tsx, docs/ui/02-primitives.md §3.21–3.22): the
 // backdrop over the window, which takes presses but doesn't close it, and
 // the popup centred up to 512 wide with its title, description and the
-// default footer, Cancel and the destructive Confirm. It scales in from
-// 98% and fades in over 200ms.
-func (th *Theme) termConfirm(gtx C, c *TermConfirm, win image.Point) {
+// default footer, Cancel and the destructive Confirm. Live, it scales in
+// from 98% and fades in over 200ms; a mockup draws it settled.
+func (th *Theme) termConfirm(gtx C, c *TermConfirm, win image.Point, live bool) {
 	tu := &th.in.terms
 	if tu.open.IsZero() {
 		// The dialog takes the keyboard from the terminal while it asks.
 		tu.open = gtx.Now
 		gtx.Execute(key.FocusCmd{Tag: &tu.dialog})
 	}
-	t := since(gtx.Now, tu.open, 200*time.Millisecond)
+	t := float32(1)
+	if live {
+		t = since(gtx.Now, tu.open, 200*time.Millisecond)
+	}
 	if t < 1 {
 		gtx.Execute(op.InvalidateCmd{})
 	}

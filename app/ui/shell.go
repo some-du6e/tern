@@ -92,7 +92,7 @@ func (th *Theme) Desktop(gtx C, s *Scene) D {
 		th.contextMenu(gtx, size, s)
 	}
 	if s.Term != nil && s.Term.Confirm != nil {
-		th.termConfirm(gtx, s.Term.Confirm, size)
+		th.termConfirm(gtx, s.Term.Confirm, size, s.Live)
 	}
 	if s.Live && (s.Picker != nil || s.Traits != nil || s.Access != nil || s.Account != nil || s.Machines != nil || s.Projects != nil || s.Context != nil || s.Details) {
 		// A click anywhere outside an open menu closes it. The menus are
