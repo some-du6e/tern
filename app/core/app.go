@@ -36,7 +36,14 @@ type envState struct {
 	shellSave time.Time // last time the shell cache was written
 	loaded    bool      // the live shell's snapshot is in
 
-	stall string // the last freeze it reported, so each is told once
+	// Its connection while it's down: since when it has been trying again
+	// (from connected or from a refusal, for the banner's grace), how the
+	// last attempt failed, and what the relay last said about it; and the
+	// last freeze it reported, so each is told once.
+	tryingAt time.Time
+	failed   *connFailure
+	relay    t3.RelayStatus
+	stall    string
 }
 
 func newEnv(e t3.Environment, paired bool) *envState {
@@ -388,13 +395,14 @@ func (a *App) refreshStatuses() {
 			}
 			st, err := a.relay.Status(e.id())
 			if err != nil {
-				st = "offline"
+				st = t3.RelayStatus{Status: "offline"}
 			}
 			a.mu.Lock()
 			wake := false
+			e.relay = st
 			if e.conn == nil && e.status != "busy" {
-				wake = st == "online" && e.status == "offline"
-				e.status = st
+				wake = st.Status == "online" && e.status == "offline"
+				e.status = st.Status
 			}
 			a.mu.Unlock()
 			if wake {
@@ -470,6 +478,7 @@ func (a *App) connect(e *envState) {
 	e.gen++
 	gen := e.gen
 	e.status = "busy"
+	a.trying(e, time.Now())
 	a.net = "connecting to " + e.env.Label + "…"
 	a.mu.Unlock()
 	a.changed()
@@ -486,7 +495,16 @@ func (a *App) connect(e *envState) {
 		}
 		if err != nil {
 			e.status = "offline"
+			e.failed = failureOf(err, e.paired)
 			a.net = e.env.Label + " offline: " + err.Error()
+			if e.failed.blocked {
+				// Refused: trying again won't help, so like T3 it waits for
+				// Reconnect, or for the relay to say it's back.
+				e.tryingAt = time.Time{}
+				a.mu.Unlock()
+				a.changed()
+				return
+			}
 			a.mu.Unlock()
 			a.changed()
 			a.scheduleReconnect(e, gen)
@@ -495,6 +513,7 @@ func (a *App) connect(e *envState) {
 		e.conn = conn
 		e.retry = 0
 		e.status = "online"
+		e.tryingAt, e.failed = time.Time{}, nil
 		conn.WatchSlow(a.slowChanged)
 		a.net = e.env.Label + " · socket open"
 		var openID string
@@ -517,6 +536,8 @@ func (a *App) connect(e *envState) {
 			}
 			e.conn = nil
 			e.status = "busy"
+			e.failed = &connFailure{hop: "server", reason: "transport"}
+			a.trying(e, time.Now())
 			a.mu.Unlock()
 			a.changed()
 			a.scheduleReconnect(e, gen)
@@ -538,7 +559,7 @@ func (a *App) dial(e *envState) (*t3.Conn, error) {
 		t3.ForgetSession(a.store, id)
 	}
 	if e.paired {
-		return nil, errors.New("the pairing session expired; pair again")
+		return nil, errPairingExpired
 	}
 	sess, err := t3.OpenSession(a.relay, a.store, e.env)
 	if err != nil {

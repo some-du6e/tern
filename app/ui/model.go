@@ -247,6 +247,15 @@ const (
 	HomeDraftError
 )
 
+// Banner is the notice over the composer that the open thread's computer
+// is reconnecting or offline (§2.18, useSystemComposerBanners.tsx).
+type Banner struct {
+	Error  bool   // the connection was refused: the error variant
+	Title  string // "<computer> is reconnecting", "<computer> is offline"
+	Detail string // where the connection broke, the diagnosis headline
+	Action string // "Retry now" or "Reconnect" (click target "banner.retry"); none while it first connects
+}
+
 // ToastType is a toast's look: its icon and the icon's colour.
 type ToastType int
 
@@ -369,12 +378,14 @@ type Scene struct {
 
 	// Gate is what the window shows; at GateApp, the app, whose main
 	// column shows Home when there's no thread. Failure, Login and Pair
-	// belong to their gates; Toasts go over everything.
+	// belong to their gates; Banner goes over the composer, Toasts over
+	// everything.
 	Gate    Gate
 	Failure *Failure
 	Login   *SignIn
 	Pair    *Pairing
 	Home    Home
+	Banner  *Banner
 	Toasts  []Toast
 
 	Phase float64 // spinner angle, so a frame can show motion

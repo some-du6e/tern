@@ -1112,7 +1112,9 @@ func (th *Theme) composerArea(gtx C, s *Scene, compact bool) D {
 				}
 				return pad(0, 4, 6, 4).Layout(gtx, func(gtx C) D { return th.Small(gtx, ColFaint, s.Notice) })
 			}),
-			rigid(func(gtx C) D { return th.composer(gtx, s, compact) }),
+			rigid(func(gtx C) D {
+				return th.withBanner(gtx, s, func(gtx C) D { return th.composer(gtx, s, compact) })
+			}),
 		)
 	})
 	call := m.Stop()

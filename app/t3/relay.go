@@ -127,13 +127,18 @@ func (r *Relay) ListEnvironments() ([]Environment, error) {
 	return body.Environments, readJSON(resp, "List environments", &body)
 }
 
-// Status is "online" or "offline", as the relay sees the environment.
-func (r *Relay) Status(envID string) (string, error) {
-	var body struct {
-		Status string `json:"status"`
-	}
+// RelayStatus is how the relay sees an environment: "online" or "offline",
+// and when offline, what it last saw fail (RelayEnvironmentStatusResponse).
+type RelayStatus struct {
+	Status          string `json:"status"`
+	EndpointFailure string `json:"endpointFailure"` // "tunnel_down", "origin_unreachable", …
+	OfflineReason   string `json:"offlineReason"`   // "tunnel_released"
+}
+
+func (r *Relay) Status(envID string) (RelayStatus, error) {
+	var body RelayStatus
 	err := r.dpopPost("/v1/environments/"+url.PathEscape(envID)+"/status", nil, &body)
-	return body.Status, err
+	return body, err
 }
 
 type connectResult struct {

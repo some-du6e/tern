@@ -1,9 +1,12 @@
 package core
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
+	"net"
+	"net/url"
 	"regexp"
 	"runtime"
 	"runtime/debug"
@@ -17,7 +20,8 @@ import (
 )
 
 // What tern shows before the app can, and over it (docs/ui/11-empty-auth.md):
-// the gate and the toasts.
+// the gate, the banner over the composer for a computer that's gone, and
+// the toasts.
 
 // gateLocked is the window's gate. Call with the lock held.
 func (a *App) gateLocked() ui.Gate {
@@ -167,6 +171,227 @@ func pairingError(err error) string {
 		return "Invalid pairing token. Check the token and try again."
 	}
 	return sentence(err.Error()) + " If the backend accepted this one-time token, request a new pairing link before retrying."
+}
+
+// ---------- the connection banner ----------
+
+// reconnectGrace is how long a computer may be reconnecting before the
+// banner says so (ENVIRONMENT_RECONNECT_WARNING_GRACE_MS).
+const reconnectGrace = 2 * time.Second
+
+// connFailure is how an environment's last connection failed, as T3
+// names it (ConnectionAttemptError, errors.ts): the part of the way that
+// broke and why, when known, the kind of failure, and whether it's a
+// refusal (ConnectionBlockedError), which waiting won't fix.
+type connFailure struct {
+	hop     string // "device", "relay", "tunnel" or "server"
+	cause   string // the relay's endpoint failure, or a cause tern can name
+	reason  string // "network", "timeout", "authentication", "permission"…
+	blocked bool
+}
+
+var errPairingExpired = errors.New("the pairing session expired; pair again")
+
+// failureOf names err, a failed connection to an environment, the way
+// T3's relay and environment errors do (errors.ts:40-260). Over T3
+// Connect the relay has already reached the host, so a request that
+// never arrives broke between this device and the tunnel; a paired
+// computer is reached directly.
+func failureOf(err error, paired bool) *connFailure {
+	unreachable := "tunnel"
+	if paired {
+		unreachable = "server"
+	}
+	var te *t3.Error
+	if errors.As(err, &te) {
+		tag, _ := te.Body["_tag"].(string)
+		why, _ := te.Body["reason"].(string)
+		switch tag {
+		case "RelayAuthInvalidError":
+			f := &connFailure{hop: "relay", reason: "authentication", blocked: true}
+			if te.Body["dpopFailureReason"] == "time_window" {
+				f.cause = "clock_skew"
+			}
+			return f
+		case "RelayEnvironmentLinkProofExpiredError":
+			return &connFailure{hop: "relay", reason: "authentication", blocked: true}
+		case "RelayEnvironmentConnectNotAuthorizedError":
+			switch why {
+			case "managed_endpoint_allocation_not_ready":
+				return &connFailure{hop: "tunnel", cause: "tunnel_pending", reason: "endpoint-unavailable"}
+			case "endpoint_provider_not_managed":
+				return &connFailure{hop: "tunnel", cause: "tunnel_not_enabled", reason: "permission", blocked: true}
+			case "environment_link_not_found":
+				return &connFailure{hop: "relay", cause: "not_linked", reason: "permission", blocked: true}
+			}
+			return &connFailure{hop: "relay", reason: "permission", blocked: true}
+		case "RelayEnvironmentLinkProofInvalidError", "RelayEnvironmentLinkLimitExceededError":
+			return &connFailure{hop: "relay", reason: "permission", blocked: true}
+		case "RelayEnvironmentEndpointTimedOutError":
+			return &connFailure{hop: "tunnel", cause: "timeout", reason: "timeout"}
+		case "RelayEnvironmentEndpointUnavailableError":
+			cause, _ := te.Body["endpointFailure"].(string)
+			if cause == "" && why == "endpoint_response_invalid" {
+				cause = "invalid_response"
+			}
+			hop := "tunnel"
+			if cause == "origin_unreachable" || cause == "invalid_response" {
+				hop = "server"
+			}
+			return &connFailure{hop: hop, cause: cause, reason: "endpoint-unavailable"}
+		case "RelayEnvironmentLinkUnavailableError":
+			return &connFailure{hop: "tunnel", reason: "endpoint-unavailable"}
+		case "RelayEnvironmentLinkFailedError", "RelayInternalError":
+			return &connFailure{hop: "relay", cause: "relay_error", reason: "relay-unavailable"}
+		}
+		if strings.HasPrefix(te.What, "Relay") {
+			// The relay answered, with nothing tern knows more about.
+			return &connFailure{hop: "relay", cause: "relay_error", reason: "relay-unavailable"}
+		}
+		// The environment's own answer (mapRemoteEnvironmentError).
+		switch te.Status {
+		case 401:
+			return &connFailure{hop: "server", reason: "authentication", blocked: true}
+		case 403:
+			return &connFailure{hop: "server", reason: "permission", blocked: true}
+		case 400, 404:
+			return &connFailure{hop: "server", reason: "configuration", blocked: true}
+		}
+		return &connFailure{hop: "server", reason: "remote-unavailable"}
+	}
+	if errors.Is(err, errPairingExpired) {
+		return &connFailure{hop: "server", reason: "authentication", blocked: true}
+	}
+	timeout := errors.Is(err, context.DeadlineExceeded)
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		timeout = true
+	}
+	var ue *url.Error
+	if errors.As(err, &ue) && strings.HasPrefix(ue.URL, t3.RelayURL) {
+		if timeout {
+			return &connFailure{hop: "relay", reason: "timeout"}
+		}
+		return &connFailure{hop: "relay", reason: "relay-unavailable"}
+	}
+	if timeout {
+		return &connFailure{hop: unreachable, reason: "timeout"}
+	}
+	return &connFailure{hop: unreachable, reason: "network"}
+}
+
+// bannerLocked is the composer's banner for the open thread's or draft's
+// computer while it isn't connected (useSystemComposerBanners.tsx:150-216):
+// once it has been trying for 2s, reconnecting, with Retry now after a
+// failure (none on the first try); at once, offline in the error colours
+// with Reconnect, when it was refused. Call with the lock held.
+func (a *App) bannerLocked(now time.Time) *ui.Banner {
+	e := a.cur()
+	if e == nil || e.conn != nil {
+		return nil
+	}
+	host := e.env.Label
+	if f := e.failed; f != nil && f.blocked {
+		return &ui.Banner{Error: true, Title: host + " is offline", Detail: diagnosis(e), Action: "Reconnect"}
+	}
+	if e.tryingAt.IsZero() || now.Sub(e.tryingAt) < reconnectGrace {
+		return nil
+	}
+	b := &ui.Banner{Title: host + " is reconnecting", Detail: diagnosis(e)}
+	if e.failed != nil {
+		b.Action = "Retry now"
+	}
+	return b
+}
+
+// trying marks e as trying to connect, from connected or from a refusal,
+// and redraws when the banner's grace is up. Call with the lock held.
+func (a *App) trying(e *envState, now time.Time) {
+	if e.tryingAt.IsZero() {
+		e.tryingAt = now
+		time.AfterFunc(reconnectGrace, a.changed)
+	}
+}
+
+// retryNow is the banner's Retry now and Reconnect: a fresh attempt now,
+// the backoff started over.
+func (a *App) retryNow() {
+	a.mu.Lock()
+	e := a.cur()
+	if e != nil {
+		e.retry = 0
+	}
+	a.mu.Unlock()
+	if e != nil {
+		a.connect(e)
+	}
+}
+
+// diagnosis is the banner's description, the headline for where e's
+// connection broke (diagnosis.ts:65-157): from its last failure, or the
+// relay's last word on it.
+func diagnosis(e *envState) string {
+	host := e.env.Label
+	var hop, cause, reason string
+	switch f := e.failed; {
+	case f != nil:
+		hop, cause, reason = f.hop, f.cause, f.reason
+	case e.relay.Status == "offline":
+		hop, cause = "tunnel", e.relay.EndpointFailure
+		switch {
+		case e.relay.OfflineReason == "tunnel_released":
+			cause = "released"
+		case cause == "origin_unreachable" || cause == "invalid_response":
+			hop = "server"
+		}
+	default:
+		return ""
+	}
+	switch cause {
+	case "clock_skew":
+		return "This device's clock is off"
+	case "not_linked":
+		return host + " is not linked to your T3 Connect account"
+	case "relay_error":
+		return "T3 Connect returned an error"
+	case "tunnel_pending":
+		return host + "'s tunnel is still being set up"
+	case "tunnel_not_enabled":
+		return "T3 Connect is not turned on for " + host
+	case "released", "tunnel_down":
+		return host + "'s tunnel is offline"
+	case "origin_unreachable":
+		return "Tunnel works, but T3 Code on " + host + " did not answer"
+	case "invalid_response":
+		return "T3 Code on " + host + " sent an unexpected answer"
+	case "dns":
+		return host + "'s tunnel address did not resolve"
+	case "tls":
+		return "Secure connection to " + host + "'s tunnel failed"
+	case "refused":
+		return host + "'s tunnel refused the connection"
+	case "timeout":
+		return host + " did not answer in time"
+	}
+	unreachable := reason == "network" || reason == "transport" || reason == "timeout"
+	switch hop {
+	case "device":
+		return "This device could not prepare the connection"
+	case "relay":
+		if reason == "authentication" {
+			return "T3 Connect did not accept this device's sign-in"
+		}
+		return "This device can't reach T3 Connect"
+	case "tunnel":
+		if unreachable {
+			return "This device can't reach " + host + "'s tunnel"
+		}
+		return "T3 Connect could not reach " + host + "'s tunnel"
+	}
+	if reason == "authentication" || reason == "permission" {
+		return "T3 Code on " + host + " did not accept this device"
+	}
+	return "T3 Code on " + host + " did not answer"
 }
 
 // ---------- toasts ----------

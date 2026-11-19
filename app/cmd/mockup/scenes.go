@@ -318,6 +318,18 @@ func homeScene(h ui.Home) *ui.Scene {
 	return &ui.Scene{Filter: "All projects", Home: h}
 }
 
+func reconnectingScene() *ui.Scene {
+	s := runningScene()
+	s.Banner = &ui.Banner{Title: "studio is reconnecting", Detail: "T3 Code on studio did not answer", Action: "Retry now"}
+	return s
+}
+
+func offlineScene() *ui.Scene {
+	s := runningScene()
+	s.Banner = &ui.Banner{Error: true, Title: "studio is offline", Detail: "T3 Code on studio did not accept this device", Action: "Reconnect"}
+	return s
+}
+
 func toastsScene() *ui.Scene {
 	s := runningScene()
 	s.Toasts = []ui.Toast{

@@ -350,6 +350,7 @@ func (a *App) build(now time.Time) *ui.Scene {
 	default:
 		s.Home = ui.HomeNoProjects
 	}
+	s.Banner = a.bannerLocked(now)
 	return s
 }
 

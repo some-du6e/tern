@@ -160,6 +160,8 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		a.mu.Unlock()
 	case "session.retry", "session.reload":
 		a.retryBoot()
+	case "banner.retry":
+		a.retryNow()
 	case "toast.close":
 		a.closeToast(arg)
 	case "toast.toggle":
