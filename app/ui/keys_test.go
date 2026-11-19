@@ -3,6 +3,7 @@ package ui
 import (
 	"image"
 	"testing"
+	"time"
 
 	"gioui.org/f32"
 	gioinput "gioui.org/io/input"
@@ -13,8 +14,8 @@ import (
 	"gioui.org/unit"
 )
 
-// The composer: Enter submits, Alt+Enter submits as a queue, Shift+Enter is
-// a newline.
+// The composer: Enter submits, Mod+Enter submits the other way (T3's
+// alternate dispatch, a queue while a run works), Shift+Enter is a newline.
 func TestComposerKeys(t *testing.T) {
 	th := NewTheme()
 	var r gioinput.Router
@@ -39,10 +40,10 @@ func TestComposerKeys(t *testing.T) {
 	if got := th.EditorText("composer"); got != "hello\n" {
 		t.Fatalf("Shift+Enter: text %q, want a newline", got)
 	}
-	r.Queue(key.Event{Name: key.NameReturn, Modifiers: key.ModAlt, State: key.Press})
+	r.Queue(key.Event{Name: key.NameReturn, Modifiers: key.ModShortcut, State: key.Press})
 	acts := frame()
 	if len(acts) == 0 || acts[0].Kind != "submit" || !acts[0].Alt {
-		t.Fatalf("Alt+Enter: actions %+v, want an Alt submit", acts)
+		t.Fatalf("Mod+Enter: actions %+v, want an alternate submit", acts)
 	}
 	r.Queue(key.Event{Name: key.NameReturn, State: key.Press})
 	acts = frame()
@@ -54,6 +55,194 @@ func TestComposerKeys(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("Enter: actions %+v, want a submit", acts)
+	}
+}
+
+// composerFrames lays out a live composer in an 800x400 window, s giving
+// what the scene says, and returns a frame func and the router.
+func composerFrames(th *Theme, s func() *Scene) (*gioinput.Router, func() []Action) {
+	r := new(gioinput.Router)
+	var ops op.Ops
+	return r, func() []Action {
+		ops.Reset()
+		gtx := layout.Context{Ops: &ops, Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Exact(image.Pt(800, 400)), Source: r.Source(), Now: time.Now()}
+		func() {
+			defer op.Offset(image.Pt(0, 250)).Push(gtx.Ops).Pop()
+			g := gtx
+			g.Constraints = layout.Constraints{Max: image.Pt(736, 400)}
+			th.composerArea(g, s(), false)
+		}()
+		r.Frame(&ops)
+		return th.Actions()
+	}
+}
+
+func keyed(acts []Action, id, kind, text string) bool {
+	for _, a := range acts {
+		if a.ID == id && a.Kind == kind && a.Text == text {
+			return true
+		}
+	}
+	return false
+}
+
+// With the @, / or $ menu open, its keys are the menu's: the arrows,
+// Enter, Tab and Escape go to it, not to the prompt. With it shut, Up on
+// an empty prompt goes back through the history, and Down comes forward
+// only while the prompt is the one it brought back. The scene says which:
+// its rows, its line for no rows, its pictures.
+func TestComposerMenuKeys(t *testing.T) {
+	th := NewTheme()
+	scene := &Scene{Live: true, Model: "Opus 5.5", Suggest: []Suggestion{{Label: "/model"}}}
+	r, frame := composerFrames(th, func() *Scene { return scene })
+	press := func(name key.Name) []Action {
+		r.Queue(key.Event{Name: name, State: key.Press}, key.Event{Name: name, State: key.Release})
+		return frame()
+	}
+	th.Focus("composer")
+	frame()
+	th.SetEditorText("composer", "/mo")
+	frame()
+	for _, k := range []key.Name{key.NameDownArrow, key.NameUpArrow, key.NameReturn, key.NameTab, key.NameEscape} {
+		if acts := press(k); !keyed(acts, "suggest", "key", string(k)) {
+			t.Fatalf("%s with the menu open: %+v", k, acts)
+		}
+	}
+	if got := th.EditorText("composer"); got != "/mo" {
+		t.Fatalf("the menu's keys reached the prompt: %q", got)
+	}
+	// With nothing to pick, Enter sends.
+	scene.Suggest, scene.SuggestEmpty = nil, "No matching command."
+	frame()
+	if acts := press(key.NameReturn); !keyed(acts, "composer", "submit", "/mo") {
+		t.Fatalf("Enter over an empty menu: %+v", acts)
+	}
+
+	scene.SuggestEmpty = ""
+	th.SetEditorText("composer", "")
+	frame()
+	if acts := press(key.NameUpArrow); !keyed(acts, "composer", "history", "back") {
+		t.Fatalf("Up on an empty prompt: %+v", acts)
+	}
+	th.RecallPrompt("an earlier prompt")
+	frame()
+	if acts := press(key.NameDownArrow); !keyed(acts, "composer", "history", "forward") {
+		t.Fatalf("Down on a recalled prompt: %+v", acts)
+	}
+	th.SetEditorText("composer", "typed")
+	frame()
+	if acts := press(key.NameUpArrow); keyed(acts, "composer", "history", "back") {
+		t.Fatalf("Up on a typed prompt walked the history: %+v", acts)
+	}
+	// A picture in the composer keeps the arrows for the caret.
+	scene.Thumbs = []Thumb{{}}
+	th.SetEditorText("composer", "")
+	frame()
+	if acts := press(key.NameUpArrow); keyed(acts, "composer", "history", "back") {
+		t.Fatalf("Up with a picture walked the history: %+v", acts)
+	}
+}
+
+// In a recalled prompt taller than the editor, scrolled to its end, Down
+// on the last line walks the history forward, and Up moves the caret
+// until it reaches the first line; only there does it walk the history
+// back (composerCommandKey.ts).
+func TestHistoryInALongPrompt(t *testing.T) {
+	th := NewTheme()
+	scene := &Scene{Live: true, Model: "Opus 5.5"}
+	r, frame := composerFrames(th, func() *Scene { return scene })
+	press := func(name key.Name) []Action {
+		r.Queue(key.Event{Name: name, State: key.Press}, key.Event{Name: name, State: key.Release})
+		return frame()
+	}
+	th.Focus("composer")
+	frame()
+	long := ""
+	for i := 0; i < 20; i++ {
+		long += "line " + string(rune('a'+i)) + "\n"
+	}
+	th.RecallPrompt(long + "last")
+	frame()
+	frame()
+	if acts := press(key.NameDownArrow); !keyed(acts, "composer", "history", "forward") {
+		t.Fatalf("Down on its last line: %+v", acts)
+	}
+	if acts := press(key.NameUpArrow); keyed(acts, "composer", "history", "back") {
+		t.Fatalf("Up on the last line of a long recalled prompt walked the history: %+v", acts)
+	}
+	ed := th.Editor("composer")
+	ed.SetCaret(0, 0)
+	frame()
+	frame()
+	if acts := press(key.NameUpArrow); !keyed(acts, "composer", "history", "back") {
+		t.Fatalf("Up on its first line: %+v", acts)
+	}
+}
+
+// Mod+Alt+Enter sends in the background; Alt+Enter is a newline, never a
+// send; Tab on an empty prompt takes the suggestion and Escape dismisses
+// it (§5.5).
+func TestComposerSendKeys(t *testing.T) {
+	th := NewTheme()
+	scene := &Scene{Live: true, Model: "Opus 5.5", Placeholder: "go ahead", Suggestion: "go ahead"}
+	r, frame := composerFrames(th, func() *Scene { return scene })
+	press := func(name key.Name, mods key.Modifiers) []Action {
+		r.Queue(key.Event{Name: name, Modifiers: mods, State: key.Press}, key.Event{Name: name, Modifiers: mods, State: key.Release})
+		return frame()
+	}
+	th.Focus("composer")
+	frame()
+	frame()
+	if acts := press(key.NameTab, 0); !keyed(acts, "composer", "suggestion", "take") {
+		t.Fatalf("Tab on an empty prompt with a suggestion: %+v", acts)
+	}
+	if acts := press(key.NameEscape, 0); !keyed(acts, "composer", "suggestion", "dismiss") {
+		t.Fatalf("Escape on an empty prompt with a suggestion: %+v", acts)
+	}
+	th.SetEditorText("composer", "hi")
+	frame()
+	acts := press(key.NameReturn, key.ModShortcut|key.ModAlt)
+	found := false
+	for _, a := range acts {
+		found = found || (a.Kind == "submit" && a.Background)
+	}
+	if !found {
+		t.Fatalf("Mod+Alt+Enter: %+v, want a background submit", acts)
+	}
+	acts = press(key.NameReturn, key.ModAlt)
+	for _, a := range acts {
+		if a.Kind == "submit" {
+			t.Fatalf("Alt+Enter sent: %+v", acts)
+		}
+	}
+	if got := th.EditorText("composer"); got != "hi\n" {
+		t.Fatalf("Alt+Enter: %q, want a newline", got)
+	}
+}
+
+// The menu's highlight follows the pointer's moves, not a pointer at rest:
+// resting on a row, the arrows still move the highlight
+// (ComposerCommandMenu.tsx: onMouseMove).
+func TestMenuHoverFollowsMoves(t *testing.T) {
+	th := NewTheme()
+	scene := &Scene{Live: true, Model: "Opus 5.5", SuggestSel: 2, Suggest: []Suggestion{{Label: "a"}, {Label: "b"}, {Label: "c"}}}
+	r, frame := composerFrames(th, func() *Scene { return scene })
+	th.Focus("composer")
+	frame()
+	th.SetEditorText("composer", "/")
+	frame()
+	// The rows rise out of the card's top (250): the menu is 8 + 3 x 28 + 8
+	// tall over its 17dp tuck, the first row from 250 + 17 - 117 + 8.
+	at := f32.Pt(300, float32(250+17-117+8+14))
+	r.Queue(pointer.Event{Kind: pointer.Move, Position: at, Source: pointer.Mouse})
+	if acts := frame(); !keyed(acts, "suggest", "hover", "0") {
+		t.Fatalf("moving onto the first row: %+v", acts)
+	}
+	scene.SuggestSel = 1 // an arrow key moved it
+	for i := 0; i < 3; i++ {
+		if acts := frame(); keyed(acts, "suggest", "hover", "0") {
+			t.Fatalf("a resting pointer took the highlight back: %+v", acts)
+		}
 	}
 }
 
@@ -234,6 +423,7 @@ func TestComposerChips(t *testing.T) {
 	frame()
 	base := "a " + ChipText(1) + " b"
 	th.SetEditorText("composer", base)
+	chipLen := len([]rune(ChipText(1)))
 	ed.SetCaret(2+chipLen, 2+chipLen) // just after the chip
 	frame()
 

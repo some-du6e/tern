@@ -89,8 +89,17 @@ type input struct {
 	copies    map[string]string    // copy buttons' text, by click id
 	copied    map[string]time.Time // when each was last clicked, for its check
 	runs      map[string]string    // run buttons' commands, by click id
-	paste     string               // an editor to paste text into next frame
-	winSize   image.Point          // the window, for popups kept inside it
+	// Selectable text, by id: a mockup's prompt, whose chips need its
+	// regions.
+	selectables map[string]*widget.Selectable
+	paste       string // an editor to paste text into next frame
+	composer    composerUI
+	preview     *imagePreview          // the picture the image dialog shows
+	scrolls     map[string]*scrollArea // the scroll areas, by id
+	movers      map[string]*int        // areas that watch the pointer move over them, by id
+	// The window's size in px, for T3's viewport breakpoints and the
+	// popups kept inside it.
+	window image.Point
 	// The sidebar's list: its keyboard tree from the last layout, each
 	// row's focus tag, the row to focus once it's laid out and the one the
 	// keyboard moved to, which scrolls into view before the next layout;
@@ -147,6 +156,9 @@ type Action struct {
 	// many clicks in a row it ends: 2 for a double click.
 	Shift, Short bool
 	Clicks       int
+	// Background is Mod+Alt+Enter's send: a new thread starts out of the
+	// way and the composer stays a new thread.
+	Background bool
 }
 
 // Actions returns and clears what happened since the last call.
@@ -439,12 +451,23 @@ func (th *Theme) tipAt(gtx C, id, tip string, size image.Point, up bool, align i
 	th.tipDelay(gtx, id, tip, size, up, align, 600*time.Millisecond)
 }
 
-// tipDelay is tipAt after a rest of delay.
+// tipDelay is tipAt after a rest of delay. Keyboard focus opens it at
+// once, without the fade.
 func (th *Theme) tipDelay(gtx C, id, tip string, size image.Point, up bool, align int, delay time.Duration) {
 	c := th.in.clicks[id]
-	// Keyboard focus opens it at once, without the fade.
 	focused := c != nil && gtx.Focused(c) && th.in.keyFocus
-	if c == nil || !(c.Hovered() || focused) || tip == "" {
+	th.showTip(gtx, id, c != nil && c.Hovered(), focused, tip, size, up, align, delay)
+}
+
+// tipShow is tipAt for a target that knows whether the pointer's on it.
+func (th *Theme) tipShow(gtx C, id string, hovered bool, tip string, size image.Point, up bool, align int) {
+	th.showTip(gtx, id, hovered, false, tip, size, up, align, 600*time.Millisecond)
+}
+
+// showTip shows id's tooltip once the pointer has rested on it for delay,
+// or at once while it has the keyboard's focus.
+func (th *Theme) showTip(gtx C, id string, hovered, focused bool, tip string, size image.Point, up bool, align int, delay time.Duration) {
+	if !(hovered || focused) || tip == "" {
 		delete(th.in.tipSince, id)
 		return
 	}
@@ -574,17 +597,6 @@ func (th *Theme) editor(gtx C, id string, t Txt, placeholder string) D {
 			th.push(Action{ID: "thread.undo", Kind: "click"})
 		}
 	}
-	// Alt+Enter has its own meaning in the composer (queue), so take it
-	// before the editor turns it into a submit.
-	for {
-		ev, ok := gtx.Event(key.Filter{Focus: ed, Name: key.NameReturn, Required: key.ModAlt})
-		if !ok {
-			break
-		}
-		if ke, ok := ev.(key.Event); ok && ke.State == key.Press {
-			th.push(Action{ID: id, Kind: "submit", Text: ed.Text(), Alt: true})
-		}
-	}
 	// The composer takes pictures too. Its Ctrl+V goes to the app, which
 	// looks for an image and calls PasteText when there's none.
 	if id == "composer" {
@@ -597,8 +609,7 @@ func (th *Theme) editor(gtx C, id string, t Txt, placeholder string) D {
 				th.push(Action{ID: id, Kind: "paste"})
 			}
 		}
-	}
-	if id == "composer" {
+		th.composerKeys(gtx, ed)
 		th.chipKeys(gtx, id, ed)
 	}
 	if th.in.paste == id {
@@ -650,7 +661,12 @@ func (th *Theme) editor(gtx C, id string, t Txt, placeholder string) D {
 		if fixChips(ed) {
 			th.push(Action{ID: id, Kind: "change", Text: ed.Text()})
 		}
+		was := th.in.caret
 		th.snapChips(ed)
+		if th.in.caret != was {
+			// The menus follow the word at the caret.
+			th.push(Action{ID: id, Kind: "caret", Text: ed.Text()})
+		}
 	}
 	if t.Size == 0 {
 		t.Size = SizeUI
@@ -670,11 +686,44 @@ func (th *Theme) editor(gtx C, id string, t Txt, placeholder string) D {
 		th.Text(gtx, Txt{Size: t.Size, Color: ColFaint, Font: t.Font, MaxLines: 1}, placeholder)
 	}
 	ed.LineHeightScale = t.LineH
-	d := ed.Layout(gtx, th.Shaper, t.Font, unit.Sp(t.Size), col(t.Color), col(alpha(ColAccent, 0x60)))
+	sel := col(alpha(ColAccent, 0x60))
 	if id == "composer" {
-		th.drawChips(gtx, ed, d.Size, editorScroll(ed, d.Size), ColFrame, float32(t.Size), ImageLabel)
+		sel = col(selection())
+	}
+	d := ed.Layout(gtx, th.Shaper, t.Font, unit.Sp(t.Size), col(t.Color), sel)
+	if id == "composer" {
+		th.drawChips(gtx, ed, d.Size, glass(), float32(t.Size), chipPictures(th.in.composer.thumbs), true)
 	}
 	return d
+}
+
+// EditorCaret is where the caret of the editor named id is, in runes.
+func (th *Theme) EditorCaret(id string) int {
+	c, _ := th.Editor(id).Selection()
+	return c
+}
+
+// EditorSelected reports whether the editor named id has text selected.
+func (th *Theme) EditorSelected(id string) bool {
+	s, e := th.Editor(id).Selection()
+	return s != e
+}
+
+// ReplaceText replaces runes [start, end) of the editor named id with s
+// and puts the caret after it.
+func (th *Theme) ReplaceText(id string, start, end int, s string) {
+	ed := th.Editor(id)
+	ed.SetCaret(start, end)
+	ed.Insert(s)
+	th.push(Action{ID: id, Kind: "change", Text: ed.Text()})
+}
+
+// RecallPrompt puts an earlier prompt in the composer, the caret at its
+// end; while it's unchanged, the arrows keep walking the history.
+func (th *Theme) RecallPrompt(s string) {
+	th.SetEditorText("composer", s)
+	th.in.composer.recalled = s
+	th.push(Action{ID: "composer", Kind: "change", Text: s})
 }
 
 // InsertText types s at the caret of the editor named id.

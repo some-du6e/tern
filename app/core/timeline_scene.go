@@ -29,8 +29,12 @@ func (a *App) timeline(s *ui.Scene, t *t3.Thread, v *threadView, root string) {
 		openRuns: v.unfolded, openGroups: v.groups}
 	in.turnEnded = in.latest != nil && turnEnded(in.latest, v.turns)
 	tl.Working = in.working
-	if req := t.PendingRuntimeRequest; req != nil && req.Kind != "user_input" {
-		in.pending = req.ID
+	// The pending approval is the first the composer shows: the typing
+	// guard holds one back from the timeline too (07-composer.md §5.13).
+	var pending *t3.RuntimeRequest
+	if shown := a.shownApprovals(); len(shown) > 0 {
+		pending = &t3.RuntimeRequest{ID: shown[0].id, Kind: shown[0].kind}
+		in.pending = pending.ID
 	}
 	if in.working {
 		in.activeStarted = parseTime(t.ActivityRunStartedAt)
@@ -75,7 +79,7 @@ func (a *App) timeline(s *ui.Scene, t *t3.Thread, v *threadView, root string) {
 				asked = it
 			}
 		}
-		tl.Approvals = append(tl.Approvals, uiApproval(t.PendingRuntimeRequest, asked, v.requestLive(in.pending)))
+		tl.Approvals = append(tl.Approvals, a.uiApproval(pending, asked, v.requestLive(in.pending)))
 	}
 }
 
@@ -436,7 +440,7 @@ func (a *App) uiEntry(e *workEntry, v *threadView, root, pending string) ui.Work
 	out := ui.WorkEntry{ID: e.id, At: e.at, Icon: e.icon(), Label: e.displayLabel(root), Open: v.open[e.id]}
 	it := e.item
 	if it.Type == "approval_request" && pending != "" && it.RequestID == pending {
-		p := uiApproval(&t3.RuntimeRequest{ID: it.RequestID, Kind: it.RequestKind}, it, v.requestLive(it.RequestID))
+		p := a.uiApproval(&t3.RuntimeRequest{ID: it.RequestID, Kind: it.RequestKind}, it, v.requestLive(it.RequestID))
 		out.Approval = &p
 		return out
 	}
@@ -509,9 +513,10 @@ func (a *App) uiEntry(e *workEntry, v *threadView, root, pending string) ui.Work
 }
 
 // uiApproval is an approval request as its row shows it; live: the
-// provider can still take its answer.
-func uiApproval(req *t3.RuntimeRequest, it *t3.TurnItem, live bool) ui.PendingApproval {
-	p := ui.PendingApproval{ID: req.ID, Kind: req.Kind, Live: live}
+// provider can still take its answer. Its answers are off while one is on
+// its way.
+func (a *App) uiApproval(req *t3.RuntimeRequest, it *t3.TurnItem, live bool) ui.PendingApproval {
+	p := ui.PendingApproval{ID: req.ID, Kind: req.Kind, Live: live, Responding: a.comp.responding[req.ID]}
 	if it != nil {
 		p.Detail, p.App, p.Reason = it.Prompt, it.AppName, it.Reason
 		for _, o := range it.Options {

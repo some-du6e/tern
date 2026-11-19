@@ -407,10 +407,13 @@ func (th *Theme) timelineHeader(gtx C, tl *Timeline, laneX, laneW int) D {
 	return D{Size: image.Pt(w, h+y+dp(gtx, 8))}
 }
 
-// timelineFooter ends the list: approvals no row shows, then space as tall
-// as the composer over it, then 16dp (TimelineListFooter).
+// timelineFooter ends the list: the queued messages (§2.10), approvals no
+// row shows, then space as tall as the composer over it, then 16dp
+// (TimelineListFooter).
 func (th *Theme) timelineFooter(gtx C, s *Scene, laneX, laneW, composer int) D {
-	y := 0
+	off := op.Offset(image.Pt(laneX, 0)).Push(gtx.Ops)
+	y := th.queue(within(gtx, laneW), s).Size.Y
+	off.Pop()
 	for i := range s.Timeline.Approvals {
 		off := op.Offset(image.Pt(laneX, y)).Push(gtx.Ops)
 		y += th.workBlock(within(gtx, laneW), 8, func(gtx C) D { return th.approvalRow(gtx, &s.Timeline.Approvals[i]) })
@@ -584,18 +587,11 @@ func (th *Theme) turnFold(gtx C, r *TimelineRow, hot bool) int {
 	return y + max(1, dp(gtx, 1))
 }
 
-// recording is a widget drawn ahead of where it goes.
-type recording struct {
-	call op.CallOp
-	Size image.Point
-}
-
+// recorded is record from no minimum size: a widget drawn ahead of where
+// it goes, at its own size.
 func (th *Theme) recorded(gtx C, w W) recording {
-	m := op.Record(gtx.Ops)
-	g := gtx
-	g.Constraints.Min = image.Point{}
-	d := w(g)
-	return recording{m.Stop(), d.Size}
+	gtx.Constraints.Min = image.Point{}
+	return record(gtx, w)
 }
 
 // workingRow is "Working for 12s", the live turn's header: muted 14dp on a

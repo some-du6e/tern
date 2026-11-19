@@ -367,7 +367,7 @@ func (th *Theme) traceBox(gtx C, id string, in int, thoughts []string, live bool
 	if live {
 		follow = 4
 	}
-	return th.vscroll(gtx, id+":trace", image.Pt(w, min(y, dp(gtx, 384))), y, follow, call)
+	return th.followScroll(gtx, id+":trace", image.Pt(w, min(y, dp(gtx, 384))), y, follow, call)
 }
 
 // plainText draws s wrapped in t's font, UI's by default, its line breaks
@@ -416,10 +416,10 @@ type plainKey struct {
 	font  font.Font
 }
 
-// vscroll draws a recorded block content px tall in a size box, scrolled
-// by the wheel when it's taller. A follow of more than 0 keeps it at its
-// end as it grows while it was there, within follow dp.
-func (th *Theme) vscroll(gtx C, id string, size image.Point, content int, follow float32, call op.CallOp) int {
+// followScroll draws a recorded block content px tall in a size box,
+// scrolled by the wheel when it's taller. A follow of more than 0 keeps it
+// at its end as it grows while it was there, within follow dp.
+func (th *Theme) followScroll(gtx C, id string, size image.Point, content int, follow float32, call op.CallOp) int {
 	s := th.tl.scrolls[id]
 	if s == nil {
 		s = &hscroll{}
@@ -499,7 +499,7 @@ func (th *Theme) groupList(gtx C, r *TimelineRow) int {
 		call.Add(gtx.Ops)
 		return y
 	}
-	h := th.vscroll(gtx, r.ID, image.Pt(w, limit), y, 0, call)
+	h := th.followScroll(gtx, r.ID, image.Pt(w, limit), y, 0, call)
 	// The 6dp bar in the gutter, its thumb in --app-scrollbar-thumb.
 	if s := th.tl.scrolls[r.ID]; s != nil {
 		length := max(dp(gtx, 16), limit*limit/y)
@@ -688,7 +688,7 @@ func (th *Theme) approvalRow(gtx C, a *PendingApproval) D {
 	line := th.workLine(within(gtx, w-2*px), workIcon(icon, mutedIcon(P.IconMuted)), func(gtx C) D {
 		cl := th.codeText(gtx, detail, "", P.Foreground, 12, 20, gtx.Constraints.Max.X)
 		h := min(cl.size.Y, dp(gtx, 160))
-		th.vscroll(gtx, "approval:"+a.ID, image.Pt(gtx.Constraints.Max.X, h), cl.size.Y, 0, cl.call)
+		th.followScroll(gtx, "approval:"+a.ID, image.Pt(gtx.Constraints.Max.X, h), cl.size.Y, 0, cl.call)
 		return D{Size: image.Pt(cl.size.X, h)}
 	}, nil, true)
 	off.Pop()
@@ -722,9 +722,9 @@ var defaultApprovalOptions = []ApprovalOption{{Decision: "cancel", Label: "Cance
 // approvalActions is the approval's 12/16 line: the warning shield and
 // "Waiting for approval", then Decline and Approve as inline buttons and
 // the rest under More, a menu above it (ComposerPendingApprovalActions,
-// inline). Their click targets are "timeline.approval:<decision>", apart
-// from the composer's own. A risky answer has a triangle-alert, its
-// warning in a tooltip.
+// inline). Their click targets are "approval:<decision>:<ID>", and while
+// an answer is on its way they're off. A risky answer has a
+// triangle-alert, its warning in a tooltip.
 func (th *Theme) approvalActions(gtx C, a *PendingApproval) D {
 	if !a.Live {
 		return th.textLine(gtx, Txt{Size: 12, Color: P.Warning}, 16, "Provider process is gone. Interrupt or restart the run to respond.")
@@ -743,22 +743,31 @@ func (th *Theme) approvalActions(gtx C, a *PendingApproval) D {
 	var more []menuChoice
 	var moreIDs []string
 	for _, o := range opts {
-		id := "timeline.approval:" + o.Decision
+		id := ""
+		if !a.Responding {
+			id = "approval:" + o.Decision + ":" + a.ID
+		}
 		if o.Decision != "decline" && o.Decision != "accept" {
 			more, moreIDs = append(more, menuChoice{o.Label, o.Warning}), append(moreIDs, id)
 			continue
 		}
 		o := o
 		kids = append(kids, layout.Rigid(Spacer(8, 0)), layout.Rigid(func(gtx C) D {
-			d := th.inlineButton(id, o.Label, o.Decision != "accept", o.Warning != "")(gtx)
+			d := th.approvalButton(id, o.Label, o.Decision != "accept", o.Warning != "")(gtx)
 			th.tipAt(gtx, id, o.Warning, d.Size, true, 0)
 			return d
 		}))
 	}
-	menuID := "approval.more:" + a.ID
+	menuID := ""
+	if !a.Responding {
+		menuID = "approval.more:" + a.ID
+	}
 	if len(more) > 0 {
 		kids = append(kids, layout.Rigid(Spacer(8, 0)), layout.Rigid(func(gtx C) D {
-			d := th.inlineButton(menuID, "More", true, false)(gtx)
+			d := th.approvalButton(menuID, "More", true, false)(gtx)
+			if menuID == "" {
+				return d
+			}
 			if th.clicked(menuID) {
 				th.toggleMenu(menuID)
 			}
@@ -772,14 +781,19 @@ func (th *Theme) approvalActions(gtx C, a *PendingApproval) D {
 	return layout.Flex{Alignment: layout.Middle}.Layout(gtx, kids...)
 }
 
-// inlineButton is InlineButton: medium text, underlined on hover; the
-// muted tone brightens to the foreground. warn puts a 12dp triangle-alert
-// 2dp before the label.
-func (th *Theme) inlineButton(id, label string, muted, warn bool) W {
+// approvalButton is an approval's answer, an InlineButton: medium 12/16
+// text, underlined on hover; the muted tone brightens to the foreground.
+// warn puts a 12dp triangle-alert 2dp before the label. Without an id
+// it's off: it draws at rest and takes no clicks.
+func (th *Theme) approvalButton(id, label string, muted, warn bool) W {
 	return func(gtx C) D {
-		c, _ := th.events(gtx, id)
+		hovered := false
+		if id != "" {
+			c, _ := th.events(gtx, id)
+			hovered = c.Hovered()
+		}
 		col := P.Foreground
-		if muted && !c.Hovered() {
+		if muted && !hovered {
 			col = P.MutedForeground
 		}
 		x := 0
@@ -791,14 +805,16 @@ func (th *Theme) inlineButton(id, label string, muted, warn bool) W {
 		}
 		off := op.Offset(image.Pt(x, 0)).Push(gtx.Ops)
 		d := th.textLine(gtx, Txt{Size: 12, Font: UI(font.Medium), Color: col}, 16, label)
-		if c.Hovered() {
+		if hovered {
 			// underline-offset-2 under the baseline.
 			y := d.Size.Y - d.Baseline + dp(gtx, 2)
 			hline(gtx, col, y, 0, d.Size.X)
 		}
 		off.Pop()
 		d.Size.X += x
-		th.hit(gtx, id, d.Size)
+		if id != "" {
+			th.hit(gtx, id, d.Size)
+		}
 		return d
 	}
 }
@@ -820,7 +836,7 @@ func (th *Theme) toolInspector(gtx C, b *EntryBody, id string) int {
 		if key == "output" {
 			follow = 8
 		}
-		return th.vscroll(gtx, id+":"+key, image.Pt(gtx.Constraints.Max.X, min(cl.size.Y, dp(gtx, 320))), cl.size.Y, follow, cl.call)
+		return th.followScroll(gtx, id+":"+key, image.Pt(gtx.Constraints.Max.X, min(cl.size.Y, dp(gtx, 320))), cl.size.Y, follow, cl.call)
 	}
 	fg85 := over(faded(P.Foreground, 0xd9), P.Background)
 	type part struct {

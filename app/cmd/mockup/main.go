@@ -93,6 +93,30 @@ func main() {
 			defer ui.SetDark(false)
 			return th.Desktop(gtx, settledScene())
 		}},
+		{"c1-composer-chips", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, composerScene()) }},
+		{"c2-composer-mentions", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, mentionScene()) }},
+		{"c3-composer-busy", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, busyScene()) }},
+		{"c4-composer-answers", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, answersScene()) }},
+		{"c4b-composer-stash", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, stashScene()) }},
+		{"c3b-composer-queue-edit", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, queueEditScene()) }},
+		{"c9-composer-permissions", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, permissionsScene()) }},
+		{"c10-composer-suggestion", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, suggestionScene()) }},
+		{"c11-composer-ultrafast", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, ultrafastScene()) }},
+		{"c12-composer-no-provider", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, noProviderScene()) }},
+		{"c13-composer-fresh-session", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, freshScene()) }},
+		{"c5b-new-thread-stash", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, heroStashScene()) }},
+		{"c5-new-thread-hero", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, heroScene()) }},
+		{"c6-new-thread-scratch", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, scratchScene()) }},
+		{"c7-composer-dark", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions {
+			ui.SetDark(true)
+			defer ui.SetDark(false)
+			return th.Desktop(gtx, busyScene())
+		}},
+		{"c8-new-thread-hero-dark", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions {
+			ui.SetDark(true)
+			defer ui.SetDark(false)
+			return th.Desktop(gtx, heroScene())
+		}},
 	}
 	if *anim != "" {
 		if err := renderAnims(th, float32(*scale), *anim); err != nil {

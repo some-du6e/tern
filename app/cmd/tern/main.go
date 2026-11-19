@@ -2,18 +2,24 @@
 package main
 
 import (
+	"errors"
 	"image"
+	"io"
 	"log"
+	"net/http"
 	"os"
+	"path/filepath"
 	"sync/atomic"
 	"time"
 
 	"gioui.org/app"
 	"gioui.org/op"
-	"gioui.org/op/clip"
+	gioclip "gioui.org/op/clip"
 	"gioui.org/op/paint"
 	"gioui.org/unit"
+	"gioui.org/x/explorer"
 
+	"github.com/some-du6e/tern/app/clip"
 	"github.com/some-du6e/tern/app/core"
 	"github.com/some-du6e/tern/app/shell"
 	"github.com/some-du6e/tern/app/ui"
@@ -49,12 +55,15 @@ func run(w *app.Window) error {
 		return err
 	}
 	c.OpenURL = shell.Open
+	expl := explorer.NewExplorer(w)
+	c.ChooseImages = func() ([]clip.Image, error) { return chooseImages(expl) }
 	c.Start()
 	th.Focus("signin.email")
 	var ops op.Ops
 	var shown time.Time // when the desktop first drew after boot or sign-in
 	for {
 		ev := w.Event()
+		expl.ListenEvents(ev)
 		platformEvent(ev)
 		switch e := ev.(type) {
 		case app.DestroyEvent:
@@ -90,7 +99,7 @@ func run(w *app.Window) error {
 					k := 1 - float32(t)/float32(fadeIn)
 					col := ui.ColWindow
 					col.A = uint8(255 * k * k)
-					paint.FillShape(gtx.Ops, col, clip.Rect(image.Rectangle{Max: e.Size}).Op())
+					paint.FillShape(gtx.Ops, col, gioclip.Rect(image.Rectangle{Max: e.Size}).Op())
 					gtx.Execute(op.InvalidateCmd{})
 				}
 			}
@@ -117,7 +126,42 @@ func nextTick(now time.Time, s *ui.Scene) time.Time {
 	return now.Truncate(time.Minute).Add(time.Minute)
 }
 
-// moving reports whether anything on screen animates. The sign-in screen
-// schedules its own frames, and so does the timeline: its timers once a
-// second, its shimmer and shine once a step, and only for rows on screen.
-func moving(s *ui.Scene) bool { return s.State == ui.ThreadRunning }
+// chooseImages is the composer's attach button: the system's file dialog
+// for the images a message can carry, read in.
+func chooseImages(expl *explorer.Explorer) ([]clip.Image, error) {
+	files, err := expl.ChooseFiles(".png", ".jpg", ".jpeg", ".gif", ".webp")
+	if errors.Is(err, explorer.ErrUserDecline) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	// Every file picked gets closed, whatever stops the reading.
+	defer func() {
+		for _, f := range files {
+			f.Close()
+		}
+	}()
+	var out []clip.Image
+	for _, f := range files {
+		data, err := io.ReadAll(io.LimitReader(f, clip.MaxBytes+1))
+		name := "image"
+		if of, ok := f.(*os.File); ok {
+			name = filepath.Base(of.Name())
+		}
+		switch {
+		case err != nil:
+			return out, err
+		case len(data) > clip.MaxBytes:
+			return out, errors.New(name + " is over 10 MB")
+		}
+		out = append(out, clip.Image{Name: name, Mime: http.DetectContentType(data), Data: data})
+	}
+	return out, nil
+}
+
+// moving reports whether anything on screen animates: a running thread,
+// or a send on its way, whose button spins. The sign-in screen schedules
+// its own frames, and so does the timeline: its timers once a second, its
+// shimmer and shine once a step, and only for rows on screen.
+func moving(s *ui.Scene) bool { return s.State == ui.ThreadRunning || s.Sending }

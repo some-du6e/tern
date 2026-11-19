@@ -242,12 +242,14 @@ type SearchHit struct {
 // PendingApproval is an approval waiting on the user, as the timeline
 // shows it (TimelinePendingApprovalRow.tsx).
 type PendingApproval struct {
-	ID     string // the request: click targets "approval:<decision>"
+	ID     string // the request: click targets "approval:<decision>:<ID>"
 	Kind   string // command, file-change, file-read, permission, mcp-elicitation
 	Detail string
 	App    string
 	Reason string
 	Live   bool // the provider can still take an answer
+	// Responding: an answer is on its way, so the answers are off.
+	Responding bool
 	// Options are its answers; none means T3's defaults.
 	Options []ApprovalOption
 }

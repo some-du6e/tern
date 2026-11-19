@@ -4,6 +4,7 @@ import (
 	"image"
 	"image/color"
 	"math"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -205,7 +206,7 @@ func (th *Theme) layoutInline(gtx C, t *inlineText, maxW int) *inlineLayout {
 			x += w
 			continue
 		case r.chip > 0:
-			label := ImageLabel(r.chip)
+			label := "Image " + strconv.Itoa(r.chip)
 			if r.chip <= len(t.chips) {
 				label = t.chips[r.chip-1]
 			}

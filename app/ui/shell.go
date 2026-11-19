@@ -64,7 +64,7 @@ func (th *Theme) Desktop(gtx C, s *Scene) D {
 		th.menuClosed(gtx)
 	}
 	size := gtx.Constraints.Max
-	th.in.winSize = size
+	th.in.window = size
 	fill(gtx, P.Background, image.Rectangle{Max: size}, 0)
 
 	sw := th.sidebarPx(gtx, s, size.X)
@@ -115,6 +115,12 @@ func (th *Theme) Desktop(gtx C, s *Scene) D {
 	}
 	if s.Alert != nil {
 		th.alertDialog(gtx, s.Alert, size)
+	}
+	if th.in.preview != nil {
+		// The image dialog goes over the deferred menus too (z 60).
+		m := op.Record(gtx.Ops)
+		th.imageDialog(gtx)
+		op.Defer(gtx.Ops, m.Stop())
 	}
 	return D{Size: size}
 }
@@ -648,7 +654,7 @@ func (th *Theme) canvas(gtx C, s *Scene) {
 		return draw(g)
 	}
 	switch {
-	case s.Live && s.Hero != "" && len(s.Timeline.Rows) == 0:
+	case (s.Hero != "" || s.Scratch) && len(s.Timeline.Rows) == 0:
 		in(0, size.Y, func(gtx C) D {
 			gtx.Constraints.Min.Y = size.Y
 			return th.hero(gtx, s, false)
@@ -668,6 +674,11 @@ func (th *Theme) canvas(gtx C, s *Scene) {
 			composer.Add(gtx.Ops)
 		}()
 	}
+	// The banner lane is over both (z 30): the thread's error.
+	in(0, size.Y, func(gtx C) D {
+		th.threadError(gtx, s, w)
+		return D{}
+	})
 	if cardLeft >= 0 {
 		// Inline, the card's density is judged against its slot.
 		slot := size.Y - dp(gtx, 2*cardInset)

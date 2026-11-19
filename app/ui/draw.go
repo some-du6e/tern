@@ -252,7 +252,6 @@ const (
 	IconSearch
 	IconDots
 	IconStop
-	IconSend
 	IconPin
 	IconCheck
 	IconTerminal
@@ -268,7 +267,6 @@ const (
 	IconForward
 	IconReload
 	IconSplit
-	IconGauge
 	IconStar
 	IconStarFill
 	IconFolder
@@ -303,9 +301,6 @@ func DrawIcon(gtx C, ic Icon, col color.NRGBA, sizeDp float32) D {
 		}
 	case IconStop:
 		fill(gtx, col, image.Rect(int(4*u), int(4*u), int(12*u), int(12*u)), int(1.5*u))
-	case IconSend:
-		polyline(gtx, col, sw, pt(8, 13), pt(8, 3.5))
-		polyline(gtx, col, sw, pt(4, 7.5), pt(8, 3.5), pt(12, 7.5))
 	case IconPin:
 		polyline(gtx, col, sw, pt(6, 2.8), pt(10, 2.8))
 		polyline(gtx, col, sw, pt(6.7, 3), pt(6.2, 7.5), pt(4.2, 9.6), pt(11.8, 9.6), pt(9.8, 7.5), pt(9.3, 3))
@@ -378,15 +373,6 @@ func DrawIcon(gtx C, ic Icon, col color.NRGBA, sizeDp float32) D {
 		}
 		p.Close()
 		paint.FillShape(gtx.Ops, col, clip.Outline{Path: p.End()}.Op())
-	case IconGauge:
-		var arc []f32.Point
-		for i := 0; i <= 20; i++ {
-			a := math.Pi*0.8 + float64(i)/20*math.Pi*1.4
-			arc = append(arc, pt(8+5.5*float32(math.Cos(a)), 9+5.5*float32(math.Sin(a))))
-		}
-		polyline(gtx, col, sw, arc...)
-		polyline(gtx, col, sw, pt(8, 9), pt(11, 5.8))
-		circle(gtx, col, pt(8, 9).Round(), int(1.2*u+0.5))
 	case IconSplit:
 		strokeRect(gtx, col, image.Rect(int(2.5*u), int(2.5*u), int(13.5*u), int(13.5*u)), int(1.5*u), sw)
 		polyline(gtx, col, sw, pt(2.5, 8), pt(13.5, 8))
@@ -506,7 +492,6 @@ const (
 	Primary
 	Ghost
 	Danger
-	Toggled
 )
 
 // Button is an ImGui-style flat button: frame color, no shadow, small radius.
@@ -520,8 +505,6 @@ func (th *Theme) Button(v Variant, ic Icon, hasIcon bool, label string) W {
 			bg, fg, border = color.NRGBA{}, ColDim, color.NRGBA{}
 		case Danger:
 			bg, fg, border = alpha(ColRed, 0x1e), ColRed, alpha(ColRed, 0x50)
-		case Toggled:
-			bg, fg, border = ColAccentSoft, ColAccentHi, alpha(ColAccent, 0x70)
 		}
 		px := float32(9)
 		if label == "" {
@@ -737,18 +720,31 @@ type boxShadow struct {
 	col                color.NRGBA
 }
 
-// shadow paints CSS box shadows for the rounded rect r. Gio has no blur, so
-// each shadow's blurred edge is a stack of rounded rects, from the edge of
-// the blur in to its middle, whose alphas add up to the shadow's colour.
+// shadow paints CSS box shadows for the rounded rect r on the page's
+// background; shadowOn on another surface.
 func shadow(gtx C, r image.Rectangle, radius int, shadows []boxShadow) {
+	shadowOn(gtx, r, radius, P.Background, shadows)
+}
+
+// shadowOn paints CSS box shadows for the rounded rect r cast on the
+// surface on. Gio has no blur, so each shadow's blurred edge is a stack of
+// rounded rects, from the edge of the blur in to its middle, each adding
+// its share of the shadow's colour. Gio blends in linear light, so each
+// band's alpha is the one that darkens on as a browser's sRGB share would
+// (gioAlpha); else the shadow comes out at about half its strength.
+func shadowOn(gtx C, r image.Rectangle, radius int, on color.NRGBA, shadows []boxShadow) {
 	for _, sh := range shadows {
 		off := image.Pt(dp(gtx, sh.x), dp(gtx, sh.y))
 		blur := float32(dp(gtx, sh.blur))
 		spread := dp(gtx, sh.spread)
 		n := max(1, min(8, int(blur)))
-		c := sh.col
-		c.A = uint8(max(1, int(float32(sh.col.A)/float32(n)+0.5)))
+		share := float64(sh.col.A) / 255 / float64(n)
+		prev := on
 		for i := 0; i < n; i++ {
+			// A browser stacks i+1 shares: 1 - (1 - share)^(i+1).
+			next := over(alpha(sh.col, uint8((1-math.Pow(1-share, float64(i+1)))*255+0.5)), on)
+			c := alpha(sh.col, max(1, gioAlpha(sh.col, prev, next)))
+			prev = next
 			grow := spread + int(blur*(0.5-float32(i)/float32(n)))
 			rr := r.Add(off).Inset(-grow)
 			if rr.Dx() <= 0 || rr.Dy() <= 0 {
@@ -757,4 +753,18 @@ func shadow(gtx C, r image.Rectangle, radius int, shadows []boxShadow) {
 			fill(gtx, c, rr, max(0, radius+grow))
 		}
 	}
+}
+
+// recording is a widget laid out but not drawn: its size, and the ops
+// that draw it at the current offset.
+type recording struct {
+	D
+	call op.CallOp
+}
+
+// record lays w out without drawing it.
+func record(gtx C, w W) recording {
+	m := op.Record(gtx.Ops)
+	d := w(gtx)
+	return recording{d, m.Stop()}
 }

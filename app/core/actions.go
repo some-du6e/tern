@@ -54,21 +54,80 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 			a.pickModel(th, 0)
 		}
 		return
-	case act.Kind == "change" && id == "composer":
-		a.syncImages(act.Text)
+	case (act.Kind == "change" || act.Kind == "caret") && id == "composer":
+		if act.Kind == "change" {
+			// The stash's list closes when the prompt changes, and a
+			// request that comes in now waits for the typing to stop.
+			a.mu.Lock()
+			a.comp.stashOpen = false
+			a.typed()
+			a.mu.Unlock()
+		}
+		a.composerChanged(th, act.Text)
+		return
+	case (act.Kind == "focus" || act.Kind == "blur") && id == "composer":
+		a.mu.Lock()
+		a.guard.focused = act.Kind == "focus"
+		if !a.guard.focused {
+			a.guard.release()
+		}
+		a.mu.Unlock()
+		a.changed()
+		return
+	case act.Kind == "key" && id == "stash":
+		a.stashMenuKey(th, act.Text)
+		return
+	case act.Kind == "hover" && id == "stash":
+		a.mu.Lock()
+		if i := atoi(act.Text); i >= 0 && i < len(a.comp.stash) {
+			a.comp.stashSel = i
+		}
+		a.mu.Unlock()
+		return
+	case act.Kind == "suggestion" && id == "composer":
+		a.suggestionKey(th, act.Text == "take")
+		return
+	case act.Kind == "history" && id == "composer":
+		a.recall(th, act.Text == "back")
 		return
 	case act.Kind == "paste" && id == "composer":
 		a.paste(th)
 		return
 	case act.Kind == "submit" && id == "composer":
-		a.send(th, act.Alt)
+		a.mu.Lock()
+		asking := len(a.questionsLocked()) > 0
+		draft := a.draft != ""
+		a.mu.Unlock()
+		switch {
+		case asking:
+			a.answerAll(th)
+		case act.Background && !draft:
+			// Mod+Alt+Enter on a thread: send, then a new thread.
+			if a.send(th, false, false) {
+				a.switchTo(th, a.newDraft)
+			}
+		case draft:
+			// Mod+Enter or Mod+Alt+Enter on a new thread starts it in the
+			// background and keeps a new thread here.
+			a.send(th, false, act.Alt || act.Background)
+		default:
+			// Mod+Enter while a run works dispatches the other way.
+			a.send(th, act.Alt, false)
+		}
+		return
+	case act.Kind == "key" && id == "suggest":
+		a.menuKey(th, act.Text)
+		return
+	case act.Kind == "hover" && id == "suggest":
+		a.mu.Lock()
+		if i := atoi(act.Text); i >= 0 && i < len(a.comp.items) {
+			a.comp.sel = i
+		}
+		a.mu.Unlock()
 		return
 	case act.Kind == "submit" && id == "browser.url":
 		a.browserGo(act.Text)
 		th.Unfocus()
-		return
-	case act.Kind == "submit" && id == "answer":
-		a.answer(th)
 		return
 	case act.Kind == "key" && act.Text == "⎋":
 		a.closeMenus()
@@ -238,7 +297,12 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		a.mu.Unlock()
 		_ = a.store.Put("sidebar-hidden", hidden)
 	case "stop":
-		a.stop()
+		a.mu.Lock()
+		clicked := a.stopClicked()
+		a.mu.Unlock()
+		if clicked {
+			a.stop()
+		}
 	case "more":
 		a.loadEarlier()
 	case "fold", "group":
@@ -271,21 +335,57 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		a.download(arg, []byte(act.Text))
 	case "file.download":
 		a.downloadAttachment(arg)
-	case "approval", "timeline.approval":
-		// The composer's panel, or the approval's row in the timeline.
-		a.respond(map[string]any{"decision": arg})
+	case "approval":
+		// An answer on an approval's row in the timeline, to its request.
+		decision, req, _ := strings.Cut(arg, ":")
+		a.respondApproval(req, decision)
 	case "q":
 		qi, oi := split2(arg)
-		a.pickAnswer(qi, oi)
+		a.pickOption(th, qi, oi)
+	case "q.prev":
+		a.moveQuestion(th, -1)
 	case "answer":
-		a.answer(th)
+		a.answerAll(th)
+	case "suggest":
+		a.pickItem(th, atoi(arg))
+	case "stash":
+		a.mu.Lock()
+		a.comp.stashOpen, a.comp.stashSel = !a.comp.stashOpen, 0
+		a.mu.Unlock()
+	case "stash.save":
+		a.stashKey(th)
+	case "stash.restore":
+		a.restoreStash(th, atoi(arg))
+	case "stash.delete":
+		a.deleteStash(atoi(arg))
+	case "attach":
+		a.attach()
+	case "fresh.keep":
+		// The fresh session banner's dismiss: keep the current session.
+		a.mu.Lock()
+		delete(a.comp.fresh, a.composerKey())
+		a.mu.Unlock()
+	case "project.scratch":
+		// From anywhere, Mod+Alt+N: a new thread, then out of its project.
+		a.mu.Lock()
+		fresh := a.draft == "" && a.newDraftLocked()
+		a.mu.Unlock()
+		if fresh {
+			a.switchTo(th, func() {})
+		}
+		a.startScratch(th)
 	case "dismiss":
-		a.dispatchOpen("thread.user-input.dismiss", map[string]any{"requestId": a.pendingID()})
+		a.mu.Lock()
+		req, _ := a.questions()
+		a.mu.Unlock()
+		if req != "" {
+			a.dispatchOpen("thread.user-input.dismiss", map[string]any{"requestId": req})
+		}
 	case "queue":
 		i, rest, _ := strings.Cut(arg, ":")
-		a.queueAction(atoi(i), rest)
+		a.queueAction(th, atoi(i), rest)
 	case "send":
-		a.send(th, false)
+		a.send(th, act.Alt, false)
 	case "model":
 		a.mu.Lock()
 		open := a.picker == nil
@@ -308,12 +408,6 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		a.mu.Unlock()
 	case "picker.model":
 		a.pickModel(th, atoi(arg))
-	case "traits":
-		a.mu.Lock()
-		open := !a.traitsOpen
-		a.closeMenusLocked()
-		a.traitsOpen = open
-		a.mu.Unlock()
 	case "trait":
 		gi, ci := split2(arg)
 		a.setTrait(gi, ci)
@@ -328,8 +422,9 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		}
 		_, ci := split2(arg)
 		a.mu.Lock()
-		if ci >= 0 && ci < len(runtimeModes) {
-			a.choiceFor(a.composerKey()).runtime = runtimeModes[ci].id
+		c := a.choiceFor(a.composerKey())
+		if modes := a.runtimeModes(c); ci >= 0 && ci < len(modes) {
+			c.runtime = modes[ci].ID
 		}
 		a.accessOpen = false
 		a.mu.Unlock()
@@ -359,7 +454,7 @@ func (a *App) closeMenus() {
 }
 
 func (a *App) closeMenusLocked() {
-	a.picker, a.traitsOpen, a.accessOpen, a.projectsOpen, a.accountOpen = nil, false, false, false, false
+	a.picker, a.accessOpen, a.projectsOpen, a.accountOpen = nil, false, false, false
 	a.detailsOpen, a.machinesOpen = false, false
 	a.ctxRef, a.ctxBulk, a.ctxDraft, a.ctxKeyboard, a.ctxConfirm = "", false, false, false, false
 	a.filterOpen, a.snoozeRef = false, ""
@@ -524,44 +619,37 @@ func (a *App) signOut() {
 	a.changed()
 }
 
-func (a *App) dispatchOpen(kind string, fields map[string]any) {
+func (a *App) dispatchOpen(kind string, fields map[string]any) { a.dispatchOpenThen(kind, fields, nil) }
+
+// dispatchOpenThen dispatches a command for the open thread and, once the
+// server has answered it, runs done with the lock held.
+func (a *App) dispatchOpenThen(kind string, fields map[string]any, done func()) {
 	a.mu.Lock()
 	var conn *t3.Conn
 	if e := a.cur(); e != nil && a.draft == "" {
 		conn = e.conn
 	}
 	_, id := splitRef(a.openID)
+	if (conn == nil || id == "") && done != nil {
+		done()
+	}
 	a.mu.Unlock()
 	if conn == nil || id == "" {
 		return
 	}
 	fields["type"], fields["threadId"] = kind, id
 	go func() {
-		if err := conn.Dispatch(fields); err != nil {
-			a.mu.Lock()
+		err := conn.Dispatch(fields)
+		a.mu.Lock()
+		if err != nil {
 			a.fail(err)
-			a.mu.Unlock()
-			a.changed()
 		}
+		if done != nil {
+			done()
+		}
+		a.mu.Unlock()
+		a.changed()
 	}()
-}
-
-func (a *App) pendingID() string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if t := a.curThread(); t != nil && t.PendingRuntimeRequest != nil {
-		return t.PendingRuntimeRequest.ID
-	}
-	return ""
-}
-
-func (a *App) respond(extra map[string]any) {
-	req := a.pendingID()
-	if req == "" {
-		return
-	}
-	extra["requestId"] = req
-	a.dispatchOpen("runtime-request.respond", extra)
 }
 
 // stop uses thread.stop, which also stops commands from earlier runs and
@@ -582,17 +670,45 @@ func (a *App) stop() {
 	}
 }
 
-func (a *App) queueAction(i int, what string) {
+// queueAction is queued message i's action: Send now, edit it in the
+// composer (or stop editing it), remove it. i -1 is the last.
+func (a *App) queueAction(th *ui.Theme, i int, what string) {
 	a.mu.Lock()
 	runs := a.queuedRuns()
 	var active string
 	if t := a.curThread(); t != nil {
 		active = t.ActiveRunID
 	}
-	a.mu.Unlock()
+	if i == -1 {
+		i = len(runs) - 1
+	}
 	if i < 0 || i >= len(runs) {
+		a.mu.Unlock()
 		return
 	}
+	run := runs[i]
+	switch what {
+	case "edit":
+		// The composer takes the message's text in place of the draft,
+		// unless a question has it (editBlockedReason).
+		if req, _ := a.questions(); req == "" && a.comp.editing == "" {
+			a.comp.editing, a.comp.editSaved = run.ID, th.EditorText("composer")
+			text := a.view.messages[run.UserMessageID].Text
+			a.mu.Unlock()
+			th.SetEditorText("composer", text)
+			th.Focus("composer")
+			return
+		}
+		a.mu.Unlock()
+		return
+	case "cancel-edit":
+		saved := a.comp.editSaved
+		a.comp.editing, a.comp.editSaved = "", ""
+		a.mu.Unlock()
+		th.SetEditorText("composer", saved)
+		return
+	}
+	a.mu.Unlock()
 	switch what {
 	case "cancel":
 		a.dispatchOpen("queued-run.cancel", map[string]any{"runId": runs[i].ID})
@@ -605,19 +721,29 @@ func (a *App) queueAction(i int, what string) {
 	}
 }
 
-// questions is the open request's questions, from its turn item.
-func (a *App) questions() (string, []t3.Question) {
+// asked is the open request and its questions' turn item, unless the
+// typing guard holds them back. Call with the lock held.
+func (a *App) asked() (string, *t3.TurnItem) {
 	t := a.curThread()
-	if t == nil || t.PendingRuntimeRequest == nil || a.view == nil {
+	if t == nil || t.PendingRuntimeRequest == nil || t.PendingRuntimeRequest.Kind != "user_input" || a.view == nil || a.guard.held[t.PendingRuntimeRequest.ID] {
 		return "", nil
 	}
 	req := t.PendingRuntimeRequest.ID
 	for _, it := range a.view.items {
 		if it.RequestID == req && len(it.Questions) > 0 {
-			return req, it.Questions
+			return req, it
 		}
 	}
 	return req, nil
+}
+
+// questions is the open request's questions. Call with the lock held.
+func (a *App) questions() (string, []t3.Question) {
+	req, it := a.asked()
+	if it == nil {
+		return req, nil
+	}
+	return req, it.Questions
 }
 
 func (a *App) pickAnswer(qi, oi int) {
@@ -633,52 +759,13 @@ func (a *App) pickAnswer(qi, oi int) {
 		a.answers[req] = m
 	}
 	k := qi*100 + oi
-	on := !m[k]
+	on := !m[k] || !qs[qi].MultiSelect // a single choice stays picked
 	if !qs[qi].MultiSelect {
 		for j := range qs[qi].Options {
 			delete(m, qi*100+j)
 		}
 	}
 	m[k] = on
-}
-
-// answer sends {questionId: value | [values] | typed text}.
-func (a *App) answer(th *ui.Theme) {
-	typed := strings.TrimSpace(th.EditorText("answer"))
-	a.mu.Lock()
-	req, qs := a.questions()
-	picked := a.answers[req]
-	answers := map[string]any{}
-	for qi, q := range qs {
-		var vals []string
-		for oi, o := range q.Options {
-			if picked[qi*100+oi] {
-				v := o.Value
-				if v == "" {
-					v = o.Label
-				}
-				vals = append(vals, v)
-			}
-		}
-		switch {
-		case typed != "" && (len(vals) == 0 || len(qs) == 1):
-			answers[q.ID] = typed
-		case len(vals) == 0:
-			a.fail(errors.New("answer \"" + q.Header + "\" first"))
-			a.mu.Unlock()
-			return
-		case q.MultiSelect:
-			answers[q.ID] = vals
-		default:
-			answers[q.ID] = vals[0]
-		}
-	}
-	a.mu.Unlock()
-	if req == "" || len(answers) == 0 {
-		return
-	}
-	th.SetEditorText("answer", "")
-	a.respond(map[string]any{"answers": answers})
 }
 
 func (a *App) currentTab() int {
@@ -791,15 +878,19 @@ func (a *App) sendable(sel t3.ModelSelection, text string) (t3.ModelSelection, s
 }
 
 // send works like T3's composer: modes first if they changed, then the
-// message with the chosen model. Busy threads get deliveryIntent "auto" and
-// the server picks steer or queue; queue forces the queue. Drafts become a
-// thread through launchThread.
-func (a *App) send(th *ui.Theme, queue bool) {
+// message with the chosen model. While a run works it steers the run, or
+// with alternate (Mod+Enter) queues behind it; servers that resolve the
+// dispatch themselves are told which. Drafts become a thread through
+// launchThread.
+// A new thread's background send starts the thread out of the way and
+// keeps a new thread in the composer. It reports whether something went.
+func (a *App) send(th *ui.Theme, alternate, background bool) bool {
 	text := ui.TrimText(th.EditorText("composer"))
 	a.mu.Lock()
-	if text == "" && len(a.images[a.composerKey()]) == 0 {
+	// One send at a time: the button is off while one's on its way.
+	if a.comp.sending || (text == "" && len(a.images[a.composerKey()]) == 0) {
 		a.mu.Unlock()
-		return
+		return false
 	}
 	e := a.cur()
 	var conn *t3.Conn
@@ -809,20 +900,44 @@ func (a *App) send(th *ui.Theme, queue bool) {
 	key := a.composerKey()
 	if key == "" {
 		a.mu.Unlock()
-		return
+		return false
+	}
+	if isClear.MatchString(text) && len(a.images[key]) == 0 && a.freshCommand() {
+		// /clear alone arms a fresh session rather than going as a message.
+		a.comp.fresh[key] = true
+		a.mu.Unlock()
+		th.SetEditorText("composer", "")
+		a.changed()
+		return true
+	}
+	if run := a.comp.editing; run != "" {
+		// The composer holds a queued message: the send updates it
+		// (queued-run.edit), which keeps its pictures, and the draft it
+		// stood in for comes back.
+		if len(a.images[key]) > 0 {
+			a.fail(errors.New("an edited queued message takes new text only; remove the pictures first"))
+			a.mu.Unlock()
+			return false
+		}
+		saved := a.comp.editSaved
+		a.comp.editing, a.comp.editSaved = "", ""
+		a.mu.Unlock()
+		th.SetEditorText("composer", saved)
+		a.dispatchOpen("queued-run.edit", map[string]any{"runId": run, "text": text})
+		return true
 	}
 	if conn == nil {
 		if e != nil {
 			a.fail(errors.New(e.env.Label + " isn't connected yet"))
 		}
 		a.mu.Unlock()
-		return
+		return false
 	}
 	c := a.choiceFor(key)
 	if c.sel.Model == "" {
 		a.fail(errors.New("pick a model first"))
 		a.mu.Unlock()
-		return
+		return false
 	}
 	sel, body := a.sendable(c.sel, text)
 	runtime := c.runtime
@@ -832,17 +947,24 @@ func (a *App) send(th *ui.Theme, queue bool) {
 	smart := e.config != nil && e.config.Environment.Capabilities.ServerResolvedCommandContext
 	inline := e.config != nil && e.config.Environment.Capabilities.InlineMessageContext
 	imgs := a.images[key]
+	approvals := a.shownApprovals()
+	// An armed /clear goes with this message, and is spent once it lands.
+	fresh := a.comp.fresh[key] && a.freshCommand()
 	delete(a.images, key)
 	delete(a.trash, key)
-	a.notice = "Sending…"
+	a.comp.sending, a.comp.pos = true, 0
+	a.guard.release()
 	a.mu.Unlock()
 	th.SetEditorText("composer", "")
 	saveDraft(key, "")
 	a.changed()
 	go func() {
-		err := a.deliver(e, conn, draft, strategy, t, sel, runtime, body, text, imgs, queue, smart, inline)
+		err := a.deliver(e, conn, draft, strategy, t, sel, runtime, body, text, imgs, approvals, alternate, background, smart, inline, fresh)
 		a.mu.Lock()
-		a.notice = ""
+		a.comp.sending = false
+		if err == nil && fresh {
+			delete(a.comp.fresh, key)
+		}
 		if err != nil {
 			a.fail(err)
 			if len(imgs) > 0 && len(a.images[key]) == 0 {
@@ -863,9 +985,19 @@ func (a *App) send(th *ui.Theme, queue bool) {
 			})
 		}
 	}()
+	return true
 }
 
-func (a *App) deliver(e *envState, conn *t3.Conn, draft string, strategy map[string]any, t *t3.Thread, sel t3.ModelSelection, runtime, body, text string, imgs []pastedImage, queue, smart, inline bool) error {
+func (a *App) deliver(e *envState, conn *t3.Conn, draft string, strategy map[string]any, t *t3.Thread, sel t3.ModelSelection, runtime, body, text string, imgs []pastedImage, approvals []approval, alternate, background, smart, inline, fresh bool) error {
+	feedback, decline := redirect(approvals)
+	if feedback != "" {
+		// The request takes feedback, so the message is its decline, not a
+		// message of its own (sendApprovalFeedback).
+		if len(imgs) > 0 {
+			return errors.New("Send approval feedback without attachments or added context.")
+		}
+		return conn.Dispatch(map[string]any{"type": "runtime-request.respond", "threadId": t.ID, "requestId": feedback, "decision": "decline", "feedback": body})
+	}
 	attachments, recs, err := upload(conn, imgs)
 	if err != nil {
 		return err
@@ -900,11 +1032,16 @@ func (a *App) deliver(e *envState, conn *t3.Conn, draft string, strategy map[str
 		r := ref(e.id(), res.ThreadID)
 		a.mu.Lock()
 		if c := a.choices["draft"]; c != nil {
-			a.choices[r] = c
-			delete(a.choices, "draft")
+			cp := *c
+			a.choices[r] = &cp
+			if !background {
+				delete(a.choices, "draft")
+			}
 		}
 		a.mu.Unlock()
-		a.openThread(r)
+		if !background {
+			a.openThread(r)
+		}
 		return nil
 	}
 	if t == nil {
@@ -924,16 +1061,27 @@ func (a *App) deliver(e *envState, conn *t3.Conn, draft string, strategy map[str
 		"createdBy":      "user",
 		"creationSource": "web",
 	}
+	if fresh {
+		// /clear: the agent starts over without the thread's earlier messages.
+		cmd["freshContext"] = true
+	}
 	mergeMap(cmd, msg)
 	busy := t.ActiveRunID != ""
+	for _, req := range decline {
+		// A message sent while approvals wait declines them and redirects
+		// the agent (useComposerSend.ts): it steers the waiting turn,
+		// T3's follow-up while an approval shows, which is tern's anyway.
+		if err := conn.Dispatch(map[string]any{"type": "runtime-request.respond", "threadId": t.ID, "requestId": req, "decision": "decline"}); err != nil {
+			return err
+		}
+	}
+	mode := dispatchMode(busy, alternate)
 	switch {
-	case queue && busy:
+	case mode == "queue" || (busy && !smart):
 		cmd["dispatchMode"] = map[string]any{"type": "queue_after_active"}
 	case smart:
 		cmd["dispatchMode"] = map[string]any{"type": "start_immediately"}
-		cmd["deliveryIntent"] = "auto"
-	case busy:
-		cmd["dispatchMode"] = map[string]any{"type": "queue_after_active"}
+		cmd["deliveryIntent"] = mode
 	default:
 		cmd["dispatchMode"] = map[string]any{"type": "start_immediately"}
 	}

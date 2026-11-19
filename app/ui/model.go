@@ -1,6 +1,9 @@
 package ui
 
-import "image"
+import (
+	"image"
+	"time"
+)
 
 // The view model. Every field maps to something the T3 protocol sends (see
 // ../docs): shell threads, turn items, runs, runtime requests. The mockups
@@ -226,21 +229,17 @@ type MenuItem struct {
 	Children []MenuItem // a submenu
 }
 
-type Approval struct {
-	Kind   string // "command", "file-change"
-	Detail string
-	Cwd    string
-	YesNo  bool // false for requests tern can only show, like MCP elicitation
-}
-
+// Question is one of an agent's questions (ComposerPendingUserInputPanel.tsx).
 type Question struct {
 	Header   string
 	Text     string
 	Options  []string
-	Picked   int
-	Chosen   []bool // multi-select picks; when set it wins over Picked
-	Custom   string
+	Descs    []string // each option's description, "" for none
+	Chosen   []bool   // which options are picked
 	MultiSel bool
+	NoCustom bool // only an option answers it, nothing typed
+	// Typed: an answer was typed for it while it was on show.
+	Typed bool
 }
 
 type FileChange struct {
@@ -305,10 +304,50 @@ type TraitChoice struct {
 	Label, Desc string
 	Danger      bool // red, for things like Delete
 	Off         bool // shown but can't be picked now
+	Default     bool // the option's default, which the picker's column names
 }
 
+// Permissions is the open permissions menu (ComposerPermissionsSection):
+// the modes the provider supports, in T3's order, and the thread's.
+type Permissions struct {
+	Modes []RuntimeMode
+	Sel   int
+}
+
+// StopPhase is how far a click on Stop has got (ComposerPrimaryActions.tsx).
+type StopPhase int
+
+const (
+	StopIdle     StopPhase = iota
+	StopPending            // clicked: "Stopping…", off
+	StopLanded             // the run can't be stopped any more: "Stopped", off
+	StopTimedOut           // 10s and it hasn't landed: on again
+)
+
+// QueuedMessage is a message queued behind the run (QueuedRunsControl.tsx).
+type QueuedMessage struct {
+	Text    string
+	Editing bool // it's in the composer, being edited
+}
+
+// Stashed is a prompt in the composer's stash (ComposerStashMenu.tsx).
+type Stashed struct {
+	Snippet string  // its text, cut at 90; "(2 images)" without any
+	Thumbs  []Thumb // its pictures
+	Dropped int     // pictures too big to keep
+	Age     string  // "just now", "4m ago"
+}
+
+// Suggestion is a row of the composer's @, / and $ menu (ComposerCommandMenu.tsx).
 type Suggestion struct {
-	Name, Hint, Desc string
+	Icon   string // the lucide icon before it: "file", "folder"; "" for none
+	Prefix string // muted text before the label, like "/skill:"
+	Label  string
+	Desc   string
+	Badge  string // a skill's source: "Personal", "Project", "System"
+	// BadgeIcon is the badge's lucide icon: blocks, folder, user-round,
+	// settings or package.
+	BadgeIcon string
 }
 
 type SignIn struct {
@@ -595,7 +634,7 @@ type Scene struct {
 	Error         string       // shown as a dismissable banner
 	Notice        string       // a quiet status line over the composer, like "Sending…"
 	Empty         string       // shown instead of messages when no thread is open
-	Access        *Traits      // the access-mode menu, open over the lock
+	Access        *Permissions // the permissions menu, open over its chip
 	Account       *Traits      // the account menu, open over the sidebar footer
 	Projects      *Traits      // the new-thread project menu, one group per machine
 	Menu          *ContextMenu // a thread's context menu, at the click or under the header's title
@@ -615,21 +654,41 @@ type Scene struct {
 	Alert    *Alert         // a pull request action asking first
 	Timeline Timeline
 
+	// The composer (docs/ui/07-composer.md). Live, the "composer" editor
+	// holds the prompt; mockups put it in Composer.
 	Composer    string
 	Hero        string // a new thread's project: "What should we build in <Hero>?" over a centered composer
+	Scratch     bool   // the draft has no project: "What should we work on?"
+	CanScratch  bool   // the hero offers "or start without a project"
 	Placeholder string
-	Images      int     // mockup placeholders
-	Thumbs      []Thumb // the composer's pasted images, live
-	Provider    string  // "Claude", "Codex", "Gemini": picks the logo
-	Model       string
-	Effort      string // the options button label, values joined with " · "
-	Runtime     string
-	Queue       []string
-	Approval    *Approval
-	Questions   []Question
-	Suggest     []Suggestion
-	SuggestSel  int
-	SuggestHead string
+	Suggestion  string          // the provider's guess at the next prompt, on offer: the placeholder, which Tab takes
+	Thumbs      []Thumb         // the composer's pictures, as tiles over the prompt
+	Provider    string          // "Claude", "Codex", "Gemini": picks the logo
+	Model       string          // the model's short name, on the trigger
+	Effort      string          // the trigger's effort word, "" for none
+	Speed       string          // the trigger's bolt: "Fast", or "Ultrafast" for its echoed one
+	Ultracode   bool            // the trigger's workflow icon, for Ultracode
+	NoProvider  bool            // no provider can take the message: the trigger says so instead
+	Window      string          // the trigger's context window, like "1M"
+	Runtime     string          // the runtime mode: "full-access", "approval-required", …
+	RuntimeChip bool            // the footer shows the permissions chip: the mode isn't the default
+	Sending     bool            // a send is on its way: the send button spins
+	Fresh       bool            // /clear is armed: the next message starts a fresh session
+	Stop        StopPhase       // where a click on Stop has got to
+	Queue       []QueuedMessage // the messages waiting behind the run, at the foot of the timeline
+	// EditingQueued: the composer holds a queued message, and a send updates it.
+	EditingQueued bool
+	Questions     []Question
+	Question      int  // the question on show
+	Answering     bool // the answers are on their way
+	Dismissible   bool // the questions can be dismissed unanswered
+	Suggest       []Suggestion
+	SuggestSel    int
+	SuggestEmpty  string    // the menu's line while it has no items: still searching, or nothing matched
+	Stash         []Stashed // the stashed prompts, newest first
+	StashOpen     bool      // the stash's drawer is open
+	StashSel      int       // its highlighted row
+	Stashed       time.Time // when a prompt was last stashed: the tab pulses for 1.4s
 
 	Changes []FileChange
 	Run     *RunInfo

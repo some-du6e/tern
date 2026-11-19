@@ -254,6 +254,8 @@ type TurnItem struct {
 	UpdatedAt   string  `json:"updatedAt"`
 	RequestID   string  `json:"requestId"`
 	PlanID      string  `json:"planId"`
+	// ScheduledTaskID is set on a user message an automation sent.
+	ScheduledTaskID string `json:"scheduledTaskId"`
 
 	// tools
 	Input                  json.RawMessage `json:"input"`
@@ -282,8 +284,9 @@ type TurnItem struct {
 		Code    string `json:"code"`
 		ResetAt string `json:"resetAt"`
 	} `json:"failure"`
-	Questions   []Question        `json:"questions"`
-	Attachments []json.RawMessage `json:"attachments"`
+	Questions    []Question        `json:"questions"`
+	ResponseMode string            `json:"responseMode"` // "message": the questions can be dismissed
+	Attachments  []json.RawMessage `json:"attachments"`
 
 	// What the timeline's rows read (orchestrationV2.ts:1559-1912).
 	ParentItemID     string `json:"parentItemId"`
@@ -425,14 +428,17 @@ type ProviderSession struct {
 	} `json:"capabilities"`
 }
 
-// RuntimeRequestRecord is a runtime request in the thread's projection:
-// how it stands, and whether the provider can still take its answer.
+// RuntimeRequestRecord is a runtime request in the thread's projection
+// (OrchestrationV2RuntimeRequest): how it stands, and whether the
+// provider can still take its answer, and feedback with a decline.
 type RuntimeRequestRecord struct {
 	ID                 string `json:"id"`
 	Kind               string `json:"kind"`
 	Status             string `json:"status"` // pending, resolved, expired, cancelled
+	CreatedAt          string `json:"createdAt"`
 	ResponseCapability struct {
-		Type string `json:"type"` // live, message, not_resumable
+		Type             string `json:"type"` // live, message, not_resumable
+		SupportsFeedback bool   `json:"supportsFeedback"`
 	} `json:"responseCapability"`
 }
 
@@ -440,6 +446,12 @@ type Message struct {
 	ID   string `json:"id"`
 	Role string `json:"role"`
 	Text string `json:"text"`
+	// Who sent it: automations and other agents send user messages too.
+	CreatedBy       string `json:"createdBy"` // user, agent, system
+	ScheduledTaskID string `json:"scheduledTaskId"`
+	Context         *struct {
+		Guest json.RawMessage `json:"guest"`
+	} `json:"context"`
 }
 
 // ThreadItem is one value from orchestration.subscribeThread.
@@ -496,7 +508,10 @@ type ServerConfig struct {
 	Settings             struct {
 		DefaultModelSelection *ModelSelection `json:"defaultModelSelection"`
 		DefaultRuntimeMode    string          `json:"defaultRuntimeMode"`
-		Favorites             []struct {
+		// PromptSuggestionsEnabled: the server streams the providers'
+		// guesses at the next prompt.
+		PromptSuggestionsEnabled bool `json:"promptSuggestionsEnabled"`
+		Favorites                []struct {
 			Provider string `json:"provider"`
 			Model    string `json:"model"`
 		} `json:"favorites"`
@@ -518,6 +533,8 @@ type ServerConfig struct {
 			ThreadAutoSettleOptOut       bool `json:"threadAutoSettleOptOut"`
 			ThreadTitleRegeneration      bool `json:"threadTitleRegeneration"`
 			PullRequestChecks            bool `json:"pullRequestChecks"`
+			// FreshContext: a message can start a fresh session (/clear).
+			FreshContext bool `json:"freshContext"`
 		} `json:"capabilities"`
 	} `json:"environment"`
 }
@@ -539,11 +556,45 @@ type Provider struct {
 	Enabled     bool    `json:"enabled"`
 	Status      string  `json:"status"`
 	Models      []Model `json:"models"`
+	// The composer's / and $ menus, and the permission modes it offers
+	// (all four when it names none).
+	SlashCommands         []SlashCommand `json:"slashCommands"`
+	Skills                []Skill        `json:"skills"`
+	SupportedRuntimeModes []string       `json:"supportedRuntimeModes"`
+}
+
+// Entry is a file or folder from projects.searchEntries, its path
+// relative to the workspace.
+type Entry struct {
+	Path string `json:"path"`
+	Kind string `json:"kind"` // "file" or "directory"
+}
+
+// SlashCommand is a provider's / command.
+type SlashCommand struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Input       *struct {
+		Hint string `json:"hint"`
+	} `json:"input"`
+}
+
+// Skill is a provider's skill, for the $ menu.
+type Skill struct {
+	Name             string `json:"name"`
+	DisplayName      string `json:"displayName"`
+	Description      string `json:"description"`
+	ShortDescription string `json:"shortDescription"`
+	Path             string `json:"path"`
+	Scope            string `json:"scope"`
+	Enabled          bool   `json:"enabled"`
+	UserInvocable    *bool  `json:"userInvocable"`
 }
 
 type Model struct {
 	Slug         string `json:"slug"`
 	Name         string `json:"name"`
+	ShortName    string `json:"shortName"`
 	IsCustom     bool   `json:"isCustom"`
 	IsLegacy     bool   `json:"isLegacy"`
 	Capabilities struct {

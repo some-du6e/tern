@@ -205,10 +205,11 @@ func base(selected string) *ui.Scene {
 		Title:       "Port the T3 Connect client to Go",
 		State:       ui.ThreadRunning,
 		Provider:    "Claude",
-		Model:       "Claude Opus 5.5",
-		Effort:      "High · Fast",
-		Runtime:     "Full access",
-		Placeholder: "Ask, steer or queue.   /  commands    $  skills    @  files",
+		Model:       "Opus 5.5",
+		Effort:      "High",
+		Speed:       "Fast",
+		Runtime:     "full-access",
+		Placeholder: "Ask anything. @ files, $ skills, / commands",
 		Phase:       -1.1,
 	}
 	sidebar(s, selected)
@@ -238,7 +239,7 @@ func base(selected string) *ui.Scene {
 func runningScene() *ui.Scene {
 	s := base("Port the T3 Connect client to Go")
 	s.Composer = "also make sure it survives the display going to sleep on"
-	s.Queue = []string{"then add a tray icon on Windows with the running count"}
+	s.Queue = []ui.QueuedMessage{{Text: "then add a tray icon on Windows with the running count"}}
 	return s
 }
 
@@ -253,7 +254,7 @@ func approvalScene() *ui.Scene {
 	}
 	rows := threadRows()
 	s.Timeline = ui.Timeline{ID: "approval", Rows: append(rows[:len(rows)-1], approvalRow())}
-	s.Approval = &ui.Approval{Kind: "command", Detail: "git push -u origin t3/go-client", Cwd: "~/.t3/worktrees/tern"}
+	s.Placeholder = "Send a message to decline and redirect the agent"
 	s.Picker = &ui.ModelPicker{
 		Tabs: []ui.PickerTab{{}, {Provider: "Claude"}, {Provider: "Codex"}},
 		Tab:  1,
@@ -278,15 +279,16 @@ func claudeTraits() *ui.Traits {
 	}}
 }
 
-// traitsScene has the options menu open over the effort button.
+// traitsScene is the model picker with its effort column: the model's
+// options beside the models (ProviderModelPicker.tsx).
 func traitsScene() *ui.Scene {
 	s := approvalScene()
-	s.Picker = nil
 	s.Traits = claudeTraits()
+	s.Traits.Groups[0].Choices[1].Default = true
 	return s
 }
 
-// codexScene is the options menu for a Codex model: effort and service tier.
+// codexScene is the picker's column for a Codex model: effort and service tier.
 func codexScene() *ui.Scene {
 	s := traitsScene()
 	s.Provider, s.Model = "Codex", "GPT-5.5"
@@ -359,41 +361,36 @@ func questionScene() *ui.Scene {
 			Thought: "Both work. The choice is the caller's."}}},
 	}}
 	s.Questions = []ui.Question{
-		{Header: "Session", Text: "Which session should the watch get?", Options: []string{"30-day, full access", "30-day, read + operate only", "1-hour, renew from phone"}, Picked: 1},
-		{Header: "Pairing", Text: "How should the watch receive the credential?", Options: []string{"QR code on desktop", "Typed 6-word code", "Through the iPhone app"}, Picked: 0},
+		{Header: "Session", Text: "Which session should the watch get?", Options: []string{"30-day, full access", "30-day, read + operate only", "1-hour, renew from phone"},
+			Descs: []string{"", "It can't open a terminal", "The phone renews it while it's near"}, Chosen: []bool{false, true, false}},
+		{Header: "Pairing", Text: "How should the watch receive the credential?", Options: []string{"QR code on desktop", "Typed 6-word code", "Through the iPhone app"}, Chosen: []bool{true, false, false}},
 	}
+	s.Placeholder = "Type your own answer, or leave this blank to use the selected option"
 	s.Changes = nil
 	return s
 }
 
+// draftScene is a new thread with the / menu open over its hero's
+// composer: T3 shows a draft as the hero while it has no turns.
 func draftScene() *ui.Scene {
-	s := base("")
-	s.Title = "New thread"
-	s.State = ui.ThreadIdle
-	// A draft: its title is plain text, its machine row a menu, and it
-	// starts in a new worktree off main, so Git keeps quiet.
-	s.Header.Server = false
+	s := heroScene()
+	// Its machine row is a menu, and it starts in a new worktree off main,
+	// so Git keeps quiet.
 	s.Card = &ui.ThreadDetails{
 		Run:     &ui.RunContext{Machine: "server", Label: "workstation", Tip: "workstation", Workspace: "folder-git-2", WorkspaceTip: "New worktree"},
 		OpenIn:  &ui.OpenIn{Editor: "vscode", Label: "Open in VS Code"},
 		Scripts: &ui.Scripts{},
 		Branch:  &ui.BranchRow{Label: "From main"},
 	}
-	s.Tabs = []string{"New thread", "Port the T3 Connect clie…"}
-	s.Timeline = ui.Timeline{}
 	s.Composer = "/re"
-	s.Images = 2
-	s.SuggestHead = "COMMANDS  ·  CLAUDE"
+	s.Thumbs = pictures(2)
 	s.Suggest = []ui.Suggestion{
-		{Name: "/review", Hint: "[pr]", Desc: "Review the current diff for bugs"},
-		{Name: "/resume", Desc: "Resume an earlier conversation"},
-		{Name: "/release-notes", Desc: "Show what changed in this version"},
-		{Name: "/frontend:refactor", Hint: "<path>", Desc: "Refactor a component"},
-		{Name: "/pr-comments", Desc: "Fetch review comments on this branch"},
+		{Label: "/review", Desc: "Review the current diff for bugs"},
+		{Label: "/resume", Desc: "Resume an earlier conversation"},
+		{Label: "/release-notes", Desc: "Show what changed in this version"},
+		{Prefix: "/skill:", Label: "frontend-refactor", Desc: "Refactor a component", Badge: "Personal", BadgeIcon: "user-round"},
+		{Label: "/pr-comments", Desc: "Fetch review comments on this branch"},
 	}
-	s.Changes = nil
-	s.Panel = ui.PanelBrowser
-	s.Browser = &ui.Browser{}
 	return s
 }
 
@@ -521,8 +518,7 @@ func phoneScene() *ui.Scene {
 	rows[5].Open, rows[5].Continues = false, true
 	s.Timeline = ui.Timeline{ID: "phone", Rows: append(append(rows[1:5:5], rows[5]), approvalRow())}
 	s.State = ui.ThreadApproval
-	s.Approval = &ui.Approval{Kind: "command", Detail: "git push -u origin t3/go-client", Cwd: "tern"}
-	s.Placeholder = "Steer or queue…"
+	s.Placeholder = "Send a message to decline and redirect the agent"
 	return s
 }
 

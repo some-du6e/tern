@@ -6,6 +6,7 @@ package ui
 import (
 	"image"
 	"image/color"
+	"math"
 
 	"gioui.org/io/system"
 	"gioui.org/op/clip"
@@ -31,6 +32,34 @@ func over(c, bg color.NRGBA) color.NRGBA {
 	a := float32(c.A) / 255
 	mix := func(x, y uint8) uint8 { return uint8(float32(x)*a + float32(y)*(1-a) + 0.5) }
 	return color.NRGBA{R: mix(c.R, bg.R), G: mix(c.G, bg.G), B: mix(c.B, bg.B), A: 0xff}
+}
+
+// linear is an sRGB channel in linear light, 0 to 1.
+func linear(v uint8) float64 {
+	s := float64(v) / 255
+	if s <= 0.04045 {
+		return s / 12.92
+	}
+	return math.Pow((s+0.055)/1.055, 2.4)
+}
+
+// gioAlpha is the alpha at which Gio, blending c in linear light over
+// from, paints to, the colour a browser composites over from: for
+// translucent paint over an unknown surface that's mostly from. It
+// solves the channel where c and from differ most.
+func gioAlpha(c, from, to color.NRGBA) uint8 {
+	type ch struct{ c, f, t uint8 }
+	best, d := ch{}, -1.0
+	for _, x := range []ch{{c.R, from.R, to.R}, {c.G, from.G, to.G}, {c.B, from.B, to.B}} {
+		if dd := math.Abs(linear(x.f) - linear(x.c)); dd > d {
+			best, d = x, dd
+		}
+	}
+	if d < 1e-6 {
+		return 0
+	}
+	a := (linear(best.f) - linear(best.t)) / (linear(best.f) - linear(best.c))
+	return uint8(math.Max(0, math.Min(1, a))*255 + 0.5)
 }
 
 // The theme. P is T3's palette for the light or dark theme the system is in;
@@ -66,7 +95,7 @@ func init() { SetDark(false) }
 var (
 	ColWindow, ColPanel, ColPanelHi, ColFrame, ColFrameHover, ColFrameActive color.NRGBA
 	ColBorder, ColBorderHi, ColText, ColDim, ColFaint                        color.NRGBA
-	ColAccent, ColAccentHi, ColAccentSoft, ColSelected                       color.NRGBA
+	ColAccent, ColAccentHi, ColSelected                                      color.NRGBA
 	ColGreen, ColAmber, ColRed, ColViolet, ColCyan, ColCode                  color.NRGBA
 	ColAddBg, ColAddFg, ColDelBg, ColDelFg, ColHunkFg                        color.NRGBA
 )
@@ -81,13 +110,12 @@ func legacyColors() {
 	ColBorder, ColBorderHi = on(P.Border), on(P.Input)
 	ColText, ColDim, ColFaint = on(P.Foreground), on(P.MutedForeground), on(alpha(P.MutedForeground, 0xb3))
 	ColAccent, ColAccentHi = on(P.Primary), on(P.Primary)
-	ColAccentSoft, ColSelected = on(alpha(P.Primary, 0x2c)), on(alpha(P.Primary, 0x24))
+	ColSelected = on(alpha(P.Primary, 0x24))
 	ColGreen, ColAmber, ColRed = on(P.Success), on(P.Warning), on(P.Error)
 	ColViolet, ColCyan, ColCode = Tailwind["violet-500"], on(P.Info), on(P.CodeForeground)
 	ColAddBg, ColAddFg = on(alpha(P.DiffAddition, 0x26)), on(P.DiffAdditionForeground)
 	ColDelBg, ColDelFg = on(alpha(P.DiffDeletion, 0x26)), on(P.DiffDeletionForeground)
 	ColHunkFg = on(P.Info)
-	chipColors()
 }
 
 // Type scale, in sp.

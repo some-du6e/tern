@@ -2320,7 +2320,7 @@ func (th *Theme) hoverCard(gtx C, s *Scene, r *ThreadRow, box image.Rectangle, t
 	call := m.Stop()
 	// Within the window: shifted up from its bottom, as T3's collision
 	// padding does.
-	win := th.in.winSize
+	win := th.in.window
 	dy := 0
 	if bottom := box.Min.Y + cd.Size.Y + dp(gtx, 5); win.Y > 0 && bottom > win.Y {
 		dy = max(-box.Min.Y+dp(gtx, 5), win.Y-bottom)
@@ -2472,7 +2472,7 @@ func (th *Theme) snoozeMenu(gtx C, s *Scene, trigger image.Point, at image.Recta
 			})
 		})
 		call := m.Stop()
-		win, edge, gap := th.in.winSize, dp(gtx, 5), dp(gtx, 4)
+		win, edge, gap := th.in.window, dp(gtx, 5), dp(gtx, 4)
 		x := trigger.X - d.Size.X
 		if left := at.Max.X - d.Size.X; left < edge {
 			x += edge - left

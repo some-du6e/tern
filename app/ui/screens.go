@@ -135,7 +135,7 @@ func (th *Theme) threadView(gtx C, s *Scene, compact bool) D {
 				return th.headerRow(gtx, s, compact)
 			}),
 			flexed(func(gtx C) D {
-				if s.Live && s.Hero != "" && len(s.Timeline.Rows) == 0 {
+				if (s.Hero != "" || s.Scratch) && len(s.Timeline.Rows) == 0 {
 					return th.hero(gtx, s, compact)
 				}
 				// The phone's timeline: 14dp margins, the composer under it.
@@ -145,7 +145,7 @@ func (th *Theme) threadView(gtx C, s *Scene, compact bool) D {
 				return D{Size: size}
 			}),
 			rigid(func(gtx C) D {
-				if s.Live && s.Hero != "" && len(s.Timeline.Rows) == 0 {
+				if (s.Hero != "" || s.Scratch) && len(s.Timeline.Rows) == 0 {
 					return D{}
 				}
 				return th.composerArea(gtx, s, compact)
@@ -158,76 +158,6 @@ func (th *Theme) threadView(gtx C, s *Scene, compact bool) D {
 			}),
 		)
 	})
-}
-
-// hero is a new thread the way T3 opens one: "What should we build in
-// tern?" with the composer right under it, both a little above the middle.
-// The project name opens the project menu under it, kept on screen.
-func (th *Theme) hero(gtx C, s *Scene, compact bool) D {
-	size := gtx.Constraints.Max
-	big := Txt{Size: 26, Color: ColText}
-	bold := big
-	bold.Font = UI(font.Medium)
-	lg := gtx
-	lg.Constraints.Min = image.Point{}
-
-	// The heading, in three parts so the name can be a button.
-	var nameAt image.Point
-	var nameSize image.Point
-	hm := op.Record(gtx.Ops)
-	x := 0
-	pre := th.Text(lg, big, "What should we build in ")
-	x += pre.Size.X
-	off := op.Offset(image.Pt(x, 0)).Push(gtx.Ops)
-	name := th.Click(liveID(s, "project.hero"), func(gtx C) D {
-		d := th.Text(gtx, bold, s.Hero)
-		// A dotted underline says it can be changed.
-		y, r, step := d.Size.Y-dp(gtx, 1), max(1, dp(gtx, 1)), dp(gtx, 4)
-		for x := r; x < d.Size.X; x += step {
-			circle(gtx, ColDim, image.Pt(x, y), r)
-		}
-		return D{Size: image.Pt(d.Size.X, d.Size.Y+dp(gtx, 3))}
-	})(lg)
-	off.Pop()
-	nameAt, nameSize = image.Pt(x, 0), name.Size
-	x += name.Size.X
-	off = op.Offset(image.Pt(x, 0)).Push(gtx.Ops)
-	q := th.Text(lg, big, "?")
-	off.Pop()
-	heading := hm.Stop()
-	headW, headH := x+q.Size.X, max(pre.Size.Y, name.Size.Y)
-
-	cm := op.Record(gtx.Ops)
-	cg := gtx
-	cg.Constraints.Min = image.Point{}
-	cd := th.composerArea(cg, s, compact)
-	composer := cm.Stop()
-
-	gap := dp(gtx, 22)
-	total := headH + gap + cd.Size.Y
-	top := max(0, (size.Y-total)*10/24)
-	hx := max(0, (size.X-headW)/2)
-
-	t := op.Offset(image.Pt(hx, top)).Push(gtx.Ops)
-	heading.Add(gtx.Ops)
-	t.Pop()
-	t = op.Offset(image.Pt(0, top+headH+gap)).Push(gtx.Ops)
-	composer.Add(gtx.Ops)
-	t.Pop()
-
-	if s.Projects != nil {
-		mm := op.Record(gtx.Ops)
-		md := th.traitsMenu(lg, s, "project", s.Projects)
-		menu := mm.Stop()
-		at := image.Pt(hx+nameAt.X, top+nameSize.Y+dp(gtx, 6))
-		at.X = max(0, min(at.X, size.X-md.Size.X))
-		at.Y = max(0, min(at.Y, size.Y-md.Size.Y-dp(gtx, 8)))
-		dm := op.Record(gtx.Ops)
-		op.Offset(at).Add(gtx.Ops)
-		menu.Add(gtx.Ops)
-		op.Defer(gtx.Ops, dm.Stop())
-	}
-	return D{Size: size}
 }
 
 func (th *Theme) tabs(gtx C, s *Scene) D {
@@ -296,389 +226,6 @@ func (th *Theme) tab(gtx C, name string, active, running bool, phase float64, cl
 	})
 }
 
-// ---------- composer ----------
-
-func (th *Theme) composerArea(gtx C, s *Scene, compact bool) D {
-	size := gtx.Constraints.Max
-	// The shell gives the composer its lane and the spacer under it; the
-	// phone gives it margins.
-	w, bottom := size.X, float32(0)
-	if compact {
-		w, bottom = size.X-2*dp(gtx, 10), 14
-	}
-	x := (size.X - w) / 2
-	gtx.Constraints = layout.Exact(image.Pt(w, 0))
-	gtx.Constraints.Max.Y = size.Y
-	m := op.Record(gtx.Ops)
-	dims := pad(0, 0, bottom, 0).Layout(gtx, func(gtx C) D {
-		return Col(gtx,
-			rigid(func(gtx C) D {
-				if s.Error == "" {
-					return D{}
-				}
-				return pad(0, 0, 8, 0).Layout(gtx, th.Click(liveID(s, "error"), func(gtx C) D { return th.errorBanner(gtx, s.Error) }))
-			}),
-			rigid(func(gtx C) D {
-				if s.Approval == nil {
-					return D{}
-				}
-				return pad(0, 0, 8, 0).Layout(gtx, func(gtx C) D { return th.approval(gtx, s, s.Approval, compact) })
-			}),
-			rigid(func(gtx C) D {
-				if len(s.Questions) == 0 {
-					return D{}
-				}
-				return pad(0, 0, 8, 0).Layout(gtx, func(gtx C) D { return th.questions(gtx, s, s.Questions) })
-			}),
-			rigid(func(gtx C) D {
-				if len(s.Queue) == 0 {
-					return D{}
-				}
-				return pad(0, 0, 8, 0).Layout(gtx, func(gtx C) D { return th.queue(gtx, s, s.Queue) })
-			}),
-			rigid(func(gtx C) D {
-				if s.Notice == "" {
-					return D{}
-				}
-				return pad(0, 4, 6, 4).Layout(gtx, func(gtx C) D { return th.Small(gtx, ColFaint, s.Notice) })
-			}),
-			rigid(func(gtx C) D { return th.composer(gtx, s, compact) }),
-		)
-	})
-	call := m.Stop()
-	t := op.Offset(image.Pt(x, 0)).Push(gtx.Ops)
-	call.Add(gtx.Ops)
-	t.Pop()
-	return D{Size: image.Pt(size.X, dims.Size.Y)}
-}
-
-func (th *Theme) approval(gtx C, s *Scene, a *Approval, compact bool) D {
-	gtx.Constraints.Min.X = gtx.Constraints.Max.X
-	return Box{Bg: alpha(ColAmber, 0x10), Border: alpha(ColAmber, 0x60), Radius: 8, Pad: padXY(12, 10)}.Layout(gtx, func(gtx C) D {
-		gtx.Constraints.Min.X = gtx.Constraints.Max.X
-		buttons := func(gtx C) D {
-			if s.Live && !a.YesNo {
-				return th.Small(gtx, ColFaint, "Answer this one in T3 for now.")
-			}
-			return Row(gtx,
-				rigid(th.Click(liveID(s, "approval:decline"), th.Button(Ghost, 0, false, "Decline"))),
-				rigid(Spacer(6, 0)),
-				rigid(th.Click(liveID(s, "approval:acceptForSession"), th.Button(Plain, 0, false, "For session"))),
-				rigid(Spacer(6, 0)),
-				rigid(th.Click(liveID(s, "approval:accept"), th.Button(Primary, IconCheck, true, "Approve"))),
-			)
-		}
-		body := func(gtx C) D {
-			return Col(gtx,
-				rigid(func(gtx C) D {
-					return Row(gtx,
-						rigid(IconW(IconLock, ColAmber, 14)),
-						rigid(Spacer(7, 0)),
-						rigid(func(gtx C) D { return th.Label(gtx, ColAmber, font.SemiBold, "Approve "+a.Kind) }),
-						rigid(func(gtx C) D { return th.Small(gtx, ColFaint, "   in "+a.Cwd) }),
-					)
-				}),
-				rigid(Spacer(0, 7)),
-				rigid(func(gtx C) D {
-					return Box{Bg: ColWindow, Border: ColBorder, Radius: 4, Pad: padXY(9, 6)}.Layout(gtx, func(gtx C) D {
-						return th.Text(gtx, Txt{Size: SizeMono, Font: Mono(), Color: ColText, MaxLines: 2}, "$ "+a.Detail)
-					})
-				}),
-			)
-		}
-		if compact {
-			return Col(gtx, rigid(body), rigid(Spacer(0, 10)), rigid(func(gtx C) D { return layout.E.Layout(gtx, buttons) }))
-		}
-		return layout.Flex{Alignment: layout.End}.Layout(gtx, flexed(body), rigid(Spacer(14, 0)), rigid(buttons))
-	})
-}
-
-func (th *Theme) questions(gtx C, s *Scene, qs []Question) D {
-	gtx.Constraints.Min.X = gtx.Constraints.Max.X
-	return Box{Bg: ColPanel, Border: alpha(ColAccent, 0x60), Radius: 8, Pad: padXY(14, 12)}.Layout(gtx, func(gtx C) D {
-		var kids []layout.FlexChild
-		for i, q := range qs {
-			q := q
-			if i > 0 {
-				kids = append(kids, rigid(Spacer(0, 12)))
-			}
-			kids = append(kids,
-				rigid(func(gtx C) D {
-					return Row(gtx,
-						rigid(func(gtx C) D { return th.Chip(ColAccentHi, q.Header, nil)(gtx) }),
-						rigid(Spacer(8, 0)),
-						flexed(func(gtx C) D { return th.Label(gtx, ColText, font.Medium, q.Text) }),
-					)
-				}),
-				rigid(Spacer(0, 8)),
-				rigid(func(gtx C) D {
-					var opts []layout.FlexChild
-					for j, o := range q.Options {
-						v := Plain
-						if (q.Chosen == nil && j == q.Picked) || (j < len(q.Chosen) && q.Chosen[j]) {
-							v = Toggled
-						}
-						opts = append(opts, rigid(th.Click(liveID(s, fmt.Sprintf("q:%d:%d", i, j)), th.Button(v, 0, false, o))), rigid(Spacer(6, 0)))
-					}
-					return Row(gtx, opts...)
-				}),
-			)
-		}
-		kids = append(kids, rigid(Spacer(0, 12)), rigid(func(gtx C) D {
-			gtx.Constraints.Min.X = gtx.Constraints.Max.X
-			return Row(gtx,
-				flexed(func(gtx C) D {
-					if s.Live {
-						return th.Field("answer", 0, false, "Or type your own answer", false)(gtx)
-					}
-					return th.Input(0, false, "", "Or type your own answer", false)(gtx)
-				}),
-				rigid(Spacer(8, 0)),
-				rigid(th.Click(liveID(s, "dismiss"), th.Button(Ghost, 0, false, "Dismiss"))),
-				rigid(Spacer(6, 0)),
-				rigid(th.Click(liveID(s, "answer"), th.Button(Primary, 0, false, "Answer"))),
-			)
-		}))
-		return Col(gtx, kids...)
-	})
-}
-
-func (th *Theme) queue(gtx C, s *Scene, q []string) D {
-	gtx.Constraints.Min.X = gtx.Constraints.Max.X
-	return Box{Bg: ColPanel, Border: ColBorder, Radius: 8, Pad: padXY(10, 6)}.Layout(gtx, func(gtx C) D {
-		var kids []layout.FlexChild
-		for i, text := range q {
-			text, i := text, i
-			kids = append(kids, rigid(func(gtx C) D {
-				return FixedH(gtx, 28, func(gtx C) D {
-					gtx.Constraints.Min.X = gtx.Constraints.Max.X
-					return Row(gtx,
-						rigid(func(gtx C) D {
-							return th.Text(gtx, Txt{Size: SizeSmall, Font: Mono(), Color: ColFaint}, fmt.Sprintf("%d", i+1))
-						}),
-						rigid(Spacer(9, 0)),
-						rigid(IconW(IconQueue, ColFaint, 13)),
-						rigid(Spacer(8, 0)),
-						flexed(func(gtx C) D { return th.Label(gtx, ColDim, font.Normal, text) }),
-						rigid(th.Click(liveID(s, fmt.Sprintf("queue:%d:steer", i)), th.Button(Ghost, 0, false, "Send now"))),
-						rigid(func(gtx C) D {
-							if s.Live {
-								return D{}
-							}
-							return th.Button(Ghost, 0, false, "Edit")(gtx)
-						}),
-						rigid(th.Click(liveID(s, fmt.Sprintf("queue:%d:cancel", i)), th.Button(Ghost, IconClose, true, ""))),
-					)
-				})
-			}))
-		}
-		return Col(gtx, kids...)
-	})
-}
-
-func (th *Theme) composer(gtx C, s *Scene, compact bool) D {
-	gtx.Constraints.Min.X = gtx.Constraints.Max.X
-	border := ColBorderHi
-	if s.Composer != "" {
-		border = alpha(ColAccent, 0x90)
-	}
-	var modelBtn, effortBtn image.Point
-	dims := Box{Bg: ColFrame, Border: border, Radius: 10, Pad: pad(11, 10, 9, 12)}.Layout(gtx, func(gtx C) D {
-		gtx.Constraints.Min.X = gtx.Constraints.Max.X
-		return Col(gtx,
-			rigid(func(gtx C) D {
-				if s.Images == 0 && len(s.Thumbs) == 0 {
-					return D{}
-				}
-				return pad(0, 0, 10, 0).Layout(gtx, func(gtx C) D {
-					var kids []layout.FlexChild
-					for i := 0; i < s.Images; i++ {
-						kids = append(kids, rigid(thumb(i)), rigid(Spacer(6, 0)))
-					}
-					for i, t := range s.Thumbs {
-						kids = append(kids, rigid(th.pasted(t, i, true)), rigid(Spacer(6, 0)))
-					}
-					return Row(gtx, kids...)
-				})
-			}),
-			rigid(func(gtx C) D {
-				gtx.Constraints.Min.Y = dp(gtx, 38)
-				if s.Live {
-					ed := th.Editor("composer")
-					ed.Submit = true
-					gtx.Constraints.Max.Y = dp(gtx, 220)
-					d := th.editor(gtx, "composer", Txt{Size: SizeBody, LineH: 1.42}, s.Placeholder)
-					d.Size.Y = max(d.Size.Y, gtx.Constraints.Min.Y)
-					return d
-				}
-				if s.Composer == "" {
-					return th.Text(gtx, Txt{Size: SizeBody, Color: ColFaint}, s.Placeholder)
-				}
-				lines := strings.Split(s.Composer, "\n")
-				var kids []layout.FlexChild
-				for i, l := range lines {
-					l, last := l, i == len(lines)-1
-					kids = append(kids, rigid(func(gtx C) D {
-						return Row(gtx,
-							rigid(func(gtx C) D { return th.Text(gtx, Txt{Size: SizeBody, LineH: 1.42}, l) }),
-							rigid(func(gtx C) D {
-								if !last {
-									return D{}
-								}
-								return Caret(gtx, 17)
-							}),
-						)
-					}))
-				}
-				d := Col(gtx, kids...)
-				d.Size.Y = max(d.Size.Y, gtx.Constraints.Min.Y)
-				return d
-			}),
-			rigid(Spacer(0, 8)),
-			rigid(func(gtx C) D {
-				gtx.Constraints.Min.X = gtx.Constraints.Max.X
-				var kids []layout.FlexChild
-				kids = append(kids,
-					rigid(func(gtx C) D {
-						if s.Live {
-							return D{Size: image.Pt(0, dp(gtx, 26))}
-						}
-						return pad(0, 4, 0, 0).Layout(gtx, th.Button(Ghost, IconPlus, true, ""))
-					}),
-					rigid(func(gtx C) D {
-						d := th.Click(liveID(s, "model"), th.footPick(ProviderLogo(s.Provider, 14), s.Model, s.Picker != nil))(gtx)
-						modelBtn = d.Size
-						return d
-					}),
-				)
-				if s.Effort != "" || !s.Live {
-					kids = append(kids, rigid(footSep), rigid(func(gtx C) D {
-						d := th.Click(liveID(s, "traits"), th.footPick(IconW(IconGauge, ColDim, 14), s.Effort, s.Traits != nil))(gtx)
-						effortBtn = d.Size
-						return d
-					}))
-				}
-				if !compact {
-					// Access is an icon; the label lives in the menu.
-					kids = append(kids, rigid(footSep), rigid(th.Click(liveID(s, "access"), th.footPick(IconW(IconLock, ColDim, 14), "", s.Access != nil))))
-				}
-				kids = append(kids, flexed(func(gtx C) D { return D{Size: image.Pt(gtx.Constraints.Min.X, 0)} }))
-				if !compact {
-					kids = append(kids,
-						rigid(func(gtx C) D {
-							return pad(0, 10, 0, 0).Layout(gtx, func(gtx C) D {
-								return Row(gtx,
-									rigid(th.Kbd("Enter")),
-									rigid(func(gtx C) D { return th.Small(gtx, ColFaint, " send   ") }),
-									rigid(th.Kbd("Alt Enter")),
-									rigid(func(gtx C) D { return th.Small(gtx, ColFaint, " queue") }),
-								)
-							})
-						}),
-					)
-				}
-				v := Primary
-				empty := (s.Live && th.EditorText("composer") == "") || (!s.Live && s.Composer == "")
-				if empty {
-					v = Plain
-				}
-				if empty && (s.State == ThreadRunning || s.State == ThreadApproval || s.State == ThreadQuestion) {
-					// With nothing to send, a run's button stops it, as T3's
-					// composer does (ComposerPrimaryActions.tsx).
-					kids = append(kids, rigid(th.Click(liveID(s, "stop"), th.Button(Danger, IconStop, true, ""))))
-					return Row(gtx, kids...)
-				}
-				kids = append(kids, rigid(th.Click(liveID(s, "send"), th.Button(v, IconSend, true, ""))))
-				return Row(gtx, kids...)
-			}),
-		)
-	})
-	if s.Suggest != nil {
-		th.deferAbove(gtx, image.Pt(0, 0), func(gtx C) D { return th.suggest(gtx, s) })
-	}
-	if s.Picker != nil {
-		// The combo sits at the toolbar's left, after the + button.
-		x := dp(gtx, 12+30)
-		if s.Live {
-			x = dp(gtx, 12)
-		}
-		at := image.Pt(x, dims.Size.Y-dp(gtx, 9)-modelBtn.Y)
-		th.deferAbove(gtx, at, func(gtx C) D { return th.modelPicker(gtx, s, s.Picker) })
-	}
-	if s.Traits != nil {
-		// The options menu opens over the effort button, right of the model.
-		x := dp(gtx, 12+30+9) + modelBtn.X
-		if s.Live {
-			x = dp(gtx, 12+9) + modelBtn.X
-		}
-		at := image.Pt(x, dims.Size.Y-dp(gtx, 9)-modelBtn.Y)
-		th.deferAbove(gtx, at, func(gtx C) D { return th.traitsMenu(gtx, s, "trait", s.Traits) })
-	}
-	if s.Access != nil {
-		x := dp(gtx, 12+9+9) + modelBtn.X + effortBtn.X
-		at := image.Pt(x, dims.Size.Y-dp(gtx, 9)-modelBtn.Y)
-		th.deferAbove(gtx, at, func(gtx C) D { return th.traitsMenu(gtx, s, "access", s.Access) })
-	}
-	return dims
-}
-
-// errorBanner is a failed action, red and dismissable.
-func (th *Theme) errorBanner(gtx C, msg string) D {
-	gtx.Constraints.Min.X = gtx.Constraints.Max.X
-	return Box{Bg: alpha(ColRed, 0x14), Border: alpha(ColRed, 0x48), Radius: 6, Pad: padXY(12, 8)}.Layout(gtx, func(gtx C) D {
-		gtx.Constraints.Min.X = gtx.Constraints.Max.X
-		return Row(gtx,
-			flexed(func(gtx C) D { return th.Text(gtx, Txt{Color: ColDelFg, MaxLines: 3}, msg) }),
-			rigid(Spacer(8, 0)),
-			rigid(IconW(IconClose, ColDelFg, 13)),
-		)
-	})
-}
-
-// footPick is a borderless dropdown in the composer footer: icon, value,
-// chevron, highlighted while its menu is open.
-func (th *Theme) footPick(lead W, label string, open bool) W {
-	return func(gtx C) D {
-		bg := color.NRGBA{}
-		if open {
-			bg = ColFrameActive
-		}
-		return Box{Bg: bg, Radius: 5, Pad: padXY(6, 0)}.Layout(gtx, func(gtx C) D {
-			return FixedH(gtx, 26, func(gtx C) D {
-				kids := []layout.FlexChild{rigid(lead)}
-				if label != "" {
-					kids = append(kids, rigid(Spacer(6, 0)), rigid(func(gtx C) D { return th.Label(gtx, ColDim, font.Medium, label) }))
-				}
-				kids = append(kids, rigid(Spacer(3, 0)), rigid(IconW(IconChevronDown, ColFaint, 12)))
-				return Row(gtx, kids...)
-			})
-		})
-	}
-}
-
-// footSep is the thin rule between footer dropdowns.
-func footSep(gtx C) D {
-	h := dp(gtx, 14)
-	w := dp(gtx, 9)
-	vline(gtx, ColBorderHi, w/2, 0, h)
-	return D{Size: image.Pt(w, h)}
-}
-
-func thumb(i int) W {
-	return func(gtx C) D {
-		s := dp(gtx, 52)
-		r := image.Rect(0, 0, s, s)
-		cols := []color.NRGBA{rgb(0x24425f), rgb(0x3b2b52)}
-		fill(gtx, cols[i%2], r, dp(gtx, 6))
-		// A fake screenshot: title bar and two blocks.
-		fill(gtx, alpha(rgb(0xffffff), 0x22), image.Rect(dp(gtx, 6), dp(gtx, 6), s-dp(gtx, 6), dp(gtx, 11)), dp(gtx, 2))
-		fill(gtx, alpha(rgb(0xffffff), 0x16), image.Rect(dp(gtx, 6), dp(gtx, 15), dp(gtx, 24), s-dp(gtx, 6)), dp(gtx, 2))
-		fill(gtx, alpha(rgb(0xffffff), 0x10), image.Rect(dp(gtx, 28), dp(gtx, 15), s-dp(gtx, 6), s-dp(gtx, 6)), dp(gtx, 2))
-		strokeRect(gtx, ColBorderHi, r, dp(gtx, 6), float32(max(1, dp(gtx, 1))))
-		return D{Size: r.Max}
-	}
-}
-
 // deferAbove draws w on top of everything, its bottom-left corner at at
 // (relative to the current origin), the way ImGui popups float.
 func (th *Theme) deferAbove(gtx C, at image.Point, w W) {
@@ -739,80 +286,220 @@ func (th *Theme) ModelPicker(gtx C, p *ModelPicker) D { return th.modelPicker(gt
 // TraitsMenu draws the model options menu on its own, for the animation render.
 func (th *Theme) TraitsMenu(gtx C, t *Traits) D { return th.traitsMenu(gtx, &Scene{}, "trait", t) }
 
-// modelPicker is T3's model menu: search on top, a rail of Favorites and
-// providers on the left, that provider's models on the right. Options live
-// in the traits menu, not here.
+// modelPicker is T3's model picker: search on top, a rail of Favorites
+// and providers on the left, that provider's models on the right, and
+// docked beside them the effort column, the model's options
+// (ProviderModelPicker.tsx: the list 360 wide by the 192dp column).
 func (th *Theme) modelPicker(gtx C, s *Scene, p *ModelPicker) D {
 	return popupFrame(gtx, func(gtx C) D {
-		return FixedW(gtx, 420, func(gtx C) D {
-			list := func(gtx C) D {
-				return pad(6, 6, 6, 6).Layout(gtx, func(gtx C) D {
-					tab := p.Tabs[p.Tab]
-					name := tab.Provider
-					if name == "" {
-						name = "Favorites"
-					}
-					kids := []layout.FlexChild{rigid(func(gtx C) D {
-						return pad(4, 8, 6, 8).Layout(gtx, func(gtx C) D {
-							return th.Text(gtx, Txt{Size: 10.5, Color: ColFaint, Font: UI(font.SemiBold), MaxLines: 1}, strings.ToUpper(name))
-						})
-					})}
-					for _, m := range p.Models {
-						m := m
-						kids = append(kids, rigid(th.Click(prefixID("picker.model:", m.ID), func(gtx C) D { return th.pickerRow(gtx, m) })))
-					}
-					if len(p.Models) == 0 {
-						kids = append(kids, rigid(func(gtx C) D {
-							return pad(6, 8, 8, 8).Layout(gtx, func(gtx C) D { return th.Small(gtx, ColFaint, "No models match.") })
-						}))
-					}
-					if p.Legacy > 0 {
-						kids = append(kids, rigid(func(gtx C) D {
-							return FixedH(gtx, 28, func(gtx C) D {
-								gtx.Constraints.Min.X = gtx.Constraints.Max.X
-								return pad(0, 8, 0, 6).Layout(gtx, func(gtx C) D {
-									return Row(gtx,
-										rigid(IconW(IconChevronRight, ColFaint, 13)),
-										rigid(Spacer(4, 0)),
-										rigid(func(gtx C) D { return th.Label(gtx, ColDim, font.Normal, "Legacy models") }),
-										rigid(Spacer(6, 0)),
-										rigid(func(gtx C) D { return th.Small(gtx, ColFaint, fmt.Sprint(p.Legacy)) }),
-									)
-								})
-							})
-						}))
-					}
-					return Col(gtx, kids...)
-				})
-			}
-			body := func(gtx C) D {
-				m := op.Record(gtx.Ops)
-				lgtx := gtx
-				lgtx.Constraints.Max.X -= dp(gtx, 45)
-				h := list(lgtx).Size.Y
-				m.Stop()
-				gtx.Constraints.Min.Y = h
-				return layout.Flex{}.Layout(gtx,
-					rigid(func(gtx C) D { return th.pickerRail(gtx, s, p) }),
-					rigid(divider),
-					flexed(list),
-				)
-			}
-			return Col(gtx,
-				rigid(func(gtx C) D {
-					if s.Live {
-						return pad(8, 8, 8, 8).Layout(gtx, th.Field("picker.search", IconSearch, true, "Search models", false))
-					}
-					return pad(8, 8, 8, 8).Layout(gtx, th.Input(IconSearch, true, p.Query, "Search models", true))
-				}),
-				rigid(func(gtx C) D {
-					hline(gtx, ColBorder, 0, 0, gtx.Constraints.Max.X)
-					return D{Size: image.Pt(gtx.Constraints.Max.X, max(1, dp(gtx, 1)))}
-				}),
-				rigid(body),
-			)
-		})
+		if s.Traits == nil {
+			return th.modelList(gtx, s, p, 420)
+		}
+		list := record(gtx, func(gtx C) D { return th.modelList(gtx, s, p, 360) })
+		list.call.Add(gtx.Ops)
+		defer op.Offset(image.Pt(list.Size.X, 0)).Push(gtx.Ops).Pop()
+		col := th.effortColumn(gtx, s, s.Traits, list.Size.Y)
+		return D{Size: image.Pt(list.Size.X+col.Size.X, list.Size.Y)}
 	})
+}
+
+// modelList is the picker's search, rail and models, w wide.
+func (th *Theme) modelList(gtx C, s *Scene, p *ModelPicker, w float32) D {
+	return FixedW(gtx, w, func(gtx C) D {
+		list := func(gtx C) D {
+			return pad(6, 6, 6, 6).Layout(gtx, func(gtx C) D {
+				tab := p.Tabs[p.Tab]
+				name := tab.Provider
+				if name == "" {
+					name = "Favorites"
+				}
+				kids := []layout.FlexChild{rigid(func(gtx C) D {
+					return pad(4, 8, 6, 8).Layout(gtx, func(gtx C) D {
+						return th.Text(gtx, Txt{Size: 10.5, Color: ColFaint, Font: UI(font.SemiBold), MaxLines: 1}, strings.ToUpper(name))
+					})
+				})}
+				for _, m := range p.Models {
+					m := m
+					kids = append(kids, rigid(th.Click(prefixID("picker.model:", m.ID), func(gtx C) D { return th.pickerRow(gtx, m) })))
+				}
+				if len(p.Models) == 0 {
+					kids = append(kids, rigid(func(gtx C) D {
+						return pad(6, 8, 8, 8).Layout(gtx, func(gtx C) D { return th.Small(gtx, ColFaint, "No models match.") })
+					}))
+				}
+				if p.Legacy > 0 {
+					kids = append(kids, rigid(func(gtx C) D {
+						return FixedH(gtx, 28, func(gtx C) D {
+							gtx.Constraints.Min.X = gtx.Constraints.Max.X
+							return pad(0, 8, 0, 6).Layout(gtx, func(gtx C) D {
+								return Row(gtx,
+									rigid(IconW(IconChevronRight, ColFaint, 13)),
+									rigid(Spacer(4, 0)),
+									rigid(func(gtx C) D { return th.Label(gtx, ColDim, font.Normal, "Legacy models") }),
+									rigid(Spacer(6, 0)),
+									rigid(func(gtx C) D { return th.Small(gtx, ColFaint, fmt.Sprint(p.Legacy)) }),
+								)
+							})
+						})
+					}))
+				}
+				return Col(gtx, kids...)
+			})
+		}
+		body := func(gtx C) D {
+			m := op.Record(gtx.Ops)
+			lgtx := gtx
+			lgtx.Constraints.Max.X -= dp(gtx, 45)
+			h := list(lgtx).Size.Y
+			m.Stop()
+			gtx.Constraints.Min.Y = h
+			return layout.Flex{}.Layout(gtx,
+				rigid(func(gtx C) D { return th.pickerRail(gtx, s, p) }),
+				rigid(divider),
+				flexed(list),
+			)
+		}
+		return Col(gtx,
+			rigid(func(gtx C) D {
+				if s.Live {
+					return pad(8, 8, 8, 8).Layout(gtx, th.Field("picker.search", IconSearch, true, "Search models", false))
+				}
+				return pad(8, 8, 8, 8).Layout(gtx, th.Input(IconSearch, true, p.Query, "Search models", true))
+			}),
+			rigid(func(gtx C) D {
+				hline(gtx, ColBorder, 0, 0, gtx.Constraints.Max.X)
+				return D{Size: image.Pt(gtx.Constraints.Max.X, max(1, dp(gtx, 1)))}
+			}),
+			rigid(body),
+		)
+	})
+}
+
+// effortColumn is the picker's effort column (ComposerEffortColumn): 192
+// wide on --muted at 40% behind a rule at border/70; its head, the first
+// option's name and the model's, over a rule; then the options' 32dp rows,
+// the picked one with its check, the default saying so, a switch for an
+// on/off option. It's as tall as the list beside it, h.
+func (th *Theme) effortColumn(gtx C, s *Scene, t *Traits, h int) D {
+	w := dp(gtx, 192)
+	px := max(1, dp(gtx, 1))
+	bg := over(alpha(P.Muted, uint8(int(P.Muted.A)*40/100)), P.Popover)
+	if P.Muted.A == 0xff {
+		bg = over(alpha(P.Muted, 0x66), P.Popover)
+	}
+	fill(gtx, bg, image.Rect(0, px, w, h-px), 0)
+	vline(gtx, over(alpha(P.Border, uint8(int(P.Border.A)*7/10)), P.Popover), 0, px, h-px)
+	muted := Txt{Size: 14, LineH: 20.0 / 14, Color: P.MutedForeground, MaxLines: 1}
+	head := "Effort"
+	if len(t.Groups) > 0 && t.Groups[0].Label != "" {
+		head = t.Groups[0].Label
+	}
+	// The head: px-3 pt-2.5, a 33dp row ruled under at border/70.
+	func() {
+		defer op.Offset(image.Pt(px+dp(gtx, 12), dp(gtx, 10))).Push(gtx.Ops).Pop()
+		rw := w - px - dp(gtx, 24)
+		hd := record(gtx, func(gtx C) D { return th.Text(gtx, muted, head) })
+		hd.call.Add(gtx.Ops)
+		mg := gtx
+		mg.Constraints = layout.Constraints{Max: image.Pt(max(0, rw-hd.Size.X-dp(gtx, 8)), dp(gtx, 20))}
+		md := record(mg, func(gtx C) D {
+			return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: P.MutedForeground, MaxLines: 1}, s.Model)
+		})
+		mo := op.Offset(image.Pt(rw-md.Size.X, (hd.Size.Y-md.Size.Y)/2)).Push(gtx.Ops)
+		md.call.Add(gtx.Ops)
+		mo.Pop()
+		hline(gtx, over(alpha(P.Border, uint8(int(P.Border.A)*7/10)), bg), dp(gtx, 33-1-1), 0, rw)
+	}()
+	rows := gtx
+	rows.Constraints = layout.Constraints{Min: image.Pt(w-px-dp(gtx, 16), 0), Max: image.Pt(w-px-dp(gtx, 16), 1<<20)}
+	list := record(rows, func(gtx C) D {
+		var kids []layout.FlexChild
+		for i, g := range t.Groups {
+			if i > 0 {
+				kids = append(kids, rigid(func(gtx C) D {
+					hline(gtx, over(alpha(P.Border, uint8(int(P.Border.A)*7/10)), bg), dp(gtx, 4), 0, gtx.Constraints.Max.X)
+					return D{Size: image.Pt(gtx.Constraints.Max.X, dp(gtx, 9))}
+				}))
+				if !g.Bool && g.Label != "" {
+					kids = append(kids, rigid(func(gtx C) D {
+						return pad(6, 8, 4, 8).Layout(gtx, func(gtx C) D {
+							return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Font: UI(font.Medium), Color: P.MutedForeground, MaxLines: 1}, g.Label)
+						})
+					}))
+				}
+			}
+			if g.Bool {
+				kids = append(kids, rigid(th.columnRow(liveID(s, fmt.Sprintf("trait:%d", i)), g.Label, false, false, bg, &g)))
+				continue
+			}
+			for j, c := range g.Choices {
+				id := liveID(s, fmt.Sprintf("trait:%d:%d", i, j))
+				if c.Off {
+					id = ""
+				}
+				kids = append(kids, rigid(th.columnRow(id, c.Label, j == g.Sel, c.Default, bg, nil)), rigid(Spacer(0, 2)))
+			}
+		}
+		return Col(gtx, kids...)
+	})
+	view := h - dp(gtx, 43) - dp(gtx, 6)
+	defer op.Offset(image.Pt(px+dp(gtx, 8), dp(gtx, 43))).Push(gtx.Ops).Pop()
+	th.vscroll(gtx, "effort", image.Pt(w-px-dp(gtx, 16), max(0, view)), list.Size.Y, list.call)
+	return D{Size: image.Pt(w, h)}
+}
+
+// columnRow is one of the column's rows: 32 tall, padded 0 8, rounded 4,
+// 14/20 in the foreground, lit at foreground 9% under the pointer; picked,
+// a 14dp check at its end, else "Default" for the default; an on/off
+// option ends in its switch.
+func (th *Theme) columnRow(id, label string, picked, isDefault bool, bg color.NRGBA, toggle *Trait) W {
+	return func(gtx C) D {
+		w := gtx.Constraints.Max.X
+		h := dp(gtx, 32)
+		hovered := false
+		if id != "" {
+			c, _ := th.events(gtx, id)
+			hovered = c.Hovered()
+		}
+		if hovered {
+			fill(gtx, over(alpha(P.Foreground, 0x17), bg), image.Rect(0, 0, w, h), dp(gtx, 4))
+		}
+		x := dp(gtx, 8)
+		end := w - dp(gtx, 8)
+		switch {
+		case toggle != nil:
+			sw := record(gtx, func(gtx C) D { return Switch(gtx, onAmt(toggle.On)) })
+			so := op.Offset(image.Pt(end-sw.Size.X, (h-sw.Size.Y)/2)).Push(gtx.Ops)
+			sw.call.Add(gtx.Ops)
+			so.Pop()
+			end -= sw.Size.X + dp(gtx, 8)
+		case picked:
+			co := op.Offset(image.Pt(end-dp(gtx, 14), (h-dp(gtx, 14))/2)).Push(gtx.Ops)
+			LucideW("check", P.Foreground, 14)(gtx)
+			co.Pop()
+			end -= dp(gtx, 14+8)
+		case isDefault:
+			dd := record(gtx, func(gtx C) D {
+				return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: over(alpha(P.MutedForeground, 0xb3), bg), MaxLines: 1}, "Default")
+			})
+			do := op.Offset(image.Pt(end-dd.Size.X, (h-dd.Size.Y)/2)).Push(gtx.Ops)
+			dd.call.Add(gtx.Ops)
+			do.Pop()
+			end -= dd.Size.X + dp(gtx, 8)
+		}
+		lg := gtx
+		lg.Constraints = layout.Constraints{Max: image.Pt(max(0, end-x), h)}
+		ld := record(lg, func(gtx C) D {
+			return th.Text(gtx, Txt{Size: 14, LineH: 20.0 / 14, Color: P.Foreground, MaxLines: 1}, label)
+		})
+		lo := op.Offset(image.Pt(x, (h-ld.Size.Y)/2)).Push(gtx.Ops)
+		ld.call.Add(gtx.Ops)
+		lo.Pop()
+		if id != "" {
+			th.hit(gtx, id, image.Pt(w, h))
+		}
+		return D{Size: image.Pt(w, h)}
+	}
 }
 
 // pickerRail is the column of tabs: a star for Favorites, then each ready
@@ -1021,55 +708,6 @@ func easeOut(t float32) float32 { return 1 - (1-t)*(1-t)*(1-t) }
 func lerpCol(a, b color.NRGBA, t float32) color.NRGBA {
 	l := func(x, y uint8) uint8 { return uint8(float32(x) + (float32(y)-float32(x))*t + 0.5) }
 	return color.NRGBA{R: l(a.R, b.R), G: l(a.G, b.G), B: l(a.B, b.B), A: l(a.A, b.A)}
-}
-
-func (th *Theme) suggest(gtx C, s *Scene) D {
-	return popupFrame(gtx, func(gtx C) D {
-		return FixedW(gtx, 420, func(gtx C) D {
-			return pad(6, 6, 6, 6).Layout(gtx, func(gtx C) D {
-				kids := []layout.FlexChild{rigid(func(gtx C) D {
-					return pad(4, 8, 6, 8).Layout(gtx, func(gtx C) D {
-						return th.Text(gtx, Txt{Size: 10.5, Color: ColFaint, Font: UI(font.SemiBold), MaxLines: 1}, s.SuggestHead)
-					})
-				})}
-				for i, sg := range s.Suggest {
-					sg, on := sg, i == s.SuggestSel
-					kids = append(kids, rigid(func(gtx C) D {
-						return FixedH(gtx, 30, func(gtx C) D {
-							size := image.Pt(gtx.Constraints.Max.X, gtx.Constraints.Min.Y)
-							if on {
-								fill(gtx, ColSelected, image.Rectangle{Max: size}, dp(gtx, 4))
-							}
-							gtx.Constraints.Min.X = size.X
-							return pad(0, 8, 0, 8).Layout(gtx, func(gtx C) D {
-								gtx.Constraints.Min.X = gtx.Constraints.Max.X
-								return Row(gtx,
-									rigid(func(gtx C) D {
-										return th.Text(gtx, Txt{Size: SizeMono, Font: Mono(), Color: ColText, MaxLines: 1}, sg.Name)
-									}),
-									rigid(func(gtx C) D {
-										if sg.Hint == "" {
-											return D{}
-										}
-										return th.Text(gtx, Txt{Size: SizeMono, Font: Mono(), Color: ColFaint, MaxLines: 1}, " "+sg.Hint)
-									}),
-									rigid(Spacer(12, 0)),
-									flexed(func(gtx C) D { return th.Small(gtx, ColDim, sg.Desc) }),
-									rigid(func(gtx C) D {
-										if !on {
-											return D{}
-										}
-										return th.Kbd("Tab")(gtx)
-									}),
-								)
-							})
-						})
-					}))
-				}
-				return Col(gtx, kids...)
-			})
-		})
-	})
 }
 
 // ---------- inspector ----------
@@ -1514,6 +1152,7 @@ func (th *Theme) codeBoxesFocus(gtx C, code string, n int, active bool) D {
 // Phone is the same thread view at phone width: one column, a back button
 // instead of the sidebar, the composer's secondary controls tucked away.
 func (th *Theme) Phone(gtx C, s *Scene) D {
+	th.in.window = gtx.Constraints.Max
 	return Fill(gtx, ColPanelHi, func(gtx C) D {
 		return Col(gtx,
 			rigid(func(gtx C) D {

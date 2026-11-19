@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/some-du6e/tern/app/clip"
 	"github.com/some-du6e/tern/app/t3"
 	"github.com/some-du6e/tern/app/ui"
 )
@@ -144,7 +145,6 @@ type App struct {
 	msgOrderFor string
 
 	picker       *pickerState
-	traitsOpen   bool
 	accessOpen   bool
 	projectsOpen bool
 	accountOpen  bool
@@ -195,6 +195,23 @@ type App struct {
 	answers       map[string]map[int]bool // question id -> picked option indexes
 
 	uiOps []func(*ui.Theme) // editor and focus changes from goroutines, run on the UI goroutine
+
+	comp  composerState // the composer's menu, history and questions
+	guard typingGuard   // requests held back while the user types
+	// stopping is where the last click on Stop has got.
+	stopping stopState
+	// suggestion is the open thread's guess at its next prompt; dismissed
+	// the ones Escape put away, by thread ref and run.
+	suggestion suggestion
+	dismissed  map[string]bool
+	// The stash's writes: numbered, so only the newest lands, under their
+	// own lock, and counted for whoever waits on them.
+	stashWrites, stashWritten int
+	stashFileMu               sync.Mutex
+	stashSaving               sync.WaitGroup
+	// ChooseImages asks for image files to attach: the system's file
+	// dialog, where the platform has one.
+	ChooseImages func() ([]clip.Image, error)
 
 	// ver counts state changes. Scene reuses its last result while ver and
 	// the clock's second stay the same, so idle frames cost almost nothing.
@@ -287,6 +304,11 @@ func NewWithStore(store *t3.Store, redraw func()) (*App, error) {
 	_, _ = store.Get("sidebar-shelves", &a.shelfOpen)
 	_, _ = store.Get("sidebar-scope", &a.scope)
 	_ = store.Delete("panel-hidden") // from when details were a side panel
+	_, _ = store.Get(stashFile, &a.comp.stash)
+	a.comp.responding, a.comp.fresh, a.dismissed = map[string]bool{}, map[string]bool{}, map[string]bool{}
+	if len(a.comp.stash) > 0 {
+		go a.decodeStash()
+	}
 	return a, nil
 }
 
@@ -667,6 +689,10 @@ func (a *App) loadConfig(e *envState, conn *t3.Conn, gen int) {
 		return
 	}
 	e.config = &cfg
+	if envID, _ := splitRef(a.openID); envID == e.id() {
+		// The open thread's suggestions need the settings this brought.
+		go a.suggest(e, conn, a.openID)
+	}
 }
 
 func (a *App) subscribeShell(e *envState, conn *t3.Conn, gen int, started time.Time) {
@@ -810,9 +836,9 @@ type threadView struct {
 	// What the user opened in the timeline: folds by run, work groups and
 	// entries by id, kept per thread (disclosureFor).
 	unfolded, groups, open map[string]bool
-	// The provider's turns, threads and the sessions attached to it, and
-	// the runtime requests, by id. Moving it to another worktree detaches
-	// its sessions.
+	// The provider's turns, threads and the sessions attached to it, by id
+	// (moving it to another worktree detaches its sessions), and its
+	// runtime requests, nil until the server sends them.
 	turns    map[string]t3.ProviderTurn
 	pthreads map[string]t3.ProviderThread
 	sessions map[string]t3.ProviderSession
@@ -838,7 +864,7 @@ func newView(e *envState, id string, d *disclosure) *threadView {
 		id: id, env: e, raw: map[string]map[string]json.RawMessage{}, items: map[string]*t3.TurnItem{},
 		runs: map[string]t3.Run{}, messages: map[string]t3.Message{}, turns: map[string]t3.ProviderTurn{},
 		pthreads: map[string]t3.ProviderThread{}, sessions: map[string]t3.ProviderSession{},
-		requests: map[string]t3.RuntimeRequestRecord{}, unfolded: d.unfolded, groups: d.groups, open: d.open, full: map[string]*t3.TurnItem{},
+		unfolded: d.unfolded, groups: d.groups, open: d.open, full: map[string]*t3.TurnItem{},
 		fullRev: map[string]string{}, fetching: map[string]string{}, fetchErr: map[string]string{},
 	}
 }
@@ -913,9 +939,10 @@ func (a *App) closeThreadLocked() {
 	}
 	a.view = nil
 	a.openID = ""
-	a.picker, a.traitsOpen, a.accessOpen, a.projectsOpen = nil, false, false, false
+	a.picker, a.accessOpen, a.projectsOpen = nil, false, false
 	a.renaming, a.cardMenu, a.branchPicker, a.confirm, a.prsOpen = "", "", nil, nil, false
 	a.prAlert = nil
+	a.dropSuggestion()
 }
 
 // openThread shows a thread, by ref, and subscribes to it. Call without the
@@ -1016,9 +1043,11 @@ func (a *App) subscribeThread(e *envState, conn *t3.Conn, gen int, r string) {
 			for _, ps := range it.Projection.ProviderSessions {
 				v.sessions[ps.ID] = ps
 			}
-			v.requests = map[string]t3.RuntimeRequestRecord{}
-			for _, rr := range it.Projection.RuntimeRequests {
-				v.requests[rr.ID] = rr
+			if it.Projection.RuntimeRequests != nil {
+				v.requests = map[string]t3.RuntimeRequestRecord{}
+				for _, rr := range it.Projection.RuntimeRequests {
+					v.requests[rr.ID] = rr
+				}
 			}
 			v.cursor, v.more, v.loaded = it.HistoryCursor, it.HasMoreHistory, true
 		case it.Kind == "event" && it.Event != nil:
@@ -1068,6 +1097,9 @@ func (a *App) subscribeThread(e *envState, conn *t3.Conn, gen int, r string) {
 			case t == "runtime-request.updated":
 				var rr t3.RuntimeRequestRecord
 				if json.Unmarshal(it.Event.Payload, &rr) == nil && rr.ID != "" {
+					if v.requests == nil {
+						v.requests = map[string]t3.RuntimeRequestRecord{}
+					}
 					v.requests[rr.ID] = rr
 				}
 			}
@@ -1084,6 +1116,7 @@ func (a *App) subscribeThread(e *envState, conn *t3.Conn, gen int, r string) {
 			a.changed()
 		}
 	})
+	a.suggest(e, conn, r)
 	// Moves T3's read marker, so the thread stops showing as unread.
 	go func() {
 		_ = conn.Dispatch(map[string]any{"type": "thread.visit", "threadId": id, "visitedAt": time.Now().UTC().Format(time.RFC3339Nano), "opened": true})

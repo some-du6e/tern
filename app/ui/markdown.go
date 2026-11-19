@@ -669,11 +669,11 @@ func (b *mdBuilder) addText(t *inlineText, s string, st runStyle) {
 		t.runs = append(t.runs, b.run(text, st))
 	}
 	for i := 0; i < len(rs); i++ {
-		if n := ChipN(rs[i]); n > 0 && i+chipLen <= len(rs) && strings.Count(string(rs[i+1:i+chipLen]), string(chipFill)) == chipPad {
+		if n := ChipN(rs[i]); n > 0 && i+1+chipPad <= len(rs) && strings.Count(string(rs[i+1:i+1+chipPad]), string(chipFill)) == chipPad {
 			flush(i)
 			cs := st
 			t.runs = append(t.runs, inlineRun{text: "", font: UI(font.Medium), size: cs.size, color: over(P.ContextChipImage, b.st.on), chip: n})
-			i += chipLen - 1
+			i += chipPad
 			start = i + 1
 		}
 	}

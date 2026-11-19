@@ -104,6 +104,15 @@ func ProjectImages(text string, recs []ImageRecord) string {
 	return body + "\n\n<t3_context version=\"1\">\n" + strings.Join(entries, "\n") + "\n</t3_context>"
 }
 
+// ContextRefs is where text's context references are, as byte ranges.
+func ContextRefs(text string) [][2]int {
+	var out [][2]int
+	for _, m := range contextLink.FindAllStringIndex(text, -1) {
+		out = append(out, [2]int{m[0], m[1]})
+	}
+	return out
+}
+
 // ReplaceImages swaps each picture token in text for image(label) and every
 // other reference for its label.
 func ReplaceImages(text string, image func(label string) string) string {
