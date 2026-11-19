@@ -90,10 +90,14 @@ quarantine flag, so Gatekeeper leaves it alone.
   bar going back to it. Tabs are the thread's in T3 too; a blank one lists
   the dev servers started from T3's terminals there, and `localhost:3000` or
   just `3000` opens one. Drag the panel's left edge to resize it.
+- The Diff surface (⌘D, Ctrl+D, or Open diff on the changed files card
+  under a reply): a tab in the right panel with T3's code view of a turn's
+  patch, or of the checkout's Git changes when the connection may read
+  files, its scope menu, toolbar and file tree.
 - Text falls back to the system's fonts for scripts the embedded ones don't
   have, like Chinese and Japanese.
 
-Not yet: diffs, dropping files on the window, `/`
+Not yet: dropping files on the window, `/`
 commands and `@` files, and renaming or snoozing from the thread menu.
 
 ## Mockups
