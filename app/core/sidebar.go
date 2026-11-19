@@ -884,9 +884,9 @@ func (a *App) row(st sideThread, shelf string, now time.Time) ui.ThreadRow {
 	st2 := status(t, st.child)
 	// The open thread's watermark moves as it's read, so it's never unread.
 	r.Unread = !active && unseen(t)
-	r.Woke = woke(t, st.child, now)
-	r.Recede = recede(st2, r.Unread, r.Woke, active, r.Selected)
-	r.Status, r.Label = rowStatus(t, st2, r.Woke, r.Unread)
+	woken := woke(t, st.child, now)
+	r.Recede = recede(st2, r.Unread, woken, active, r.Selected)
+	r.Status, r.Label = rowStatus(t, st2, woken, r.Unread)
 	switch st2 {
 	case stPreparing, stWorking:
 		if s := workStart(t); !s.IsZero() {

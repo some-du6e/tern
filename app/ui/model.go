@@ -122,7 +122,6 @@ type ThreadRow struct {
 
 	Recede       bool // quieter: it's working, or done and seen
 	Unread       bool // its last run finished since the last visit
-	Woke         bool // it woke from a snooze since the last visit
 	Active       bool // the open thread
 	Selected     bool // in the multi-selection
 	Pinned       bool

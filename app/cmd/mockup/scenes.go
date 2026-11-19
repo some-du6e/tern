@@ -57,7 +57,7 @@ func sidebar(s *ui.Scene, selected string) {
 			PR: &ui.PRBadge{State: "open", Text: "42"}, Age: "now"}),
 		card(ui.ThreadRow{Title: "A guest's question", Project: "notes", Icon: notesIcon, Status: ui.StatusRequest, Label: "Request", Age: "3m"}),
 		card(ui.ThreadRow{Title: "Relay status polling", Status: ui.StatusFailed, Label: "Failed", Error: "Error occurred", Age: "5h"}),
-		card(ui.ThreadRow{Title: "Sidebar virtualization", Status: ui.StatusWoke, Label: "Woke", Woke: true, Branch: "t3/sidebar-virtual", PR: &ui.PRBadge{State: "merged", Text: "38"}, Age: "18m"}),
+		card(ui.ThreadRow{Title: "Sidebar virtualization", Status: ui.StatusWoke, Label: "Woke", Branch: "t3/sidebar-virtual", PR: &ui.PRBadge{State: "merged", Text: "38"}, Age: "18m"}),
 		card(ui.ThreadRow{Title: "Outline and sources", Project: "notes", Icon: notesIcon, Recede: true, Age: "1d", Draft: true}),
 		{Shelf: &ui.Shelf{ID: "working", Label: "Working", Count: 2, Open: true}},
 		card(ui.ThreadRow{Shelf: "working", Title: "Restore test", Project: "atlas", Icon: atlasIcon, Status: ui.StatusWorking, Label: "Working", Timer: "12m", Recede: true, Age: "12m"}),
