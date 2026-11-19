@@ -122,6 +122,7 @@ type ThreadRow struct {
 
 	Recede       bool // quieter: it's working, or done and seen
 	Unread       bool // its last run finished since the last visit
+	Woke         bool // it woke from a snooze since the last visit, whatever its label says
 	Active       bool // the open thread
 	Selected     bool // in the multi-selection
 	Pinned       bool
@@ -129,7 +130,7 @@ type ThreadRow struct {
 	Regenerating bool // its title is being regenerated
 
 	Branch      string
-	Worktree    bool     // the branch is checked out in a worktree
+	Worktree    string   // the worktree the branch is checked out in, "" for none
 	Machine     string   // the machine it's on
 	MachineIcon string   // that machine's kind: "server", "laptop"…
 	Remote      bool     // the row shows its machine's icon

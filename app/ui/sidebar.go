@@ -48,7 +48,6 @@ const (
 // the list and the footer. sidebarFrame paints the surface under it.
 func (th *Theme) sidebar(gtx C, s *Scene) D {
 	size := gtx.Constraints.Max
-	th.in.undoClaim = s.Live && s.Sidebar.UndoClaim
 	th.in.jumping = th.jumpHints(gtx, s)
 	at := func(y, h int, draw func(gtx C)) {
 		defer op.Offset(image.Pt(0, y)).Push(gtx.Ops).Pop()
@@ -203,14 +202,15 @@ func (th *Theme) searchKeys(gtx C, ed any) {
 }
 
 // clearButton is the search's clear button: T3's icon-micro ghost-muted
-// Button, 20dp, radius 4, a 12dp x, accent on hover.
+// Button, 20dp, radius 4, a 12dp x; hovered, the accent fill and the
+// foreground (ghost-muted hovers to text-foreground, not the accent's).
 func (th *Theme) clearButton(gtx C, id string, on color.NRGBA) {
 	s := dp(gtx, 20)
 	col := SP.MutedForeground
 	if id != "" {
 		if c, _ := th.events(gtx, id); c.Hovered() {
 			fill(gtx, over(SP.Accent, on), image.Rect(0, 0, s, s), dp(gtx, 4))
-			col = SP.AccentForeground
+			col = SP.Foreground
 		}
 	}
 	func() {
@@ -288,6 +288,7 @@ func (th *Theme) filterButton(gtx C, s *Scene) {
 	th.headerButton(gtx, liveID(s, "filter"), sb.ScopeLabel, false, sb.Filter != nil, icon)
 	if sb.Filter == nil {
 		th.popIn(gtx, "filter", false, nil, nil) // so it plays again next time
+		th.in.filterUp = false
 		return
 	}
 	// It drops 4dp below the button, lined up with its left edge.
@@ -316,8 +317,11 @@ func (th *Theme) filterPopup(gtx C, s *Scene) D {
 				}
 				// The rows scroll within the popup's height.
 				return pad(4, 5, 5, 5).Layout(gtx, func(gtx C) D {
-					gtx.Constraints.Max.Y = min(gtx.Constraints.Max.Y, len(f.Items)*dp(gtx, 32))
-					return th.List("filter", false).Layout(gtx, len(f.Items), func(gtx C, i int) D {
+					rowH := dp(gtx, 32)
+					gtx.Constraints.Max.Y = min(gtx.Constraints.Max.Y, len(f.Items)*rowH)
+					l := th.List("filter", false)
+					th.revealFilter(l, f, rowH, gtx.Constraints.Max.Y)
+					return l.Layout(gtx, len(f.Items), func(gtx C, i int) D {
 						return th.filterItem(gtx, s, f.Items[i])
 					})
 				})
@@ -326,16 +330,51 @@ func (th *Theme) filterPopup(gtx C, s *Scene) D {
 	})
 }
 
-// filterSearch is the popup's search, padded 10 12 0 inside its 1dp
-// border, over a 1dp rule at border 70% that turns the ring colour while
-// it's focused. The block sits 1dp up (-translate-y-px): the rule is
-// placed for it, and the 26dp input moves up with it, its text centred.
+// revealFilter scrolls the filter's rows, rowH each in view tall, so the
+// highlighted one shows as it lights, moving as little as it can (block
+// nearest), as T3's combobox keeps it in view. Each time the popup opens
+// the rows start at the top.
+func (th *Theme) revealFilter(l *layout.List, f *ProjectFilter, rowH, view int) {
+	if !th.in.filterUp {
+		th.in.filterUp, th.in.filterLit = true, -1
+		l.Position = layout.Position{}
+	}
+	hi := -1
+	for i, it := range f.Items {
+		if it.Highlighted {
+			hi = i
+		}
+	}
+	if hi == th.in.filterLit {
+		return
+	}
+	th.in.filterLit = hi
+	scroll := l.Position.First*rowH + l.Position.Offset
+	switch top := hi * rowH; {
+	case hi < 0:
+		return
+	case top < scroll:
+		scroll = top
+	case top+rowH > scroll+view:
+		scroll = top + rowH - view
+	default:
+		return
+	}
+	l.Position.First, l.Position.Offset, l.Position.BeforeEnd = scroll/rowH, scroll%rowH, true
+}
+
+// filterSearch is the popup's search, padded 10 12 6 inside the popup's
+// 1dp border, its own 1dp bottom border at border 70%, the ring colour
+// while it's focused. The block sits 1dp up (-translate-y-px), but only
+// where it's drawn: the list still starts under its whole 43dp. The 26dp
+// input moves up with it, its text centred; Enter picks the highlighted
+// row.
 func (th *Theme) filterSearch(gtx C, s *Scene) D {
 	return pad(11, 13, 0, 13).Layout(gtx, func(gtx C) D {
 		w := gtx.Constraints.Max.X
 		h := dp(gtx, 26)
 		ed := th.Editor("filter.search")
-		ed.SingleLine = true
+		ed.SingleLine, ed.Submit = true, true
 		focused := s.Live && gtx.Focused(ed)
 		func() {
 			defer op.Offset(image.Pt(0, (h-dp(gtx, 16))/2)).Push(gtx.Ops).Pop()
@@ -361,8 +400,9 @@ func (th *Theme) filterSearch(gtx C, s *Scene) D {
 		if focused {
 			rule = P.Ring
 		}
-		hline(gtx, rule, h+dp(gtx, 6)-max(1, dp(gtx, 1)), 0, w)
-		return D{Size: image.Pt(w, h+dp(gtx, 6))}
+		px := max(1, dp(gtx, 1))
+		hline(gtx, rule, h+dp(gtx, 6)-px, 0, w)
+		return D{Size: image.Pt(w, h+dp(gtx, 6)+px)}
 	})
 }
 
@@ -457,6 +497,40 @@ type listNav struct {
 	tops  []int
 }
 
+// handOn is where the focus goes from nav, a row of n's, now the list is
+// items: nowhere while nav is still listed; else its shelf's header if
+// that is, else the row now at nav's place in the tree.
+func (n listNav) handOn(items []sideItem, nav string) string {
+	var rows []string
+	for _, it := range items {
+		if it.nav == nav {
+			return ""
+		}
+		if it.nav != "" {
+			rows = append(rows, it.nav)
+		}
+	}
+	k := 0
+	for _, it := range n.items {
+		if it.nav == "" {
+			continue
+		}
+		if it.nav == nav {
+			for _, r := range rows {
+				if it.parent != "" && r == it.parent {
+					return r
+				}
+			}
+			if len(rows) == 0 {
+				return ""
+			}
+			return rows[min(k, len(rows)-1)]
+		}
+		k++
+	}
+	return ""
+}
+
 // threadList is the scrolling list (§3.3): rows 8dp in from the sides and
 // 1dp apart, 8dp of padding below, no scrollbar, and a fade of up to 12dp
 // at an edge it has scrolled past. A short list puts its spare height
@@ -495,6 +569,12 @@ func (th *Theme) threadList(gtx C, s *Scene, top int) {
 		y += it.h + gap
 	}
 	tops[len(items)] = y - gap
+	// The row that had the keyboard's focus last frame and isn't listed
+	// now (settled onto a folded shelf, snoozed, filtered out) hands it on,
+	// without scrolling (sidebarTree.ts's restoreFocus).
+	if was := th.in.focused; was != "" && th.in.focusedAt+1 == th.in.frame && th.in.focusRow == "" {
+		th.in.focusRow = th.in.nav.handOn(items, was)
+	}
 	th.in.nav = listNav{items: items, tops: tops}
 	th.in.listView = size.Y
 	l := th.List("sidebar", false)
@@ -717,6 +797,9 @@ func (th *Theme) rowTarget(gtx C, s *Scene, nav string, size image.Point, rect i
 	tag := th.rowKey(nav)
 	th.rowKeys(gtx, nav, tag, rect)
 	mine := len(th.in.actions)
+	if gtx.Focused(tag) {
+		th.in.focused, th.in.focusedAt = nav, th.in.frame
+	}
 	focused = gtx.Focused(tag) && th.in.keyFocus
 	st := clip.Rect{Max: size}.Push(gtx.Ops)
 	c.Add(gtx.Ops)
@@ -982,8 +1065,7 @@ func (th *Theme) cardRow(gtx C, s *Scene, r *ThreadRow, top int) D {
 	at(dp(gtx, 8), dp(gtx, 20), func(gtx C) D {
 		var kids []layout.FlexChild
 		if r.Draft {
-			// An unsent draft's pen, in the warning foreground.
-			kids = append(kids, rigid(LucideW("square-pen", in.of(SP.WarningForeground), 12)))
+			kids = append(kids, rigid(th.draftPen(s, r, in.of(SP.WarningForeground))))
 		}
 		if r.Project != "" {
 			kids = append(kids, rigid(func(gtx C) D { return th.projectIcon(gtx, r.Icon, 16, in, 0) }))
@@ -1014,6 +1096,18 @@ func (th *Theme) cardRow(gtx C, s *Scene, r *ThreadRow, top int) D {
 	}
 	th.hoverRow(r, rect, hot && !menuOpen)
 	return D{Size: image.Pt(w, h+dp(gtx, 4))}
+}
+
+// draftPen is a row's unsent draft: a 12dp pen in col (the warning
+// foreground) with its tooltip; a click on it is the row's.
+func (th *Theme) draftPen(s *Scene, r *ThreadRow, col color.NRGBA) W {
+	return func(gtx C) D {
+		d := LucideW("square-pen", col, 12)(gtx)
+		if id := liveID(s, "pen:"+r.ID); id != "" {
+			th.listHoverTip(gtx, id, "Unsent draft", d.Size)
+		}
+		return d
+	}
 }
 
 // draftRow is the new thread's unsent draft (§2.7, §3.12): 78dp in 2dp of
@@ -1144,8 +1238,8 @@ func (th *Theme) renameField(gtx C, live bool) D {
 
 // rowTitle is a row's title, 14/20: 500, or 400 receded. On a card a
 // receded title is the foreground at 75% until the row is hovered or
-// focused, and a failed one seen is at 95%. The slim rows' rule is in
-// slimTitle. A title being regenerated is at 55%.
+// focused, and a failed one seen (neither unread nor woke) is at 95%. The
+// slim rows' rule is in slimTitle. A title being regenerated is at 55%.
 func (th *Theme) rowTitle(gtx C, r *ThreadRow, in rowInk, lit, slim bool) D {
 	weight := font.Medium
 	if r.Recede {
@@ -1157,7 +1251,7 @@ func (th *Theme) rowTitle(gtx C, r *ThreadRow, in rowInk, lit, slim bool) D {
 		col = slimTitle(r, lit)
 	case r.Recede && !lit:
 		col = alpha(SP.Foreground, 0xbf)
-	case r.Status == StatusFailed && !r.Unread:
+	case r.Status == StatusFailed && !r.Unread && !r.Woke:
 		col = alpha(SP.Foreground, 0xf2)
 	}
 	if r.Regenerating {
@@ -1418,8 +1512,14 @@ func (th *Theme) metaLine(gtx C, s *Scene, r *ThreadRow, in rowInk) D {
 	var kids []layout.FlexChild
 	switch {
 	case r.Branch != "":
-		if r.Worktree {
-			kids = append(kids, rigid(LucideW("folder-git-2", in.of(SP.IconMuted), 14)))
+		if r.Worktree != "" {
+			kids = append(kids, rigid(func(gtx C) D {
+				d := LucideW("folder-git-2", in.of(SP.IconMuted), 14)(gtx)
+				if id := liveID(s, "worktree:"+r.ID); id != "" {
+					th.listHoverTip(gtx, id, worktreeTip(r), d.Size)
+				}
+				return d
+			}))
 		}
 		kids = append(kids, flexed(func(gtx C) D { return th.middleTruncate(gtx, t, r.Branch) }))
 	case r.Scratch != "":
@@ -1430,13 +1530,26 @@ func (th *Theme) metaLine(gtx C, s *Scene, r *ThreadRow, in rowInk) D {
 		kids = append(kids, flexed(func(gtx C) D { return D{Size: gtx.Constraints.Min} }))
 	}
 	if r.Terminals > 0 {
-		kids = append(kids, rigid(th.terminalButton(s, r, in)))
+		kids = append(kids, rigid(th.terminalButton(s, r, in, func(c color.NRGBA) color.NRGBA { return c })))
 	}
 	if r.PR != nil {
 		kids = append(kids, rigid(func(gtx C) D { return th.prBadge(gtx, s, r, in) }))
 	}
 	kids = append(kids, rigid(func(gtx C) D { return th.trailingIcons(gtx, r, in) }))
 	return RowGap(gtx, 6, kids...)
+}
+
+// worktreeTip is the worktree icon's tooltip (ThreadWorktreeIndicator): the
+// worktree's folder and the branch on it.
+func worktreeTip(r *ThreadRow) string {
+	p := strings.TrimRight(strings.ReplaceAll(r.Worktree, `\`, "/"), "/")
+	if p = strings.TrimSpace(p[strings.LastIndex(p, "/")+1:]); p == "" {
+		p = r.Worktree
+	}
+	if r.Branch == "" {
+		return "Worktree: " + p
+	}
+	return "Worktree: " + p + " (" + r.Branch + ")"
 }
 
 // trailingIcons are a row's machine icon (on a list mixing machines) and
@@ -1496,20 +1609,28 @@ func statusPulse(now time.Time) (k float32, next time.Time) {
 	return float32(0.5 + 0.5*s), n
 }
 
-// terminalButton is the meta line's running terminal: 14dp in teal,
-// pulsing. A click opens the thread with its terminal.
-func (th *Theme) terminalButton(s *Scene, r *ThreadRow, in rowInk) W {
+// terminalButton is the meta line's running terminal: 14dp in teal (or
+// what rest makes of it: a settled row's at rest is its secondary label),
+// pulsing. A click opens the thread with its terminal; its tooltip says
+// how many are running.
+func (th *Theme) terminalButton(s *Scene, r *ThreadRow, in rowInk, rest func(color.NRGBA) color.NRGBA) W {
 	return func(gtx C) D {
 		col := Tailwind["teal-600"]
 		if dark {
 			col = alpha(Tailwind["teal-300"], 0xe6)
 		}
+		col = rest(col)
 		k, next := statusPulse(gtx.Now)
 		gtx.Execute(op.InvalidateCmd{At: next})
 		col.A = uint8(float32(col.A) * k)
 		d := LucideW("terminal", in.of(col), 14)(gtx)
 		if id := liveID(s, "terminal:"+r.ID); id != "" {
 			th.hit(gtx, id, d.Size)
+			tip := "1 terminal process running. Open terminal"
+			if r.Terminals != 1 {
+				tip = fmt.Sprintf("%d terminal processes running. Open terminal", r.Terminals)
+			}
+			th.listTip(gtx, id, tip, d.Size)
 		}
 		return d
 	}
@@ -1608,7 +1729,7 @@ func (th *Theme) slimRow(gtx C, s *Scene, r *ThreadRow, top int) D {
 		kids = append(kids, rigid(func(gtx C) D { return th.projectIcon(gtx, r.Icon, 16, in, dim) }))
 	}
 	if r.Draft {
-		kids = append(kids, rigid(LucideW("square-pen", in.of(rest(SP.WarningForeground)), 12)))
+		kids = append(kids, rigid(th.draftPen(s, r, in.of(rest(SP.WarningForeground)))))
 	}
 	kids = append(kids, flexed(func(gtx C) D { return th.title(gtx, s, r, in, lit, true) }))
 	if r.Pinned {
@@ -1617,7 +1738,7 @@ func (th *Theme) slimRow(gtx C, s *Scene, r *ThreadRow, top int) D {
 		}))
 	}
 	if r.Terminals > 0 {
-		kids = append(kids, rigid(th.terminalButton(s, r, in)))
+		kids = append(kids, rigid(th.terminalButton(s, r, in, rest)))
 	}
 	kids = append(kids, rigid(func(gtx C) D { return th.slimSlot(gtx, s, r, in, rest, shown) }))
 	RowGap(g, 10, kids...)
@@ -1733,9 +1854,17 @@ func (th *Theme) shelfHeader(gtx C, s *Scene, sh *Shelf) D {
 	)
 }
 
+// focusOutline is Chrome's outline: auto, which an element without ring
+// classes of its own gets from keyboard focus (§3.19): the ring colour at
+// 50%, 2dp inside r (outline-offset -2), rounded with it, on bg.
+func focusOutline(gtx C, r image.Rectangle, radius int, bg color.NRGBA) {
+	strokeRect(gtx, over(alpha(SP.Ring, 0x80), bg), r, radius, float32(2*max(1, dp(gtx, 1))))
+}
+
 // moreRow is the Settled shelf's "Show N more": 36dp, padded 0 by 10, a
 // 16dp chevron and 14/20 text 10dp apart in the sidebar's muted
-// foreground, the foreground on the row hover fill.
+// foreground, the foreground on the row hover fill. It has no ring
+// classes: keyboard focus outlines it.
 func (th *Theme) moreRow(gtx C, s *Scene, n int) D {
 	w := gtx.Constraints.Max.X
 	size := image.Pt(w, dp(gtx, slimH))
@@ -1747,7 +1876,10 @@ func (th *Theme) moreRow(gtx C, s *Scene, n int) D {
 		bg = over(SP.SidebarRowHover, SP.Sidebar)
 		col = SP.SidebarForeground
 	}
-	paintRow(gtx, size, rowInk{bg: bg, k: 1}, color.NRGBA{}, focused)
+	paintRow(gtx, size, rowInk{bg: bg, k: 1}, color.NRGBA{}, false)
+	if focused {
+		focusOutline(gtx, image.Rectangle{Max: size}, dp(gtx, 6), bg)
+	}
 	defer op.Offset(image.Pt(dp(gtx, 10), 0)).Push(gtx.Ops).Pop()
 	g := gtx
 	g.Constraints = layout.Exact(image.Pt(w-2*dp(gtx, 10), size.Y))
@@ -1834,8 +1966,8 @@ func (th *Theme) listNote(gtx C, note string) D {
 // query matched it, and the age, 32dp wide in the muted foreground at 55%;
 // a result found by its messages grows to 44dp for the matching one under
 // the title. The highlighted result (keyboard or pointer) and the open
-// thread take the active row fill. A settled thread's title is quieter,
-// 400 in the secondary label at 70%, until it's lit.
+// thread take the active row fill. A settled thread's title is 400, and
+// quieter, in the secondary label at 70%, until it's lit.
 func (th *Theme) resultRow(gtx C, s *Scene, r *ThreadRow, i, top int) D {
 	w := gtx.Constraints.Max.X
 	size := image.Pt(w, dp(gtx, slimH))
@@ -1869,14 +2001,23 @@ func (th *Theme) resultRow(gtx C, s *Scene, r *ThreadRow, i, top int) D {
 	if bg != SP.Sidebar {
 		fill(gtx, bg, image.Rectangle{Max: size}, dp(gtx, 6))
 	}
+	// A settled result's title is 400 and, until it's lit or hovered, in the
+	// secondary label at 70%, its icon grey at 40% and easing back over
+	// 150ms. A title being regenerated is at 55%.
 	settled := r.Shelf == "settled"
-	title := Txt{Size: 14, LineH: 20.0 / 14, Font: UI(font.Medium), Color: over(SP.Foreground, bg), MaxLines: 1}
-	if settled && !lit && !hovered {
-		title.Font, title.Color = UI(font.Normal), over(alpha(SP.SecondaryLabel, 0xb3), bg)
+	quiet := settled && !lit && !hovered
+	col := SP.Foreground
+	if quiet {
+		col = alpha(SP.SecondaryLabel, 0xb3)
 	}
+	if r.Regenerating {
+		col = faded(col, 0.55)
+	}
+	title := Txt{Size: 14, LineH: 20.0 / 14, Font: UI(font.Medium), Color: over(col, bg), MaxLines: 1}
 	dim := float32(0)
-	if settled && !lit && !hovered {
-		dim = 1
+	if settled {
+		title.Font = UI(font.Normal)
+		dim = 1 - th.transition(gtx, "result:"+r.ID+".icon", !quiet, transitionDur)
 	}
 	func() {
 		defer op.Offset(image.Pt(dp(gtx, 10), 0)).Push(gtx.Ops).Pop()
@@ -2262,17 +2403,19 @@ func (th *Theme) hoverCards(gtx C, s *Scene, top, shift int) {
 		}
 	}
 	for _, c := range th.in.cards {
-		th.hoverCard(gtx, s, c.r, c.box.Add(image.Pt(0, shift)), top)
+		th.hoverCard(gtx, s, c, c.box.Add(image.Pt(0, shift)), top)
 	}
 }
 
 // hoverCard is a row's card: T3's glass tooltip 4dp right of the row,
 // level with its top, kept inside the window. It grows from 98% and fades
 // in over 150ms from the side facing the row, and back out as it closes.
-// box is the row's box in the window, top the list's y there.
-func (th *Theme) hoverCard(gtx C, s *Scene, r *ThreadRow, box image.Rectangle, top int) {
+// box is the row's box in the window, top the list's y there. A mockup's
+// is open on its hovered row, unless the row's snooze menu is.
+func (th *Theme) hoverCard(gtx C, s *Scene, c listCard, box image.Rectangle, top int) {
+	r := c.r
 	key := "card:" + r.ID
-	open, instant := r.Hover, true
+	open, instant := c.hot, true
 	if s.Live {
 		open = r.ID == th.in.cardRow && !th.in.tipBusy && gtx.Now.Sub(th.in.cardSince) >= listTipDelay
 		instant = (open && th.in.cardInstant) || (!open && th.in.cardRow != "" && th.in.cardRow != r.ID)
@@ -2329,32 +2472,23 @@ func (th *Theme) hoverCard(gtx C, s *Scene, r *ThreadRow, box image.Rectangle, t
 
 // cardBody is the hover card: the glass tooltip surface (its fill alone,
 // without the blur) in a 1dp border, radius 6, the tooltip's 4 by 8 padding
-// around the card's 8 by 4; the title in 12/15 medium, then the lines 6dp
-// apart, each a 12dp icon and 12/16 text in the foreground at 75%, 8dp apart.
+// around the card's 8 by 4, as wide as its widest line and at most 320dp
+// in all (max-w-80). The title is a 15dp line of 12px medium; 8dp under
+// it the lines follow, 2dp in, each 16dp and 6 apart, a 12dp icon and
+// 12/16 text in the foreground at 75%, 8dp apart.
 func (th *Theme) cardBody(gtx C, r *ThreadRow) D {
 	bg := over(alpha(P.Popover, 0xd5), P.Background)
 	muted := over(P.MutedForeground, bg)
-	line := func(icon W, text string, col color.NRGBA) layout.FlexChild {
-		return rigid(func(gtx C) D {
-			return pad(0, 0, 0, 2).Layout(gtx, func(gtx C) D {
-				return RowGap(gtx, 8,
-					rigid(icon),
-					flexed(func(gtx C) D {
-						return th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: col, MaxLines: 1}, text)
-					}))
-			})
-		})
-	}
 	soft := over(alpha(P.Foreground, 0xbf), bg)
-	var lines []layout.FlexChild
-	gap := func() {
-		if len(lines) > 0 {
-			lines = append(lines, rigid(Spacer(0, 6)))
-		}
+	type line struct {
+		icon W
+		t    Txt
+		text string
+		cut  bool // cut in the middle, as a branch is
 	}
+	var lines []line
 	add := func(icon W, text string, col color.NRGBA) {
-		gap()
-		lines = append(lines, line(icon, text, col))
+		lines = append(lines, line{icon: icon, t: Txt{Size: 12, LineH: 16.0 / 12, Color: col, MaxLines: 1}, text: text})
 	}
 	if r.Project != "" {
 		add(func(gtx C) D { return th.projectIcon(gtx, r.Icon, 12, rowInk{bg: bg, k: 1}, 0) }, r.Project, soft)
@@ -2365,14 +2499,8 @@ func (th *Theme) cardBody(gtx C, r *ThreadRow) D {
 	if r.Branch != "" {
 		// The branch keeps the lines' own muted foreground: T3's
 		// MiddleTruncate here has no colour of its own.
-		gap()
-		lines = append(lines, rigid(func(gtx C) D {
-			return pad(0, 0, 0, 2).Layout(gtx, func(gtx C) D {
-				return RowGap(gtx, 8,
-					rigid(LucideW("git-branch", muted, 12)),
-					flexed(func(gtx C) D { return th.middleTruncate(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: muted}, r.Branch) }))
-			})
-		}))
+		add(LucideW("git-branch", muted, 12), r.Branch, muted)
+		lines[len(lines)-1].cut = true
 	}
 	if r.Provider != "" {
 		add(func(gtx C) D {
@@ -2400,16 +2528,46 @@ func (th *Theme) cardBody(gtx C, r *ThreadRow) D {
 		}
 		add(LucideW("circle-alert", col, 12), r.Error, col)
 	}
+	title := Txt{Size: 12, LineH: 15.0 / 12, Font: UI(font.Medium), Color: over(P.Foreground, bg), MaxLines: 1}
+	// Its width is its content's (max-content), inside the card's padding
+	// and the 320dp: the title's, or a line's 2dp indent, icon, gap and
+	// text.
+	edge := dp(gtx, 1+8+4)
+	w := th.textWidth(gtx, title, r.Title)
+	for _, l := range lines {
+		w = max(w, dp(gtx, 2+12+8)+th.textWidth(gtx, l.t, l.text))
+	}
+	w = max(0, min(w, gtx.Constraints.Max.X-2*edge))
+	at := func(y, h int, draw func(gtx C) D) {
+		defer op.Offset(image.Pt(edge, y)).Push(gtx.Ops).Pop()
+		g := gtx
+		g.Constraints = layout.Exact(image.Pt(w, h))
+		draw(g)
+	}
 	m := op.Record(gtx.Ops)
-	d := pad(1+4+8, 1+8+4, 1+4+8, 1+8+4).Layout(gtx, func(gtx C) D {
-		kids := []layout.FlexChild{rigid(func(gtx C) D {
-			return th.Text(gtx, Txt{Size: 12, LineH: 15.0 / 12, Font: UI(font.Medium), Color: over(P.Foreground, bg), MaxLines: 1}, r.Title)
-		})}
-		if len(lines) > 0 {
-			kids = append(kids, rigid(Spacer(0, 8)), rigid(func(gtx C) D { return Col(gtx, lines...) }))
+	y := edge
+	at(y, dp(gtx, 15), func(gtx C) D { return Row(gtx, flexed(func(gtx C) D { return th.Text(gtx, title, r.Title) })) })
+	y += dp(gtx, 15+8)
+	for i, l := range lines {
+		if i > 0 {
+			y += dp(gtx, 6)
 		}
-		return Col(gtx, kids...)
-	})
+		at(y, dp(gtx, 16), func(gtx C) D {
+			return pad(0, 0, 0, 2).Layout(gtx, func(gtx C) D {
+				return RowGap(gtx, 8, rigid(l.icon), flexed(func(gtx C) D {
+					if l.cut {
+						return th.middleTruncate(gtx, l.t, l.text)
+					}
+					return th.Text(gtx, l.t, l.text)
+				}))
+			})
+		})
+		y += dp(gtx, 16)
+	}
+	if len(lines) == 0 {
+		y -= dp(gtx, 8)
+	}
+	d := D{Size: image.Pt(w+2*edge, y+edge)}
 	call := m.Stop()
 	rr := image.Rectangle{Max: d.Size}
 	rad := dp(gtx, 6)
@@ -2427,6 +2585,16 @@ func (th *Theme) listTip(gtx C, id, tip string, size image.Point) {
 		th.in.tipBusy = true
 	}
 	th.tipDelay(gtx, id, tip, size, true, 0, listTipDelay)
+}
+
+// listHoverTip is listTip on something that isn't a button, an icon: the
+// pointer on it shows the tooltip, and a click on it is the row's.
+func (th *Theme) listHoverTip(gtx C, id, tip string, size image.Point) {
+	hovered := th.hoverArea(gtx, id, size)
+	if hovered {
+		th.in.tipBusy = true
+	}
+	th.tipFor(gtx, id, tip, size, hovered, true, 0, listTipDelay)
 }
 
 // ---------- the snooze menu ----------

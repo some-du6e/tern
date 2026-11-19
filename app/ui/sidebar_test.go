@@ -435,15 +435,22 @@ func TestUndoNotice(t *testing.T) {
 }
 
 // liveWindow draws frames through Gio's router at the times a test picks,
-// so the pointer's hover and rest show as they would in the app.
+// so the pointer's hover and rest show as they would in the app. Its size
+// is in px, scale px to the dp.
 type liveWindow struct {
-	win  *headless.Window
-	r    gioinput.Router
-	ops  op.Ops
-	size image.Point
+	win   *headless.Window
+	r     gioinput.Router
+	ops   op.Ops
+	size  image.Point
+	scale float32
 }
 
 func newLiveWindow(t *testing.T, size image.Point) *liveWindow {
+	t.Helper()
+	return newLiveWindowAt(t, size, 1)
+}
+
+func newLiveWindowAt(t *testing.T, size image.Point, scale float32) *liveWindow {
 	t.Helper()
 	win, err := headless.NewWindow(size.X, size.Y)
 	if err != nil {
@@ -453,13 +460,13 @@ func newLiveWindow(t *testing.T, size image.Point) *liveWindow {
 		t.Skipf("no headless GPU here: %v", err)
 	}
 	t.Cleanup(win.Release)
-	return &liveWindow{win: win, size: size}
+	return &liveWindow{win: win, size: size, scale: scale}
 }
 
 func (l *liveWindow) frame(t *testing.T, now time.Time, w layout.Widget) *image.RGBA {
 	t.Helper()
 	l.ops.Reset()
-	w(layout.Context{Ops: &l.ops, Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Exact(l.size), Source: l.r.Source(), Now: now})
+	w(layout.Context{Ops: &l.ops, Metric: unit.Metric{PxPerDp: l.scale, PxPerSp: l.scale}, Constraints: layout.Exact(l.size), Source: l.r.Source(), Now: now})
 	l.r.Frame(&l.ops)
 	if err := l.win.Frame(&l.ops); err != nil {
 		t.Fatal(err)
@@ -540,6 +547,10 @@ func TestJumpHints(t *testing.T) {
 	wantPixel(t, at(300*time.Millisecond), probe, SP.Sidebar, "let go")
 	lw.r.Queue(key.Event{Name: mod, State: key.Press, Modifiers: key.ModShortcut})
 	at(400 * time.Millisecond)
+	// Windows repeats a held modifier's press, which doesn't start the
+	// hold again: the keys show 200ms after the first.
+	lw.r.Queue(key.Event{Name: mod, State: key.Press, Modifiers: key.ModShortcut})
+	at(500 * time.Millisecond)
 	wantPixel(t, at(650*time.Millisecond), probe, kbd, "the jump key, held again")
 	th.WindowBlurred()
 	wantPixel(t, at(700*time.Millisecond), probe, SP.Sidebar, "the window lost the keyboard")
@@ -661,6 +672,24 @@ func TestContextMenu(t *testing.T) {
 	// 5 + 28 + 28 + 9 + 28 + 5: the menu ends at 403, with nothing under it.
 	wantPixel(t, img, image.Pt(620, 400), P.Popover, "the menu's bottom padding")
 	wantPixel(t, img, image.Pt(620, 406), P.Background, "below the menu: no shadow")
+	// The separator is 4dp under the second row, at 365, and starts 13dp
+	// in: the border, the scroller's 4dp padding and its own 8dp margin.
+	sep := over(P.ContrastBorder, P.Popover)
+	wantPixel(t, img, image.Pt(612, 365), P.Popover, "the separator's margin")
+	wantPixel(t, img, image.Pt(613, 365), sep, "the separator")
+	wantPixel(t, img, image.Pt(640, 364), P.Popover, "above the separator")
+	wantPixel(t, img, image.Pt(640, 366), P.Popover, "below the separator")
+	// It stops as far short of the menu's right border, found on the lit
+	// first row's line.
+	border := over(alpha(P.Foreground, 0x1a), P.Popover)
+	right := 0
+	for x := 640; x < 900; x++ {
+		if nearPixel(img.RGBAAt(x, 320), border) {
+			right = x
+		}
+	}
+	wantPixel(t, img, image.Pt(right-13, 365), sep, "the separator's end")
+	wantPixel(t, img, image.Pt(right-12, 365), P.Popover, "the separator's right margin")
 }
 
 // Near the window's corner the menu keeps 4dp inside it.
@@ -1189,4 +1218,520 @@ func TestRowComesBackAtRest(t *testing.T) {
 	// The slim row is 812..848: its icon at 18..34 and 822..838.
 	tile := over(alpha(projectColor("amber"), 0x24), SP.Sidebar)
 	wantPixel(t, img, image.Pt(19, 830), over(alpha(grey(tile), 0x66), SP.Sidebar), "the icon back, grey at 40% at once")
+}
+
+// desktopFrames drives the whole window through Gio's router, 1440 by 900.
+func desktopFrames(th *Theme, s *Scene) (frame func() []Action, r *gioinput.Router) {
+	r = new(gioinput.Router)
+	var ops op.Ops
+	return func() []Action {
+		ops.Reset()
+		gtx := layout.Context{Ops: &ops, Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Exact(image.Pt(1440, 900)), Source: r.Source(), Now: time.Now()}
+		th.Desktop(gtx, s)
+		r.Frame(&ops)
+		return th.Actions()
+	}, r
+}
+
+// count is how many of acts are id's.
+func count(acts []Action, id, kind string) int {
+	n := 0
+	for _, a := range acts {
+		if a.ID == id && a.Kind == kind {
+			n++
+		}
+	}
+	return n
+}
+
+// Enter in the project filter's search picks the highlighted row: the
+// field submits, as T3's combobox commits its highlight, and types
+// nothing. Shift+Enter is still the rows' (§5.8).
+func TestFilterSearchEnter(t *testing.T) {
+	th := NewTheme()
+	s := &Scene{Live: true, Sidebar: Sidebar{HasProjects: true, Filter: &ProjectFilter{Items: []FilterItem{{Label: "All projects", Selected: true, Highlighted: true}}}}}
+	frame, r := sidebarFrames(th, s)
+	th.Focus("filter.search")
+	frame()
+	frame()
+	enter := func(mods key.Modifiers) []Action {
+		r.Queue(key.Event{Name: key.NameReturn, Modifiers: mods, State: key.Press}, key.Event{Name: key.NameReturn, Modifiers: mods, State: key.Release})
+		return append(frame(), frame()...)
+	}
+	if acts := enter(0); count(acts, "filter.search", "submit") != 1 {
+		t.Fatalf("Enter: actions %+v, want the field's submit", acts)
+	}
+	if acts := enter(key.ModShift); count(acts, "filter.search", "key") != 1 || count(acts, "filter.search", "submit") != 0 {
+		t.Fatalf("Shift+Enter: actions %+v, want the rows' key", acts)
+	}
+	if got := th.EditorText("filter.search"); got != "" {
+		t.Fatalf("the field holds %q after Enter", got)
+	}
+}
+
+// The clear button hovers to the foreground on the accent, not to the
+// accent's foreground: ghost-muted hovers to text-foreground (§3.1,
+// measured in dark, where the two differ).
+func TestClearButtonHover(t *testing.T) {
+	defer SetDark(false)
+	SetDark(true)
+	th := NewTheme()
+	s := &Scene{Live: true, Sidebar: Sidebar{HasProjects: true}}
+	th.SetEditorText("search", "x")
+	const k = 4 // so the x's 1.75 stroke covers whole pixels
+	lw := newLiveWindowAt(t, image.Pt(256*k, 120*k), k)
+	frame := func() *image.RGBA {
+		return lw.frame(t, time.Now(), func(gtx C) D {
+			fill(gtx, SP.Sidebar, image.Rectangle{Max: gtx.Constraints.Max}, 0)
+			th.sidebar(gtx, s)
+			return D{Size: gtx.Constraints.Max}
+		})
+	}
+	frame()
+	// The field is 8..188 by 8..40; its clear button 20dp, 8dp from its
+	// end: 160..180 by 14..34, its x 164..176 by 18..30.
+	lw.r.Queue(pointer.Event{Kind: pointer.Move, Position: f32.Pt(170*k, 24*k), Source: pointer.Mouse})
+	frame()
+	img := frame()
+	bg := over(SP.Accent, over(SP.SidebarRowHover, SP.Sidebar))
+	wantPixel(t, img, image.Pt(161*k, 15*k), bg, "the button's hover fill")
+	var best color.RGBA
+	for y := 18 * k; y < 30*k; y++ {
+		for x := 164 * k; x < 176*k; x++ {
+			if c := img.RGBAAt(x, y); int(c.R)+int(c.G)+int(c.B) > int(best.R)+int(best.G)+int(best.B) {
+				best = c
+			}
+		}
+	}
+	if !nearPixel(best, SP.Foreground) {
+		t.Errorf("the hovered x is #%02x%02x%02x at its brightest, want the foreground", best.R, best.G, best.B)
+	}
+}
+
+// The hover card is as wide as its content, inside 320dp (max-w-80;
+// §3.15, "width: content"), and its lines are 16dp each, 6dp apart, 8dp
+// under the title's 15: four lines make it 131 tall.
+func TestHoverCardSize(t *testing.T) {
+	defer SetDark(false)
+	SetDark(true)
+	th := NewTheme()
+	r := &ThreadRow{ID: "e/1", Title: "Card", Project: "tern", Icon: ProjectIcon{Text: "TN", Color: "amber"},
+		Machine: "workstation", Branch: "main", Provider: "Claude", Model: "Opus 5.5", Age: "1h", Hover: true}
+	s := &Scene{Sidebar: Sidebar{Items: []SidebarItem{{Row: r}}}}
+	img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, s) })
+	gtx := layout.Context{Ops: new(op.Ops), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+	line := Txt{Size: 12, LineH: 16.0 / 12, MaxLines: 1}
+	w := th.textWidth(gtx, Txt{Size: 12, LineH: 15.0 / 12, Font: UI(font.Medium), MaxLines: 1}, "Card")
+	for _, text := range []string{"tern", "workstation", "main", "Opus 5.5"} {
+		w = max(w, 2+12+8+th.textWidth(gtx, line, text))
+	}
+	// The card is at 251, 102: its border, the tooltip's 8dp and the
+	// card's 4 either side of the widest line.
+	glass := over(alpha(P.Popover, 0xd5), P.Background)
+	border := over(alpha(P.Foreground, 0x1a), glass)
+	right := 251 + w + 26 - 1
+	wantPixel(t, img, image.Pt(right, 140), border, "the card's right border")
+	wantPixel(t, img, image.Pt(right-1, 140), glass, "just inside it")
+	wantPixel(t, img, image.Pt(259, 232), border, "the card's bottom border")
+	wantPixel(t, img, image.Pt(259, 231), glass, "just above it")
+}
+
+// The filter's first row starts 48dp into the popup: under its 1dp border,
+// the search block's 43 (10 + 26 + 6 and its 1dp rule) and the list's 4dp
+// of padding; the rule itself sits 1dp up, at 42 (§3.2).
+func TestFilterRowsStart(t *testing.T) {
+	th := NewTheme()
+	s := &Scene{Sidebar: Sidebar{HasProjects: true, Filter: &ProjectFilter{Items: []FilterItem{{Label: "All projects", Selected: true, Highlighted: true}}}}}
+	img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, s) })
+	lit := over(alpha(P.Foreground, 0x17), P.Popover)
+	// The popup is at 191, 94.
+	wantPixel(t, img, image.Pt(240, 136), over(faded(P.Border, 0.7), P.Popover), "the search's rule")
+	wantPixel(t, img, image.Pt(240, 141), P.Popover, "above the first row")
+	wantPixel(t, img, image.Pt(240, 142), lit, "the first row's top")
+	wantPixel(t, img, image.Pt(240, 173), lit, "its bottom")
+}
+
+// The filter keeps its highlighted row in view as the arrows take it past
+// the popup's height, as T3's combobox does, moving the rows as little as
+// it can.
+func TestFilterScrollsToHighlight(t *testing.T) {
+	th := NewTheme()
+	f := &ProjectFilter{}
+	for i := range 20 {
+		f.Items = append(f.Items, FilterItem{ID: fmt.Sprint(i), Label: fmt.Sprint("project ", i), Icon: ProjectIcon{Text: "PR", Color: "sky"}})
+	}
+	f.Items[15].Highlighted = true
+	s := &Scene{Sidebar: Sidebar{HasProjects: true, Filter: f}}
+	img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, s) })
+	lit := over(alpha(P.Foreground, 0x17), P.Popover)
+	// The popup is 370 tall at 191, 94, its rows' 317dp from 142: the 16th
+	// row, 480..512 among them, ends at their bottom, at 427..459.
+	wantPixel(t, img, image.Pt(450, 428), lit, "the lit row, scrolled in")
+	wantPixel(t, img, image.Pt(450, 458), lit, "its bottom")
+	wantPixel(t, img, image.Pt(450, 425), P.Popover, "the row before it")
+}
+
+// A settled search result's title is 400 whether it's lit or not: lit, it
+// turns the foreground and keeps its weight (§3.11). A title being
+// regenerated is at 55%.
+func TestSearchResultTitles(t *testing.T) {
+	th := NewTheme()
+	s := &Scene{Sidebar: Sidebar{HasProjects: true, Query: "plan", Results: []ThreadRow{
+		{ID: "e/1", Title: "Plan the move", Shelf: "settled", Age: "3d"},
+		{ID: "e/2", Title: "Plan again", Regenerating: true, Age: "1h"},
+	}}}
+	img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, s) })
+	active := over(SP.SidebarRowActive, SP.Sidebar)
+	// The lit first result is 100..136, its title on the 20dp line at 108,
+	// from x 18; the second is 137..173.
+	ref := textAt(t, th, Txt{Size: 14, LineH: 20.0 / 14, Color: over(SP.Foreground, active), MaxLines: 1}, "Plan the move", image.Pt(18, 108), active)
+	sameInk(t, img, ref, image.Rect(18, 108, 140, 128), "the lit settled title")
+	ref = textAt(t, th, Txt{Size: 14, LineH: 20.0 / 14, Font: UI(font.Medium), Color: over(faded(SP.Foreground, 0.55), SP.Sidebar), MaxLines: 1},
+		"Plan again", image.Pt(18, 145), SP.Sidebar)
+	sameInk(t, img, ref, image.Rect(18, 145, 140, 165), "the regenerating title")
+}
+
+// darkest is the darkest pixel in r.
+func darkest(img *image.RGBA, r image.Rectangle) color.RGBA {
+	best := color.RGBA{R: 0xff, G: 0xff, B: 0xff}
+	for y := r.Min.Y; y < r.Max.Y; y++ {
+		for x := r.Min.X; x < r.Max.X; x++ {
+			if c := img.RGBAAt(x, y); int(c.R)+int(c.G)+int(c.B) < int(best.R)+int(best.G)+int(best.B) {
+				best = c
+			}
+		}
+	}
+	return best
+}
+
+// A failed card whose wake the user hasn't seen keeps its title in the
+// full foreground: only one seen, neither unread nor woke, is at 95%
+// (SidebarThreadRow.tsx).
+func TestFailedWokeTitle(t *testing.T) {
+	th := NewTheme()
+	for _, c := range []struct {
+		woke bool
+		want color.NRGBA
+	}{{true, SP.Foreground}, {false, over(alpha(SP.Foreground, 0xf2), SP.Sidebar)}} {
+		s := &Scene{Sidebar: Sidebar{Items: []SidebarItem{{Row: &ThreadRow{ID: "e/1", Title: "Relay", Status: StatusFailed, Label: "Failed", Woke: c.woke}}}}}
+		img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, s) })
+		// The 60dp card's title is on its 20dp line at 102 + 32, from x 18.
+		if got := darkest(img, image.Rect(18, 134, 80, 154)); !nearPixel(got, c.want) {
+			t.Errorf("woke %v: the title is #%02x%02x%02x at its darkest, want #%02x%02x%02x", c.woke, got.R, got.G, got.B, c.want.R, c.want.G, c.want.B)
+		}
+	}
+}
+
+// At rest a settled row is all its secondary label, its running terminal
+// too (SidebarThreadRow.tsx); a card's terminal is teal.
+func TestSettledTerminalAtRest(t *testing.T) {
+	th := NewTheme()
+	s := &Scene{Sidebar: Sidebar{Items: []SidebarItem{
+		{Row: &ThreadRow{ID: "e/1", Title: "Card", Age: "1h", Terminals: 1}},
+		{Shelf: &Shelf{ID: "settled", Label: "Settled", Count: 1, Open: true}},
+		{Row: &ThreadRow{ID: "e/2", Slim: true, Shelf: "settled", Title: "Parked", Age: "3d", Terminals: 1}},
+	}}}
+	img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, s) })
+	// hue is how much greener than red the icon's inked pixels get.
+	hue := func(r image.Rectangle) int {
+		most := 0
+		for y := r.Min.Y; y < r.Max.Y; y++ {
+			for x := r.Min.X; x < r.Max.X; x++ {
+				if c := img.RGBAAt(x, y); inked(c, SP.Sidebar) {
+					most = max(most, int(c.G)-int(c.R))
+				}
+			}
+		}
+		return most
+	}
+	// The card's meta line is 156..172, its terminal 6dp before the line's
+	// end at 237: 217..231. The slim row is 812..848, its terminal 10dp
+	// before its 32dp slot: 181..195.
+	if g := hue(image.Rect(217, 157, 231, 171)); g < 40 {
+		t.Errorf("the card's terminal is only %d greener than red, want teal", g)
+	}
+	if g := hue(image.Rect(181, 823, 195, 837)); g > 6 {
+		t.Errorf("the settled row's terminal is %d greener than red, want its grey secondary label", g)
+	}
+}
+
+// A held mod+Shift+] steps once, and a held mod+Z undoes once: the OS's
+// repeats, which Gio passes on as more presses (and X11 as a release and
+// a press together), do nothing until the key is let go of (Sidebar.tsx,
+// AppSidebarLayout.tsx skip event.repeat).
+func TestHeldKeysActOnce(t *testing.T) {
+	th := NewTheme()
+	frame, r := desktopFrames(th, &Scene{Live: true})
+	frame()
+	for _, c := range []struct {
+		name key.Name
+		mods key.Modifiers
+		id   string
+	}{{"}", key.ModShortcut | key.ModShift, "thread.next"}, {"Z", key.ModShortcut, "thread.undo"}, {"3", key.ModShortcut, "thread.jump:3"}} {
+		press := key.Event{Name: c.name, Modifiers: c.mods, State: key.Press}
+		release := key.Event{Name: c.name, Modifiers: c.mods, State: key.Release}
+		r.Queue(press)
+		if n := count(frame(), c.id, "click"); n != 1 {
+			t.Fatalf("%s pressed: %d of %s, want 1", c.name, n, c.id)
+		}
+		r.Queue(press)
+		if n := count(frame(), c.id, "click"); n != 0 {
+			t.Fatalf("%s repeated: %d of %s, want none", c.name, n, c.id)
+		}
+		r.Queue(release, press)
+		if n := count(frame(), c.id, "click"); n != 0 {
+			t.Fatalf("%s repeated as X11 does: %d of %s, want none", c.name, n, c.id)
+		}
+		r.Queue(release)
+		frame()
+		r.Queue(press, release)
+		if n := count(frame(), c.id, "click"); n != 1 {
+			t.Fatalf("%s pressed again: %d of %s, want 1", c.name, n, c.id)
+		}
+	}
+}
+
+// A held Enter on the menu's Delete picks it once: its second pick, which
+// deletes, has to be a press of its own (§5.13).
+func TestHeldEnterPicksOnce(t *testing.T) {
+	th := NewTheme()
+	s := &Scene{Live: true, Menu: &ContextMenu{Keyboard: true, Items: []MenuItem{{ID: "delete", Label: "Delete", Icon: "trash", Danger: true}}}}
+	frame, r := desktopFrames(th, s)
+	frame()
+	frame()
+	press := key.Event{Name: key.NameReturn, State: key.Press}
+	release := key.Event{Name: key.NameReturn, State: key.Release}
+	r.Queue(press)
+	if n := count(frame(), "ctx:delete", "click"); n != 1 {
+		t.Fatalf("Enter: %d picks, want 1", n)
+	}
+	r.Queue(press)
+	r.Queue(release, press)
+	if n := count(frame(), "ctx:delete", "click"); n != 0 {
+		t.Fatalf("Enter held: %d more picks, want none", n)
+	}
+	r.Queue(release)
+	frame()
+	r.Queue(press, release)
+	if n := count(frame(), "ctx:delete", "click"); n != 1 {
+		t.Fatalf("Enter again: %d picks, want 1", n)
+	}
+}
+
+// mod+Z in a text field undoes the last park only while the sidebar
+// shows its notice: collapsed, the field keeps its own undo
+// (AppSidebarLayout.tsx).
+func TestUndoClaimNeedsTheSidebar(t *testing.T) {
+	for _, hidden := range []bool{false, true} {
+		th := NewTheme()
+		s := &Scene{Live: true, SidebarHidden: hidden, Sidebar: Sidebar{Undo: "Settled", UndoClaim: true}}
+		frame, r := desktopFrames(th, s)
+		th.Focus("composer")
+		frame()
+		frame()
+		r.Queue(key.Event{Name: "Z", Modifiers: key.ModShortcut, State: key.Press}, key.Event{Name: "Z", Modifiers: key.ModShortcut, State: key.Release})
+		if n := count(frame(), "thread.undo", "click"); (n == 1) == hidden {
+			t.Errorf("sidebar hidden %v: %d undos of the park", hidden, n)
+		}
+	}
+}
+
+// Closing a row's menu gives the keyboard back to the text field that had
+// it, as T3's menu restores the focus it took (§5.13).
+func TestMenuGivesFocusBackToTheField(t *testing.T) {
+	th := NewTheme()
+	s := &Scene{Live: true, Sidebar: Sidebar{HasProjects: true}}
+	frame, r := desktopFrames(th, s)
+	th.Focus("search")
+	frame()
+	frame()
+	ed := th.Editor("search")
+	if !r.Source().Focused(ed) {
+		t.Fatal("the search field didn't take the focus")
+	}
+	s.Menu = &ContextMenu{Items: []MenuItem{{ID: "pin", Label: "Pin thread", Icon: "pin"}}}
+	frame()
+	frame()
+	if r.Source().Focused(ed) {
+		t.Fatal("the menu didn't take the focus")
+	}
+	s.Menu = nil
+	frame()
+	frame()
+	if !r.Source().Focused(ed) {
+		t.Fatal("the menu closed, and the search field doesn't have the focus back")
+	}
+}
+
+// A submenu opened by hovering its row opens with nothing lit, whatever
+// was lit in the submenu open before it (§5.13): Enter can't act on a row
+// the pointer never touched.
+func TestSubmenuOpensUnlit(t *testing.T) {
+	th := NewTheme()
+	sub := func(p string) []MenuItem {
+		return []MenuItem{{ID: p + "1", Label: p + "1"}, {ID: p + "2", Label: p + "2"}, {ID: p + "3", Label: p + "3"}}
+	}
+	s := &Scene{Live: true, Menu: &ContextMenu{Items: []MenuItem{
+		{ID: "a", Label: "A", Icon: "clock", Children: sub("a")},
+		{ID: "b", Label: "B", Icon: "copy", Children: sub("b")},
+	}}}
+	th.in.ctxAt = image.Pt(600, 300)
+	lw := newLiveWindow(t, image.Pt(1440, 900))
+	t0 := time.Now()
+	at := func(d time.Duration) *image.RGBA {
+		return lw.frame(t, t0.Add(d), func(gtx C) D { return th.Desktop(gtx, s) })
+	}
+	move := func(x, y float32) {
+		lw.r.Queue(pointer.Event{Kind: pointer.Move, Position: f32.Pt(x, y), Source: pointer.Mouse})
+	}
+	lit := over(P.Accent, P.Popover)
+	// The 128dp menu's rows are 305..333 and 333..361; a submenu opens 4dp
+	// past them at x 727, level with its row, its rows from 5dp down.
+	// Their labels are short: x 840 is clear of them.
+	at(0)
+	move(650, 319)
+	at(10 * time.Millisecond)
+	at(20 * time.Millisecond)
+	move(780, 380) // A's third row, 366..394
+	at(30 * time.Millisecond)
+	wantPixel(t, at(300*time.Millisecond), image.Pt(840, 390), lit, "A's third row, hovered")
+	move(650, 347) // B, whose submenu's rows are 338..366, 366..394 and 394..422
+	at(310 * time.Millisecond)
+	img := at(600 * time.Millisecond)
+	for _, y := range []int{352, 380, 408} {
+		wantPixel(t, img, image.Pt(840, y), P.Popover, fmt.Sprintf("B's row at %d", y))
+	}
+}
+
+// A menu row's highlight eases in over 150ms (transition-colors, §6).
+func TestMenuHighlightEases(t *testing.T) {
+	th := NewTheme()
+	s := &Scene{Live: true, Menu: &ContextMenu{Items: []MenuItem{{ID: "pin", Label: "Pin thread", Icon: "pin"}, {ID: "settle", Label: "Settle thread", Icon: "circle-check"}}}}
+	th.in.ctxAt = image.Pt(600, 300)
+	lw := newLiveWindow(t, image.Pt(1440, 900))
+	t0 := time.Now()
+	at := func(d time.Duration) *image.RGBA {
+		return lw.frame(t, t0.Add(d), func(gtx C) D { return th.Desktop(gtx, s) })
+	}
+	at(0)
+	lw.r.Queue(pointer.Event{Kind: pointer.Move, Position: f32.Pt(700, 347), Source: pointer.Mouse})
+	at(10 * time.Millisecond)
+	lit := over(P.Accent, P.Popover)
+	// The second row is 333..361; half way through, its fill is half way.
+	if c := at(85*time.Millisecond).RGBAAt(610, 340); int(c.R) < int(lit.R)+2 || int(c.R) > int(P.Popover.R)-2 {
+		t.Errorf("half way in the row is #%02x%02x%02x, want between #%02x%02x%02x and #%02x%02x%02x",
+			c.R, c.G, c.B, P.Popover.R, P.Popover.G, P.Popover.B, lit.R, lit.G, lit.B)
+	}
+	wantPixel(t, at(300*time.Millisecond), image.Pt(610, 340), lit, "the row, lit")
+}
+
+// A row with the keyboard's focus that leaves the list, settled onto a
+// folded shelf, hands the focus to its shelf's header, or to the row now
+// in its place when it had none (sidebarTree.ts): the keys carry on from
+// there.
+func TestFocusMovesOnWhenRowLeaves(t *testing.T) {
+	th := NewTheme()
+	one, two, four := &ThreadRow{ID: "e/1", Title: "One"}, &ThreadRow{ID: "e/2", Title: "Two"}, &ThreadRow{ID: "e/4", Title: "Four"}
+	three := &ThreadRow{ID: "e/3", Slim: true, Shelf: "settled", Title: "Three"}
+	shelf := &Shelf{ID: "settled", Label: "Settled", Count: 1, Open: true}
+	s := &Scene{Live: true, Sidebar: Sidebar{Items: []SidebarItem{{Row: one}, {Row: two}, {Row: four}, {Shelf: shelf}, {Row: three}}}}
+	var r gioinput.Router
+	var ops op.Ops
+	frame := func() []Action {
+		ops.Reset()
+		gtx := layout.Context{Ops: &ops, Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Exact(image.Pt(256, 800)), Source: r.Source(), Now: time.Now()}
+		th.forget() // a frame of its own, as Desktop's are
+		th.sidebar(gtx, s)
+		r.Frame(&ops)
+		return th.Actions()
+	}
+	press := func(name key.Name) []Action {
+		r.Queue(key.Event{Name: name, State: key.Press})
+		return append(frame(), frame()...)
+	}
+	frame()
+	r.MoveFocus(key.FocusForward)
+	frame()
+	press(key.NameEnd)
+	frame() // the focus, moved to Three at the last frame's end, is drawn
+	s.Sidebar.Items = []SidebarItem{{Row: one}, {Row: two}, {Row: four}, {Shelf: &Shelf{ID: "settled", Label: "Settled", Count: 2}}}
+	frame()
+	if acts := press(key.NameReturn); count(acts, "shelf:settled", "click") != 1 {
+		t.Fatalf("after its row left: actions %+v, want the Settled header's", acts)
+	}
+	press(key.NameHome)
+	press(key.NameDownArrow)
+	frame()
+	s.Sidebar.Items = []SidebarItem{{Row: one}, {Row: four}, {Shelf: &Shelf{ID: "settled", Label: "Settled", Count: 3}}}
+	frame()
+	if acts := press(key.NameReturn); count(acts, "thread:e/4", "click") != 1 {
+		t.Fatalf("after Two left: actions %+v, want Four's, now in its place", acts)
+	}
+}
+
+// "Show N more" has no ring of its own: keyboard focus draws Chrome's
+// outline in the ring colour at 50%, 2dp inside it (§3.19, measured in
+// dark).
+func TestShowMoreFocusRing(t *testing.T) {
+	defer SetDark(false)
+	SetDark(true)
+	th := NewTheme()
+	s := &Scene{Live: true, Sidebar: Sidebar{Items: []SidebarItem{
+		{Shelf: &Shelf{ID: "settled", Label: "Settled", Count: 40, Open: true}},
+		{Row: &ThreadRow{ID: "e/1", Slim: true, Shelf: "settled", Title: "Parked", Age: "3d"}},
+		{More: 25},
+	}}}
+	lw := newLiveWindow(t, image.Pt(256, 800))
+	frame := func() *image.RGBA {
+		return lw.frame(t, time.Now(), func(gtx C) D {
+			fill(gtx, SP.Sidebar, image.Rectangle{Max: gtx.Constraints.Max}, 0)
+			th.sidebar(gtx, s)
+			return D{Size: gtx.Constraints.Max}
+		})
+	}
+	frame()
+	lw.r.MoveFocus(key.FocusForward)
+	frame()
+	lw.r.Queue(key.Event{Name: key.NameEnd, State: key.Press})
+	frame()
+	frame()
+	img := frame()
+	// The list is 48..756 and ends in 8dp of padding: "Show 25 more" is
+	// 712..748, from x 8.
+	ring := over(alpha(SP.Ring, 0x80), SP.Sidebar)
+	wantPixel(t, img, image.Pt(8, 730), ring, "the outline's outer pixel")
+	wantPixel(t, img, image.Pt(9, 730), ring, "its inner pixel")
+	wantPixel(t, img, image.Pt(10, 730), SP.Sidebar, "inside it")
+}
+
+// The worktree icon and the terminal button have tooltips of their own,
+// on top after the list's 150ms rest, and the row's hover card stands
+// aside while one shows (ThreadStatusIndicators.tsx).
+func TestRowIconTooltips(t *testing.T) {
+	th := NewTheme()
+	s := &Scene{Live: true, Sidebar: Sidebar{Items: []SidebarItem{{Row: &ThreadRow{ID: "e/1", Title: "One", Age: "5m",
+		Branch: "t3/go-client", Worktree: "/work/tern/.worktrees/go-client", Terminals: 2}}}}}
+	lw := newLiveWindow(t, image.Pt(1440, 900))
+	t0 := time.Now()
+	at := func(d time.Duration) *image.RGBA {
+		return lw.frame(t, t0.Add(d), func(gtx C) D { return th.Desktop(gtx, s) })
+	}
+	gtx := layout.Context{Ops: new(op.Ops), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Constraints{Max: image.Pt(320, 200)}}
+	// The card is 102..180, its meta line 156..172: the worktree icon is
+	// 14dp at 18, 157, the terminal 14dp at 217.
+	for i, c := range []struct {
+		x   int
+		tip string
+	}{{18, "Worktree: go-client (t3/go-client)"}, {217, "2 terminal processes running. Open terminal"}} {
+		start := time.Duration(i) * time.Second
+		lw.r.Queue(pointer.Event{Kind: pointer.Move, Position: f32.Pt(float32(c.x+7), 164), Source: pointer.Mouse})
+		at(start + 10*time.Millisecond)
+		at(start + 170*time.Millisecond)
+		img := at(start + 500*time.Millisecond)
+		size := th.tooltip(gtx, c.tip).Size
+		left := c.x + (14-size.X)/2
+		wantPixel(t, img, image.Pt(left+size.X-3, 157-4-size.Y/2), P.Popover, c.tip)
+		// Where the card's left border would be, above the tooltips.
+		wantPixel(t, img, image.Pt(251, 110), SP.Sidebar, c.tip+": the row's card, stood aside")
+	}
 }

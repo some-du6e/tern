@@ -2,6 +2,7 @@ package ui
 
 import (
 	"image"
+	"strconv"
 
 	"gioui.org/gesture"
 	"gioui.org/io/event"
@@ -20,12 +21,23 @@ import (
 // menuState is the open context menu: the submenu open at each level, by
 // item index, and the highlighted item at each level, -1 for none.
 type menuState struct {
-	open  bool
-	path  []int
-	hi    []int
-	tag   int    // the menu's keyboard focus
-	from  string // the row that had the focus as it opened, which gets it back
+	open bool
+	path []int
+	hi   []int
+	tag  int // the menu's keyboard focus
+	// What had the focus as it opened, which gets it back: a row's nav, a
+	// text field's "editor:<id>", or "terminal".
+	from  string
 	hover map[string]*gesture.Hover
+}
+
+// closeAfter closes the submenus past level, and their highlights go with
+// them: a submenu opens on none, or on its first item from the keyboard.
+func (ms *menuState) closeAfter(level int) {
+	ms.path = ms.path[:min(level, len(ms.path))]
+	for l := level + 1; l < len(ms.hi); l++ {
+		ms.hi[l] = -1
+	}
 }
 
 // contextMenu draws s.Menu at the right-click (or the bottom left of the
@@ -39,6 +51,14 @@ func (th *Theme) contextMenu(gtx C, win image.Point, s *Scene) {
 			if gtx.Focused(t) {
 				from = nav
 			}
+		}
+		for id, ed := range th.in.editors {
+			if gtx.Focused(ed) {
+				from = "editor:" + id
+			}
+		}
+		if gtx.Focused(&th.in.term) {
+			from = "terminal"
 		}
 		*ms = menuState{open: true, hi: []int{-1}, from: from, hover: ms.hover}
 		if s.Menu.Keyboard {
@@ -88,13 +108,21 @@ func (th *Theme) contextMenu(gtx C, win image.Point, s *Scene) {
 }
 
 // menuClosed is the menu gone since the last frame. If it still had the
-// focus and nothing else is taking it, the focus goes back to the row that
-// had it as the menu opened (contextMenuFallback.ts restores the element
-// focused before), so the list's keys work on from there.
+// focus and nothing else is taking it, the focus goes back to what had it
+// as the menu opened (contextMenuFallback.ts restores the element focused
+// before): the row, so the list's keys work on from there, or the text
+// field or the terminal, caret and all.
 func (th *Theme) menuClosed(gtx C) {
 	ms := &th.in.menu
 	if gtx.Focused(&ms.tag) && th.in.focus == "" {
-		th.in.focusRow = ms.from
+		switch id, ok := cutPrefix(ms.from, "editor:"); {
+		case ok:
+			th.in.focus = id
+		case ms.from == "terminal":
+			gtx.Execute(key.FocusCmd{Tag: &th.in.term})
+		default:
+			th.in.focusRow = ms.from
+		}
 	}
 	ms.open = false
 }
@@ -146,7 +174,13 @@ func (th *Theme) menuKeys(gtx C, root []MenuItem) {
 			return
 		}
 		e, ok := ev.(key.Event)
-		if !ok || e.State != key.Press {
+		if !ok {
+			continue
+		}
+		// A held Enter or Space picks once: Delete's second pick has to be
+		// a press of its own.
+		again := th.in.keys.repeat(e, th.in.frame)
+		if e.State != key.Press {
 			continue
 		}
 		lvl := 0
@@ -177,7 +211,8 @@ func (th *Theme) menuKeys(gtx C, root []MenuItem) {
 			if e.Name == key.NameUpArrow {
 				dir = -1
 			}
-			ms.hi[lvl], ms.path = nextEnabled(items, hi, dir), ms.path[:min(lvl, len(ms.path))]
+			ms.hi[lvl] = nextEnabled(items, hi, dir)
+			ms.closeAfter(lvl)
 		case key.NameHome:
 			ms.hi[lvl] = nextEnabled(items, -1, 1)
 		case key.NameEnd:
@@ -196,7 +231,7 @@ func (th *Theme) menuKeys(gtx C, root []MenuItem) {
 			th.push(Action{ID: "menus.close", Kind: "click"})
 		default: // Enter, Space
 			switch {
-			case hi < 0 || items[hi].Off:
+			case again || hi < 0 || items[hi].Off:
 			case len(items[hi].Children) > 0:
 				openSub()
 			default:
@@ -255,7 +290,7 @@ func (th *Theme) menuLevel(gtx C, items []MenuItem, level int) (D, []image.Recta
 	y := edge
 	for i, it := range items {
 		if it.Sep && i > 0 {
-			hline(gtx, over(P.ContrastBorder, bg), y+dp(gtx, 4), edge+dp(gtx, 4), width-edge-dp(gtx, 4))
+			hline(gtx, over(P.ContrastBorder, bg), y+dp(gtx, 4), edge+dp(gtx, 8), width-edge-dp(gtx, 8))
 			y += sepH
 		}
 		rows[i] = image.Rect(edge, y, width-edge, y+rowH)
@@ -269,8 +304,9 @@ func (th *Theme) menuLevel(gtx C, items []MenuItem, level int) (D, []image.Recta
 }
 
 // menuRow is one row of a menu: highlighted under the pointer or the
-// keyboard with accent (a destructive row with its colour at 10%), muted
-// at 64% when it can't be picked. Hovering a submenu's row opens it;
+// keyboard with accent (a destructive row with its colour at 10%), its
+// colours easing over 150ms (transition-colors); muted at 64% when it
+// can't be picked. Hovering a submenu's row opens it, on no highlight;
 // hovering another closes the ones past it.
 func (th *Theme) menuRow(gtx C, it MenuItem, level, i int, size image.Point) {
 	ms := &th.in.menu
@@ -301,26 +337,25 @@ func (th *Theme) menuRow(gtx C, it MenuItem, level, i int, size image.Point) {
 	}
 	if hovered && (ms.hi[level] != i || (sub && (len(ms.path) <= level || ms.path[level] != i))) {
 		ms.hi[level] = i
-		ms.path = ms.path[:min(level, len(ms.path))]
+		ms.closeAfter(level)
 		if sub {
 			ms.path = append(ms.path, i)
 		}
 		gtx.Execute(op.InvalidateCmd{})
 	}
 	lit := !it.Off && ms.hi[level] == i
+	k := th.transition(gtx, "menu:"+strconv.Itoa(level)+":"+it.ID, lit, transitionDur)
 	danger := it.Danger && !sub
 	bg, text, iconCol := P.Popover, P.ContrastForeground, P.MutedForeground
 	switch {
 	case it.Off:
 		text, iconCol = over(alpha(P.ContrastMutedForeground, 0xa3), bg), over(alpha(P.MutedForeground, 0xa3), bg)
-	case danger && lit:
-		bg = over(alpha(P.Destructive, 0x1a), P.Popover)
-		text, iconCol = P.DestructiveForeground, P.DestructiveForeground
 	case danger:
+		bg = lerpCol(P.Popover, over(alpha(P.Destructive, 0x1a), P.Popover), k)
 		text, iconCol = P.DestructiveForeground, P.DestructiveForeground
-	case lit:
-		bg = over(P.Accent, P.Popover)
-		text = P.ContrastAccentForeground
+	default:
+		bg = lerpCol(P.Popover, over(P.Accent, P.Popover), k)
+		text = lerpCol(P.ContrastForeground, P.ContrastAccentForeground, k)
 	}
 	if bg != P.Popover {
 		fill(gtx, bg, image.Rectangle{Max: size}, dp(gtx, 4))

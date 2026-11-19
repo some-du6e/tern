@@ -59,9 +59,10 @@ type input struct {
 	railW       float32
 	railEdge    handle
 	clicks      map[string]*gesture.Click
-	context     map[string]*int // right-click targets, by the same ids
-	ptr         int             // tag for the window-wide pointer watch
-	ctxAt       image.Point     // where the last right-click landed, in window coordinates
+	context     map[string]*int           // right-click targets, by the same ids
+	hovers      map[string]*gesture.Hover // hover targets that take no clicks
+	ptr         int                       // tag for the window-wide pointer watch
+	ctxAt       image.Point               // where the last right-click landed, in window coordinates
 	editors     map[string]*widget.Editor
 	lists       map[string]*layout.List
 	focus       string
@@ -94,17 +95,27 @@ type input struct {
 	listScope   string
 	resultHover int    // the search result under the pointer, plus one
 	filterHover string // the project filter's row under the pointer
+	filterUp    bool   // the project filter was drawn last frame
+	filterLit   int    // the filter's row last scrolled into view as it lit
 	renaming    bool   // the rename field had focus last frame
+	// The row with the keyboard's focus, and the frame it had it in, so
+	// a row that leaves the list hands the focus on.
+	focused   string
+	focusedAt uint64
 	// The footer's undo notice: its last text, kept while it fades out,
-	// its fade, and whether mod+Z is its, even in a text field.
+	// its fade, whether mod+Z is its, even in a text field, and whether the
+	// mod+Z that undid it is still held, so its repeats don't reach the
+	// field.
 	undoText  string
 	undoFade  *fade
 	undoClaim bool
-	// The modifier keys held and since when, and whether the rows show
-	// their jump keys for it.
+	undoHeld  bool
+	// The modifier keys held and since when, whether the rows show their
+	// jump keys for it, and the other keys held, to tell their repeats.
 	heldMods  key.Modifiers
 	heldSince time.Time
 	jumping   bool
+	keys      keyHolds
 	// The hover card: the rows the list drew with one, the row it's for,
 	// when the pointer came to rest there, whether it opened at once (from
 	// an open card, or within 400ms of the last one closing) and when the
@@ -201,6 +212,24 @@ func (th *Theme) hit(gtx C, id string, size image.Point) bool {
 	event.Op(gtx.Ops, rc)
 	pointer.CursorPointer.Add(gtx.Ops)
 	return c.Hovered()
+}
+
+// hoverArea makes a size-sized area at the current offset a hover target
+// that takes no clicks, which go through to what it's in, and reports
+// whether the pointer is over it: an icon with a tooltip, in a row.
+func (th *Theme) hoverArea(gtx C, id string, size image.Point) bool {
+	if th.in.hovers == nil {
+		th.in.hovers = map[string]*gesture.Hover{}
+	}
+	h := th.in.hovers[id]
+	if h == nil {
+		h = new(gesture.Hover)
+		th.in.hovers[id] = h
+	}
+	on := h.Update(gtx.Source)
+	defer clip.Rect{Max: size}.Push(gtx.Ops).Pop()
+	h.Add(gtx.Ops)
+	return on
 }
 
 // events handles target id's clicks so far and returns its gesture and
@@ -341,7 +370,12 @@ func (th *Theme) tipAt(gtx C, id, tip string, size image.Point, up bool, align i
 // tipDelay is tipAt after a rest of delay.
 func (th *Theme) tipDelay(gtx C, id, tip string, size image.Point, up bool, align int, delay time.Duration) {
 	c := th.in.clicks[id]
-	if c == nil || !c.Hovered() || tip == "" {
+	th.tipFor(gtx, id, tip, size, c != nil && c.Hovered(), up, align, delay)
+}
+
+// tipFor is tipDelay for a target the caller knows is hovered or not.
+func (th *Theme) tipFor(gtx C, id, tip string, size image.Point, hovered, up bool, align int, delay time.Duration) {
+	if !hovered || tip == "" {
 		delete(th.in.tipSince, id)
 		return
 	}
@@ -456,13 +490,24 @@ func (th *Theme) editor(gtx C, id string, t Txt, placeholder string) D {
 		th.in.focus = ""
 	}
 	// Just after a park, mod+Z undoes it rather than the field's last
-	// edit, until another key or an edit (threadUndoClaimsShortcut).
-	for th.in.undoClaim {
+	// edit, until another key or an edit (threadUndoClaimsShortcut). Held,
+	// it undoes once, and its repeats don't fall through to the field's own
+	// undo, though the notice is gone.
+	for th.in.undoClaim || th.in.undoHeld {
 		ev, ok := gtx.Event(key.Filter{Focus: ed, Name: "Z", Required: key.ModShortcut})
 		if !ok {
 			break
 		}
-		if ke, ok := ev.(key.Event); ok && ke.State == key.Press {
+		ke, ok := ev.(key.Event)
+		if !ok {
+			continue
+		}
+		again := th.in.keys.repeat(ke, th.in.frame)
+		switch {
+		case ke.State == key.Release:
+			th.in.undoHeld = false
+		case !again && th.in.undoClaim:
+			th.in.undoHeld = true
 			th.push(Action{ID: "thread.undo", Kind: "click"})
 		}
 	}

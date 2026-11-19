@@ -59,7 +59,10 @@ func main() {
 			return th.Desktop(gtx, sidebarStatesScene())
 		}},
 		{"8k-sidebar-shelves", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions {
-			return th.Desktop(gtx, sidebarShelvesScene())
+			return th.Desktop(gtx, sidebarShelvesScene("Follow up on the flaky test"))
+		}},
+		{"8o-sidebar-settled-hover", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions {
+			return th.Desktop(gtx, sidebarShelvesScene("Bounded snapshot history"))
 		}},
 		{"8l-sidebar-searching", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions {
 			return th.Desktop(gtx, sidebarSearchingScene())

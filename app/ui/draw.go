@@ -215,7 +215,6 @@ const (
 	IconImage
 	IconLock
 	IconGlobe
-	IconMachine
 	IconBack
 	IconForward
 	IconReload
@@ -342,10 +341,6 @@ func DrawIcon(gtx C, ic Icon, col color.NRGBA, sizeDp float32) D {
 	case IconSplit:
 		strokeRect(gtx, col, image.Rect(int(2.5*u), int(2.5*u), int(13.5*u), int(13.5*u)), int(1.5*u), sw)
 		polyline(gtx, col, sw, pt(2.5, 8), pt(13.5, 8))
-	case IconMachine:
-		strokeRect(gtx, col, image.Rect(int(2.5*u), int(3*u), int(13.5*u), int(10.5*u)), int(1.2*u), sw)
-		polyline(gtx, col, sw, pt(8, 10.5), pt(8, 13))
-		polyline(gtx, col, sw, pt(5, 13.2), pt(11, 13.2))
 	case IconFolder:
 		polyline(gtx, col, sw, pt(2.5, 12.5), pt(2.5, 3.5), pt(6.5, 3.5), pt(8, 5), pt(13.5, 5), pt(13.5, 12.5), pt(2.5, 12.5))
 	case IconUser:
@@ -495,54 +490,6 @@ func (th *Theme) Button(v Variant, ic Icon, hasIcon bool, label string) W {
 			})
 		})
 	}
-}
-
-// Combo is a closed ImGui combo: value, then the arrow square. widthDp 0
-// sizes it to its value; Stretch fills the available width.
-func (th *Theme) Combo(prefix W, value string, widthDp float32) W {
-	return func(gtx C) D {
-		body := func(gtx C) D {
-			return Box{Bg: ColFrame, Border: ColBorder, Radius: 4}.Layout(gtx, func(gtx C) D {
-				return FixedH(gtx, 24, func(gtx C) D {
-					return Row(gtx,
-						rigid(Spacer(8, 0)),
-						rigid(func(gtx C) D {
-							if prefix == nil {
-								return D{}
-							}
-							return pad(0, 6, 0, 0).Layout(gtx, prefix)
-						}),
-						flexOrRigid(widthDp != 0, func(gtx C) D { return th.Label(gtx, ColText, font.Normal, value) }),
-						rigid(Spacer(6, 0)),
-						rigid(func(gtx C) D {
-							size := image.Pt(dp(gtx, 22), dp(gtx, 24))
-							fill(gtx, ColFrameHover, image.Rectangle{Max: size}, 0)
-							vline(gtx, ColBorder, 0, 0, size.Y)
-							op.Offset(image.Pt(dp(gtx, 4), (size.Y-dp(gtx, 14))/2)).Add(gtx.Ops)
-							DrawIcon(gtx, IconChevronDown, ColDim, 14)
-							return D{Size: size}
-						}),
-					)
-				})
-			})
-		}
-		switch {
-		case widthDp == Stretch:
-			gtx.Constraints.Min.X = gtx.Constraints.Max.X
-		case widthDp > 0:
-			return FixedW(gtx, widthDp, body)
-		}
-		return body(gtx)
-	}
-}
-
-const Stretch = -1
-
-func flexOrRigid(flex bool, w W) layout.FlexChild {
-	if flex {
-		return layout.Flexed(1, w)
-	}
-	return layout.Rigid(w)
 }
 
 // Input is a single-line frame with an optional icon and placeholder.

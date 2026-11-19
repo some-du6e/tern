@@ -68,6 +68,10 @@ func (th *Theme) Desktop(gtx C, s *Scene) D {
 	fill(gtx, P.Background, image.Rectangle{Max: size}, 0)
 
 	sw := th.sidebarPx(gtx, s, size.X)
+	// mod+Z undoes a park in a text field only while the notice shows: a
+	// collapsed sidebar hides it, and the fields keep their own undo
+	// (AppSidebarLayout.tsx).
+	th.in.undoClaim = s.Live && s.Sidebar.UndoClaim && sw > 0
 	rp := 0
 	if s.Web != nil {
 		rp = th.panelPx(gtx, size.X, sw)
@@ -146,8 +150,10 @@ var shellFilters = func() []event.Filter {
 // thread details; and the sidebar's: mod+N a new thread, mod+Shift+[ and ]
 // the thread before and after, mod+1…9 the nth thread, mod+Shift+S settle,
 // mod+Shift+P pin and mod+Z undo the last park. The last four leave a
-// focused terminal alone; a focused text field keeps its own mod+Z. It
-// also keeps which modifier keys are held, for the rows' jump hints.
+// focused terminal alone; a focused text field keeps its own mod+Z. A held
+// key steps, jumps and undoes once: its repeats do nothing (Sidebar.tsx,
+// AppSidebarLayout.tsx). It also keeps which modifier keys are held, and
+// since when they've been held as they are, for the rows' jump hints.
 func (th *Theme) shellKeys(gtx C, s *Scene) {
 	for {
 		ev, ok := gtx.Event(shellFilters...)
@@ -156,19 +162,32 @@ func (th *Theme) shellKeys(gtx C, s *Scene) {
 		}
 		ke, ok := ev.(key.Event)
 		if m, mod := modifierKeys[ke.Name]; ok && mod {
+			held := th.in.heldMods
 			if ke.State == key.Press {
-				th.in.heldMods |= m
+				held |= m
 			} else {
-				th.in.heldMods &^= m
+				held &^= m
+				// The chord held is another now.
+				th.in.keys.clear()
+				th.in.undoHeld = false
 			}
-			th.in.heldSince = gtx.Now
+			// A modifier's own repeats (Windows sends them) don't restart
+			// the hold.
+			if held != th.in.heldMods {
+				th.in.heldMods, th.in.heldSince = held, gtx.Now
+			}
 			continue
 		}
-		if !ok || ke.State != key.Press {
+		if !ok {
+			continue
+		}
+		again := th.in.keys.repeat(ke, th.in.frame)
+		if ke.State != key.Press {
 			continue
 		}
 		term := gtx.Focused(&th.in.term)
 		switch {
+		case again && onceHeld(ke.Name):
 		case ke.Name == "N":
 			th.push(Action{ID: "new", Kind: "click"})
 		case ke.Name == "[" || ke.Name == "{":
@@ -195,10 +214,51 @@ func (th *Theme) shellKeys(gtx C, s *Scene) {
 	}
 }
 
+// onceHeld reports the shortcuts a held key runs once, which T3 runs only
+// for a key's first press: stepping, jumping and undoing.
+func onceHeld(n key.Name) bool {
+	return n == "Z" || len(n) == 1 && strings.ContainsAny(string(n), "[]{}123456789")
+}
+
+// keyHolds tells a key's first press from the OS repeating it while it's
+// held, which Gio passes on as more presses (key.Event has no repeat flag);
+// X11 sends each repeat as a release and a press in one frame.
+type keyHolds struct {
+	down map[key.Name]bool
+	up   map[key.Name]uint64 // the frame each was let go of in, plus one
+}
+
+// repeat notes e, in frame, and reports a press that repeats a key held.
+func (k *keyHolds) repeat(e key.Event, frame uint64) bool {
+	if k.down == nil {
+		k.down, k.up = map[key.Name]bool{}, map[key.Name]uint64{}
+	}
+	if e.State == key.Release {
+		delete(k.down, e.Name)
+		k.up[e.Name] = frame + 1
+		return false
+	}
+	again := k.down[e.Name] || k.up[e.Name] == frame+1
+	k.down[e.Name] = true
+	delete(k.up, e.Name)
+	return again
+}
+
+// clear forgets the keys held: their modifier, or the window, let go.
+func (k *keyHolds) clear() {
+	clear(k.down)
+	clear(k.up)
+}
+
 // WindowBlurred is the window losing the keyboard to another. Modifiers let
 // go of there never reach this window, so none count as held any more, as
-// T3 resets its modifier state on blur (shortcutModifierState.ts).
-func (th *Theme) WindowBlurred() { th.in.heldMods = 0 }
+// T3 resets its modifier state on blur (shortcutModifierState.ts), and
+// neither do other keys.
+func (th *Theme) WindowBlurred() {
+	th.in.heldMods = 0
+	th.in.keys.clear()
+	th.in.undoHeld = false
+}
 
 // detailsAction toggles the details card where it fits, else its popover.
 func (th *Theme) detailsAction() Action { return Action{ID: th.detailsID(), Kind: "click"} }

@@ -18,8 +18,9 @@ var (
 )
 
 // cardItem is a fixture card: in tern unless it says otherwise, on the
-// workstation, with Claude, offering its controls; the open thread when
-// it's titled selected.
+// workstation, with Claude, offering its controls, though not the snooze
+// clock while an approval or a guest's request waits (canSnooze); the open
+// thread when it's titled selected.
 func cardItem(r ui.ThreadRow, selected string) ui.SidebarItem {
 	if r.Project == "" {
 		r.Project, r.Icon = "tern", ternIcon
@@ -29,7 +30,8 @@ func cardItem(r ui.ThreadRow, selected string) ui.SidebarItem {
 	r.Recede = r.Recede && !r.Active
 	r.Providers = []string{"Claude"}
 	r.Machine, r.MachineIcon = "workstation", "server"
-	r.CanSettle, r.CanSnooze, r.CanUnpin = true, true, true
+	r.CanSettle, r.CanUnpin = true, true
+	r.CanSnooze = r.Status != ui.StatusApproval && r.Status != ui.StatusRequest
 	return ui.SidebarItem{Row: &r}
 }
 
@@ -41,9 +43,10 @@ func slimItem(shelf string, r ui.ThreadRow, selected string) ui.SidebarItem {
 }
 
 // sidebar fills the sidebar with a row in each of T3's states: pinned,
-// approval, input, a guest's request, working, waiting, failed, done, woke
-// and seen; the Working shelf open; Snoozed folded; Settled open on two
-// rows with more to show. selected is the open thread.
+// approval, input, a guest's request, failed, done, woke and seen; the
+// Working shelf open on the working and waiting ones, the open thread
+// among them; Snoozed folded; Settled open on two rows with more to show.
+// selected is the open thread.
 func sidebar(s *ui.Scene, selected string) {
 	s.Envs = envs()
 	card := func(r ui.ThreadRow) ui.SidebarItem { return cardItem(r, selected) }
@@ -51,15 +54,17 @@ func sidebar(s *ui.Scene, selected string) {
 	s.Sidebar = ui.Sidebar{HasProjects: true, Ticking: true, Items: []ui.SidebarItem{
 		card(ui.ThreadRow{Title: "Roadmap", Pinned: true, Branch: "main", Age: "2d", Recede: true}),
 		card(ui.ThreadRow{Title: "Nightly backup check", Project: "atlas", Icon: atlasIcon, Pinned: true, Status: ui.StatusDone, Label: "Done", Unread: true, Age: "7h"}),
-		card(ui.ThreadRow{Title: "Review the stop capability", Status: ui.StatusApproval, Label: "Approval", Branch: "t3/thread-stop", Worktree: true, Age: "2h"}),
+		card(ui.ThreadRow{Title: "Review the stop capability", Status: ui.StatusApproval, Label: "Approval", Branch: "t3/thread-stop",
+			Worktree: "/work/tern/.worktrees/thread-stop", Age: "2h"}),
 		card(ui.ThreadRow{Title: "Watch pairing flow", Status: ui.StatusInput, Label: "Input", Age: "41m"}),
-		card(ui.ThreadRow{Title: "Port the T3 Connect client to Go", Status: ui.StatusWorking, Label: "Working", Timer: "1m", Branch: "t3/go-client", Worktree: true, Recede: true,
-			PR: &ui.PRBadge{State: "open", Text: "42"}, Age: "now"}),
 		card(ui.ThreadRow{Title: "A guest's question", Project: "notes", Icon: notesIcon, Status: ui.StatusRequest, Label: "Request", Age: "3m"}),
 		card(ui.ThreadRow{Title: "Relay status polling", Status: ui.StatusFailed, Label: "Failed", Error: "Error occurred", Age: "5h"}),
-		card(ui.ThreadRow{Title: "Sidebar virtualization", Status: ui.StatusWoke, Label: "Woke", Branch: "t3/sidebar-virtual", PR: &ui.PRBadge{State: "merged", Text: "38"}, Age: "18m"}),
+		card(ui.ThreadRow{Title: "Sidebar virtualization", Status: ui.StatusWoke, Label: "Woke", Woke: true, Branch: "t3/sidebar-virtual",
+			PR: &ui.PRBadge{State: "merged", Text: "38"}, Age: "18m"}),
 		card(ui.ThreadRow{Title: "Outline and sources", Project: "notes", Icon: notesIcon, Recede: true, Age: "1d", Draft: true}),
-		{Shelf: &ui.Shelf{ID: "working", Label: "Working", Count: 2, Open: true}},
+		{Shelf: &ui.Shelf{ID: "working", Label: "Working", Count: 3, Open: true}},
+		card(ui.ThreadRow{Shelf: "working", Title: "Port the T3 Connect client to Go", Status: ui.StatusWorking, Label: "Working", Timer: "1m", Branch: "t3/go-client",
+			Worktree: "/work/tern/.worktrees/go-client", Recede: true, PR: &ui.PRBadge{State: "open", Text: "42"}, Age: "now"}),
 		card(ui.ThreadRow{Shelf: "working", Title: "Restore test", Project: "atlas", Icon: atlasIcon, Status: ui.StatusWorking, Label: "Working", Timer: "12m", Recede: true, Age: "12m"}),
 		card(ui.ThreadRow{Shelf: "working", Title: "Wait for the subagents", Status: ui.StatusWaiting, Label: "Waiting", Timer: "40s", Recede: true, Age: "4m"}),
 		{Shelf: &ui.Shelf{ID: "snoozed", Label: "Snoozed", Count: 1}},
@@ -162,11 +167,23 @@ func approvalScene() *ui.Scene {
 	s.State = ui.ThreadApproval
 	s.StateLabel = "Needs approval"
 	s.Run.Status = "Waiting"
-	for _, it := range s.Sidebar.Items {
+	// Asking for approval takes the open thread off the Working shelf, back
+	// among the active rows under the pinned ones, without its clock.
+	list := s.Sidebar.Items
+	for i, it := range list {
 		if r := it.Row; r != nil && r.Active {
-			r.Status, r.Label, r.Timer, r.Recede = ui.StatusApproval, "Approval", "", false
+			r.Status, r.Label, r.Timer, r.Recede, r.Shelf, r.CanSnooze = ui.StatusApproval, "Approval", "", false, "", false
+			list = append(list[:i:i], list[i+1:]...)
+			list = append(list[:2:2], append([]ui.SidebarItem{it}, list[2:]...)...)
+			break
 		}
 	}
+	for _, it := range list {
+		if it.Shelf != nil && it.Shelf.ID == "working" {
+			it.Shelf.Count--
+		}
+	}
+	s.Sidebar.Items = list
 	items := threadItems()
 	items = items[:len(items)-2]
 	items = append(items, ui.Item{Kind: ui.ItemTool, Tool: ui.ToolCommand, Title: "git push -u origin t3/go-client", Meta: "waiting for you"})
@@ -343,12 +360,12 @@ func row(s *ui.Scene, title string) *ui.ThreadRow {
 }
 
 // sidebarHoverScene has a card hovered, its controls in place of its
-// status, and its hover card out beside it.
+// status (Settle, and no clock while it waits for approval), and its
+// hover card out beside it.
 func sidebarHoverScene() *ui.Scene {
 	s := runningScene()
 	r := row(s, "Review the stop capability")
-	r.Hover, r.Provider, r.Model, r.Handoff, r.Terminals = true, "Claude", "Claude Opus 5.5", "Handed off from Codex", 1
-	row(s, "Email-code sign-in").Hover = true
+	r.Hover, r.Provider, r.Model, r.Handoff, r.Terminals = true, "Claude", "Opus 5.5", "Handed off from Codex", 1
 	return s
 }
 
@@ -378,11 +395,12 @@ func sidebarMenuScene() *ui.Scene {
 	return s
 }
 
-// sidebarFilterScene has the project filter open.
+// sidebarFilterScene has the project filter open, on the scope's own row
+// (the combobox's autoHighlight).
 func sidebarFilterScene() *ui.Scene {
 	s := runningScene()
 	s.Sidebar.Filter = &ui.ProjectFilter{Items: []ui.FilterItem{
-		{Label: "All projects", Selected: true},
+		{Label: "All projects", Selected: true, Highlighted: true},
 		{ID: "tern", Label: "tern", Icon: ternIcon},
 		{ID: "atlas", Label: "atlas", Icon: atlasIcon},
 		{ID: "notes", Label: "notes", Icon: notesIcon},
@@ -465,7 +483,7 @@ const renamed = "Choose the snapshot format"
 
 // sidebarStatesScene has two rows picked out of the list, a title being
 // renamed, a row with the keyboard's focus ring, and the labels the main
-// list doesn't show: Setting up, Goal and Limited.
+// list doesn't show: Limited, and on the Working shelf Setting up and Goal.
 func sidebarStatesScene() *ui.Scene {
 	s := runningScene()
 	card := func(r ui.ThreadRow) ui.SidebarItem { return cardItem(r, s.Title) }
@@ -474,31 +492,39 @@ func sidebarStatesScene() *ui.Scene {
 		card(ui.ThreadRow{Title: "Bounded snapshot history", Selected: true, Branch: "t3/snapshots", Age: "5h"}),
 		card(ui.ThreadRow{Title: renamed, Age: "1d"}),
 		card(ui.ThreadRow{Title: "Pairing URL parser", Focus: true, Age: "2d"}),
-		card(ui.ThreadRow{Title: "Bootstrap the worktree", Status: ui.StatusWorking, Label: "Setting up", Timer: "8s", Recede: true, Age: "now"}),
-		card(ui.ThreadRow{Title: "Ship the release notes", Project: "atlas", Icon: atlasIcon, Status: ui.StatusWorking, Label: "Goal", Timer: "4h 12m", Recede: true, Age: "4h"}),
 		card(ui.ThreadRow{Title: "Long refactor of the relay", Status: ui.StatusLimited, Label: "Limited", Error: "Usage limit reached", Limited: true, Age: "20m"}),
+		{Shelf: &ui.Shelf{ID: "working", Label: "Working", Count: 2, Open: true}},
+		card(ui.ThreadRow{Shelf: "working", Title: "Bootstrap the worktree", Status: ui.StatusWorking, Label: "Setting up", Timer: "8s", Recede: true, Age: "now"}),
+		card(ui.ThreadRow{Shelf: "working", Title: "Ship the release notes", Project: "atlas", Icon: atlasIcon, Status: ui.StatusWorking, Label: "Goal",
+			Timer: "4h 12m", Recede: true, Age: "4h"}),
+		{Shelf: &ui.Shelf{ID: "settled", Label: "Settled", Count: 0}},
 	}
 	s.Sidebar.Renaming = renamed
 	return s
 }
 
-// sidebarShelvesScene has the Snoozed and Settled shelves open: snoozed
-// rows with their wake times, one hovered for its Wake button, and settled
-// ones, one hovered for Un-settle, with more to show.
-func sidebarShelvesScene() *ui.Scene {
+// sidebarShelvesScene has the Snoozed and Settled shelves open, with
+// snoozed rows and their wake times, and settled ones with more to show;
+// the Working shelf folded on the open thread. hovered is the shelved row
+// the pointer is on, for its Wake or Un-settle button.
+func sidebarShelvesScene(hovered string) *ui.Scene {
 	s := runningScene()
 	card := func(r ui.ThreadRow) ui.SidebarItem { return cardItem(r, s.Title) }
-	slim := func(shelf string, r ui.ThreadRow) ui.SidebarItem { return slimItem(shelf, r, s.Title) }
+	slim := func(shelf string, r ui.ThreadRow) ui.SidebarItem {
+		r.Hover = r.Title == hovered
+		return slimItem(shelf, r, s.Title)
+	}
 	s.Sidebar.Items = []ui.SidebarItem{
-		card(ui.ThreadRow{Title: "Port the T3 Connect client to Go", Status: ui.StatusWorking, Label: "Working", Timer: "1m", Branch: "t3/go-client", Worktree: true, Age: "now"}),
 		card(ui.ThreadRow{Title: "Watch pairing flow", Status: ui.StatusInput, Label: "Input", Age: "41m"}),
 		{Shelf: &ui.Shelf{ID: "working", Label: "Working", Count: 2}},
+		card(ui.ThreadRow{Shelf: "working", Title: "Port the T3 Connect client to Go", Status: ui.StatusWorking, Label: "Working", Timer: "1m", Branch: "t3/go-client",
+			Worktree: "/work/tern/.worktrees/go-client", Age: "now"}),
 		{Shelf: &ui.Shelf{ID: "snoozed", Label: "Snoozed", Count: 2, Open: true}},
-		slim("snoozed", ui.ThreadRow{Title: "Follow up on the flaky test", Wake: "3h", Age: "2d", Hover: true}),
+		slim("snoozed", ui.ThreadRow{Title: "Follow up on the flaky test", Wake: "3h", Age: "2d"}),
 		slim("snoozed", ui.ThreadRow{Title: "Revisit the cache keys", Project: "atlas", Icon: atlasIcon, Wake: "2d", Age: "5d"}),
 		{Shelf: &ui.Shelf{ID: "settled", Label: "Settled", Count: 40, Open: true}},
-		slim("settled", ui.ThreadRow{Title: "Bounded snapshot history", Age: "1d", Hover: true}),
-		slim("settled", ui.ThreadRow{Title: "Email-code sign-in", Project: "atlas", Icon: atlasIcon, Age: "3d"}),
+		slim("settled", ui.ThreadRow{Title: "Bounded snapshot history", Age: "1d"}),
+		slim("settled", ui.ThreadRow{Title: "Email-code sign-in", Project: "atlas", Icon: atlasIcon, Age: "3d", Terminals: 1}),
 		{More: 25},
 	}
 	return s
