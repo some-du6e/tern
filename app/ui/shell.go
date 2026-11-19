@@ -99,6 +99,7 @@ func (th *Theme) Desktop(gtx C, s *Scene) D {
 		// deferred, so they sit above this.
 		th.hit(gtx, "menus.close", size)
 	}
+	th.toasts(gtx, s)
 	return D{Size: size}
 }
 

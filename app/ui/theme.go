@@ -105,6 +105,7 @@ type Theme struct {
 	md     map[string]*mdCache
 
 	richCache map[richKey]*richOps
+	toast     toastState
 
 	// CanRun and Run give PowerShell and cmd code blocks their ▷: whether
 	// a block in a language can run on this PC, and running it.

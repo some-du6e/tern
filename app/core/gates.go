@@ -2,9 +2,13 @@ package core
 
 import (
 	"errors"
+	"fmt"
+	"math"
 	"regexp"
 	"runtime"
 	"runtime/debug"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,9 +16,8 @@ import (
 	"github.com/some-du6e/tern/app/ui"
 )
 
-// What tern shows before the app can (docs/ui/11-empty-auth.md): the
-// splash, the boot failure page, the root error view, the sign-in and the
-// pairing page.
+// What tern shows before the app can, and over it (docs/ui/11-empty-auth.md):
+// the gate and the toasts.
 
 // gateLocked is the window's gate. Call with the lock held.
 func (a *App) gateLocked() ui.Gate {
@@ -164,4 +167,121 @@ func pairingError(err error) string {
 		return "Invalid pairing token. Check the token and try again."
 	}
 	return sentence(err.Error()) + " If the backend accepted this one-time token, request a new pairing link before retrying."
+}
+
+// ---------- toasts ----------
+
+// toastLocked puts t up with an id of its own. Call with the lock held.
+func (a *App) toastLocked(t ui.Toast) {
+	a.toastN++
+	t.ID = strconv.Itoa(a.toastN)
+	a.toasts = append(a.toasts, t)
+}
+
+// setToastLocked puts t up in place of the toast with its id, keeping
+// whether its details are open, or adds it; nil t closes id. Call with
+// the lock held.
+func (a *App) setToastLocked(id string, t *ui.Toast) {
+	for i := range a.toasts {
+		if a.toasts[i].ID != id {
+			continue
+		}
+		if t == nil {
+			a.toasts = append(a.toasts[:i], a.toasts[i+1:]...)
+			return
+		}
+		t.Open = a.toasts[i].Open
+		a.toasts[i] = *t
+		return
+	}
+	if t != nil {
+		a.toasts = append(a.toasts, *t)
+	}
+}
+
+// closeToast closes the toast id, by its close orb or its time running out.
+func (a *App) closeToast(id string) {
+	a.mu.Lock()
+	if id == slowToastID {
+		// Closed by hand, it stays closed until no request is slow.
+		a.slowClosed = true
+	}
+	a.setToastLocked(id, nil)
+	a.mu.Unlock()
+}
+
+// toggleToast opens or folds the toast id's details.
+func (a *App) toggleToast(id string) {
+	a.mu.Lock()
+	for i := range a.toasts {
+		if a.toasts[i].ID == id {
+			a.toasts[i].Open = !a.toasts[i].Open
+		}
+	}
+	a.mu.Unlock()
+}
+
+const slowToastID = "slow"
+
+// slowChanged keeps one toast up while any call waits past its threshold
+// (SlowRpcRequestToastCoordinator.tsx): sticky, updated in place as the
+// set changes, closed when it empties. Any goroutine may call it.
+func (a *App) slowChanged() {
+	a.mu.Lock()
+	var slow []t3.SlowRequest
+	for _, e := range a.envs {
+		if e.conn != nil {
+			slow = append(slow, e.conn.Slow()...)
+		}
+	}
+	sort.SliceStable(slow, func(i, j int) bool { return slow[i].StartedAt.Before(slow[j].StartedAt) })
+	switch {
+	case len(slow) == 0:
+		a.slowClosed = false
+		a.setToastLocked(slowToastID, nil)
+	case !a.slowClosed:
+		a.setToastLocked(slowToastID, slowToast(slow))
+	}
+	a.mu.Unlock()
+	a.changed()
+}
+
+// slowToast is the warning for the calls in slow: how many wait longer
+// than the least threshold among them, and each one's tag and when it
+// went out, in the details the description folds open.
+func slowToast(slow []t3.SlowRequest) *ui.Toast {
+	least := slow[0].Threshold
+	for _, r := range slow {
+		least = min(least, r.Threshold)
+	}
+	requests := strconv.Itoa(len(slow)) + " requests"
+	if len(slow) == 1 {
+		requests = "1 request"
+	}
+	t := &ui.Toast{
+		ID:          slowToastID,
+		Type:        ui.ToastWarning,
+		Title:       "Some requests are slow",
+		Description: fmt.Sprintf("%s waiting longer than %ds.", requests, int(math.Round(least.Seconds()))),
+		Sticky:      true,
+		Folded:      "requests",
+	}
+	for _, r := range slow {
+		t.Details = append(t.Details, ui.ToastDetail{Title: r.Tag, Note: "Started " + r.StartedAt.Format("3:04:05 PM")})
+	}
+	return t
+}
+
+// freezeToast is the warning that host froze (hostFreeze.ts:12-25): for
+// how long, and whether its CPU was overloaded or T3 Code too busy.
+func freezeToast(host string, st *t3.EventLoopStall) ui.Toast {
+	desc := "T3 Code on " + host + " was too busy to answer."
+	if st.LoadAverage != nil && *st.LoadAverage > float64(st.CPUCount) {
+		desc = fmt.Sprintf("Its CPU is overloaded (load %d on %d cores).", int(math.Round(*st.LoadAverage)), st.CPUCount)
+	}
+	return ui.Toast{
+		Type:        ui.ToastWarning,
+		Title:       fmt.Sprintf("%s froze for %ds", host, int(math.Round(float64(st.DurationMs)/1000))),
+		Description: desc,
+	}
 }

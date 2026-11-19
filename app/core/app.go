@@ -35,6 +35,8 @@ type envState struct {
 	threads   map[string]*t3.Thread
 	shellSave time.Time // last time the shell cache was written
 	loaded    bool      // the live shell's snapshot is in
+
+	stall string // the last freeze it reported, so each is told once
 }
 
 func newEnv(e t3.Environment, paired bool) *envState {
@@ -70,6 +72,10 @@ type App struct {
 	codeSent time.Time // when Clerk last sent the code, for its resend countdown
 	pairing  bool      // the pairing page is up instead of the sign-in
 	pair     ui.Pairing
+
+	toasts     []ui.Toast
+	toastN     int
+	slowClosed bool // the slow requests' toast was closed by hand
 
 	envs []*envState
 	net  string
@@ -489,6 +495,7 @@ func (a *App) connect(e *envState) {
 		e.conn = conn
 		e.retry = 0
 		e.status = "online"
+		conn.WatchSlow(a.slowChanged)
 		a.net = e.env.Label + " · socket open"
 		var openID string
 		if envID, _ := splitRef(a.openID); envID == e.id() {
@@ -598,6 +605,11 @@ func (a *App) loadConfig(e *envState, conn *t3.Conn, gen int) {
 		return
 	}
 	e.config = &cfg
+	// A freeze the server reports on connect is told once (hostFreeze.ts).
+	if st := cfg.LastEventLoopStall; st != nil && st.DetectedAt != e.stall {
+		e.stall = st.DetectedAt
+		a.toastLocked(freezeToast(e.env.Label, st))
+	}
 }
 
 func (a *App) subscribeShell(e *envState, conn *t3.Conn, gen int, started time.Time) {

@@ -21,7 +21,8 @@ import (
 // pairing form on it, and T3 Connect's sign-in (signin.go). All lengths
 // are dp.
 
-// Gate draws s.Gate, the page that fills the window instead of the app.
+// Gate draws s.Gate, the page that fills the window instead of the app,
+// with the toasts over it: T3 mounts its toasts above every branch.
 func (th *Theme) Gate(gtx C, s *Scene) D {
 	size := gtx.Constraints.Max
 	switch s.Gate {
@@ -36,6 +37,7 @@ func (th *Theme) Gate(gtx C, s *Scene) D {
 	case GatePairing:
 		th.pairing(gtx, s.Pair)
 	}
+	th.toasts(gtx, s)
 	return D{Size: size}
 }
 

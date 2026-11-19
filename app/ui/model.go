@@ -247,6 +247,40 @@ const (
 	HomeDraftError
 )
 
+// ToastType is a toast's look: its icon and the icon's colour.
+type ToastType int
+
+const (
+	ToastPlain ToastType = iota
+	ToastError
+	ToastInfo
+	ToastLoading
+	ToastSuccess
+	ToastWarning
+)
+
+// Toast is one of the notices stacked at the window's top right
+// (02-primitives.md §2.22). It closes after 5s unless Sticky; its close
+// orb and its timer push "toast.close:<ID>".
+type Toast struct {
+	ID          string
+	Type        ToastType
+	Title       string
+	Description string
+	Sticky      bool
+	// Details fold open under the description, which is their toggle
+	// (expandableDescriptionTrigger, "toast.toggle:<ID>"): "Show <Folded>"
+	// and "Hide <Folded>". Open is whether they show.
+	Details []ToastDetail
+	Folded  string
+	Open    bool
+}
+
+// ToastDetail is a row of a toast's details: a title over a small note.
+type ToastDetail struct {
+	Title, Note string
+}
+
 // Browser is the preview surface. An empty URL is the new-tab page.
 type Browser struct {
 	Title   string
@@ -335,12 +369,13 @@ type Scene struct {
 
 	// Gate is what the window shows; at GateApp, the app, whose main
 	// column shows Home when there's no thread. Failure, Login and Pair
-	// belong to their gates.
+	// belong to their gates; Toasts go over everything.
 	Gate    Gate
 	Failure *Failure
 	Login   *SignIn
 	Pair    *Pairing
 	Home    Home
+	Toasts  []Toast
 
 	Phase float64 // spinner angle, so a frame can show motion
 

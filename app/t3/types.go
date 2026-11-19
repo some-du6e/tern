@@ -213,6 +213,19 @@ type ServerConfig struct {
 			ThreadStop                   bool `json:"threadStop"`
 		} `json:"capabilities"`
 	} `json:"environment"`
+	// LastEventLoopStall is the server's last freeze, which it reports on
+	// connect.
+	LastEventLoopStall *EventLoopStall `json:"lastEventLoopStall"`
+}
+
+// EventLoopStall is a stretch where the server's event loop couldn't run,
+// so it answered nothing (ServerEventLoopStall). LoadAverage is the
+// one-minute load then, which Windows doesn't have.
+type EventLoopStall struct {
+	DetectedAt  string   `json:"detectedAt"`
+	DurationMs  int64    `json:"durationMs"`
+	LoadAverage *float64 `json:"loadAverage"`
+	CPUCount    int      `json:"cpuCount"`
 }
 
 type Provider struct {

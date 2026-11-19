@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,6 +31,7 @@ type Conn struct {
 	closed  bool
 	err     error
 	done    chan struct{}
+	onSlow  func() // the set of slow calls changed
 
 	wmu sync.Mutex // websocket writes are not concurrent-safe
 }
@@ -36,6 +39,42 @@ type Conn struct {
 type pending struct {
 	chunk func([]json.RawMessage)
 	done  func(json.RawMessage, error)
+	// A call the server should answer soon: when it went out, the timer
+	// that marks it slow, and whether it has.
+	tag   string
+	sent  time.Time
+	timer *time.Timer
+	slow  bool
+}
+
+// SlowRequest is a call the server hasn't answered in its threshold.
+type SlowRequest struct {
+	Tag       string
+	StartedAt time.Time
+	Threshold time.Duration
+}
+
+// T3 warns about a call with no answer after 15 s, or 2 min for the ones
+// that wait on installs and the network, and never about subscriptions or
+// the background reports nobody waits on (requestLatencyState.ts).
+const (
+	slowAfter        = 15 * time.Second
+	longRunningAfter = 2 * time.Minute
+)
+
+var (
+	untrackedCalls   = map[string]bool{"server.getUsageSummary": true, "server.reportClientActivity": true, "sourceControl.signInWait": true}
+	longRunningCalls = map[string]bool{"server.updateProvider": true, "server.refreshProviders": true, "server.updateServer": true, "vcs.refreshStatus": true}
+)
+
+func slowThreshold(tag string) time.Duration {
+	if strings.Contains(tag, "subscribe") || strings.HasPrefix(tag, "pullRequests.") || untrackedCalls[tag] {
+		return 0
+	}
+	if longRunningCalls[tag] {
+		return longRunningAfter
+	}
+	return slowAfter
 }
 
 // RPCError is a typed failure from the server, like EnvironmentAuthorizationError.
@@ -101,12 +140,19 @@ func (c *Conn) shutdown(err error) {
 	c.closed, c.err = true, err
 	ps := c.pending
 	c.pending = map[int64]*pending{}
+	slow := false
+	for _, p := range ps {
+		slow = c.answered(p) || slow
+	}
 	c.mu.Unlock()
 	c.stop()
 	_ = c.ws.Close(websocket.StatusNormalClosure, "")
 	close(c.done)
 	for _, p := range ps {
 		p.done(nil, ErrClosed)
+	}
+	if slow {
+		c.slowChanged()
 	}
 }
 
@@ -211,7 +257,11 @@ func (c *Conn) handle(f frame) {
 	if f.Tag == "Exit" {
 		delete(c.pending, id)
 	}
+	answered := p != nil && c.answered(p)
 	c.mu.Unlock()
+	if answered {
+		c.slowChanged()
+	}
 	if p == nil {
 		return
 	}
@@ -267,9 +317,67 @@ func (c *Conn) request(tag string, payload any, p *pending) (int64, error) {
 		return 0, ErrClosed
 	}
 	c.pending[id] = p
+	if after := slowThreshold(tag); after > 0 {
+		p.tag, p.sent = tag, time.Now()
+		p.timer = time.AfterFunc(after, func() {
+			c.mu.Lock()
+			slow := c.pending[id] == p && p.timer != nil
+			p.slow = slow
+			c.mu.Unlock()
+			if slow {
+				c.slowChanged()
+			}
+		})
+	}
 	c.mu.Unlock()
 	c.send(map[string]any{"_tag": "Request", "id": strconv.FormatInt(id, 10), "tag": tag, "payload": payload, "headers": []any{}})
 	return id, nil
+}
+
+// answered stops watching p for slowness, now the server has answered it,
+// and reports whether it was slow. Call with c.mu held.
+func (c *Conn) answered(p *pending) bool {
+	if p.timer == nil {
+		return false
+	}
+	p.timer.Stop()
+	p.timer = nil
+	slow := p.slow
+	p.slow = false
+	return slow
+}
+
+// WatchSlow calls f, on a goroutine of its own, whenever a call turns slow
+// or a slow one is answered.
+func (c *Conn) WatchSlow(f func()) {
+	c.mu.Lock()
+	c.onSlow = f
+	c.mu.Unlock()
+}
+
+// slowChanged tells the watcher. It never waits for it: the read loop
+// calls it, and the watcher may be waiting on this socket.
+func (c *Conn) slowChanged() {
+	c.mu.Lock()
+	f := c.onSlow
+	c.mu.Unlock()
+	if f != nil {
+		go f()
+	}
+}
+
+// Slow is the calls still waiting past their threshold, oldest first.
+func (c *Conn) Slow() []SlowRequest {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []SlowRequest
+	for _, p := range c.pending {
+		if p.slow {
+			out = append(out, SlowRequest{Tag: p.tag, StartedAt: p.sent, Threshold: slowThreshold(p.tag)})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].StartedAt.Before(out[j].StartedAt) })
+	return out
 }
 
 // Call runs one RPC and decodes its value into out (which may be nil).

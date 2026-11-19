@@ -257,7 +257,7 @@ func (a *App) Scene() *ui.Scene {
 }
 
 func (a *App) build(now time.Time) *ui.Scene {
-	s := &ui.Scene{Live: true}
+	s := &ui.Scene{Live: true, Toasts: append([]ui.Toast(nil), a.toasts...)}
 	switch s.Gate = a.gateLocked(); s.Gate {
 	case ui.GateBooting:
 		return s

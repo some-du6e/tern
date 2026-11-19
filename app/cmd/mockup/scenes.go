@@ -318,6 +318,17 @@ func homeScene(h ui.Home) *ui.Scene {
 	return &ui.Scene{Filter: "All projects", Home: h}
 }
 
+func toastsScene() *ui.Scene {
+	s := runningScene()
+	s.Toasts = []ui.Toast{
+		{ID: "1", Type: ui.ToastWarning, Title: "studio froze for 12s", Description: "Its CPU is overloaded (load 9 on 4 cores)."},
+		{ID: "2", Type: ui.ToastError, Title: "Could not reconnect environment", Description: "Failed to reconnect."},
+		{ID: "slow", Type: ui.ToastWarning, Title: "Some requests are slow", Description: "2 requests waiting longer than 15s.", Sticky: true, Folded: "requests", Open: true,
+			Details: []ui.ToastDetail{{Title: "orchestration.getTurnItem", Note: "Started 10:00:00 AM"}, {Title: "server.getConfig", Note: "Started 10:00:02 AM"}}},
+	}
+	return s
+}
+
 func phoneScene() *ui.Scene {
 	s := base("Port the T3 Connect client to Go")
 	s.Title = "Port the T3 Connect client to Go"

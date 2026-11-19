@@ -160,6 +160,10 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		a.mu.Unlock()
 	case "session.retry", "session.reload":
 		a.retryBoot()
+	case "toast.close":
+		a.closeToast(arg)
+	case "toast.toggle":
+		a.toggleToast(arg)
 	case "home.download":
 		if open := a.OpenURL; open != nil {
 			go func() { _ = open("https://t3.codes/download") }()
