@@ -14,26 +14,28 @@ import (
 // in the error colours, with Reconnect.
 func TestBanner(t *testing.T) {
 	a := testApp(t)
-	a.openThread("swiss/t1")
-	e := a.env("swiss")
+	e := newEnv(t3.Environment{EnvironmentID: "e1", Label: "studio"}, false)
+	e.threads["t1"] = &t3.Thread{ID: "t1", Title: "A thread"}
+	a.envs = []*envState{e}
+	a.openThread("e1/t1")
 	now := time.Now()
 	e.tryingAt = now.Add(-time.Second)
 	if b := a.build(now).Banner; b != nil {
 		t.Errorf("within the grace: %+v", b)
 	}
 	e.tryingAt = now.Add(-3 * time.Second)
-	if b := a.build(now).Banner; b == nil || b.Title != "swiss is reconnecting" || b.Action != "" || b.Error {
+	if b := a.build(now).Banner; b == nil || b.Title != "studio is reconnecting" || b.Action != "" || b.Error {
 		t.Errorf("first try: %+v", b)
 	}
 	e.failed = failureOf(errors.New("dial tcp: connection reset"), false)
-	if b := a.build(now).Banner; b == nil || b.Action != "Retry now" || b.Detail != "This device can't reach swiss's tunnel" {
+	if b := a.build(now).Banner; b == nil || b.Action != "Retry now" || b.Detail != "This device can't reach studio's tunnel" {
 		t.Errorf("after a failure: %+v", b)
 	}
 	e.tryingAt = time.Time{}
-	e.failed = failureOf(&t3.Error{What: "Relay /v1/environments/swiss/connect", Status: 403,
+	e.failed = failureOf(&t3.Error{What: "Relay /v1/environments/e1/connect", Status: 403,
 		Body: map[string]any{"_tag": "RelayEnvironmentConnectNotAuthorizedError", "reason": "environment_link_not_found"}}, false)
 	b := a.build(now).Banner
-	if b == nil || !b.Error || b.Title != "swiss is offline" || b.Action != "Reconnect" || b.Detail != "swiss is not linked to your T3 Connect account" {
+	if b == nil || !b.Error || b.Title != "studio is offline" || b.Action != "Reconnect" || b.Detail != "studio is not linked to your T3 Connect account" {
 		t.Errorf("refused: %+v", b)
 	}
 }

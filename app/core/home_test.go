@@ -32,18 +32,17 @@ func TestHome(t *testing.T) {
 // thread when the computer has others, else NoActiveThreadState.
 func TestMissingThread(t *testing.T) {
 	a := testApp(t)
-	for _, e := range a.envs {
-		e.loaded = true
-	}
-	a.openID = "swiss/gone"
+	e := newEnv(t3.Environment{EnvironmentID: "e1", Label: "studio"}, false)
+	e.loaded = true
+	e.projects["p"] = t3.Project{ID: "p", Title: "example"}
+	e.threads["t1"] = &t3.Thread{ID: "t1", Title: "A thread", ProjectID: "p"}
+	a.envs = []*envState{e}
+	a.openID = "e1/gone"
 	if s := a.build(time.Now()); s.Home != ui.HomeNone || a.draft == "" {
 		t.Errorf("gone from a computer with threads: home %d, draft %q", s.Home, a.draft)
 	}
 	a.draft = ""
-	empty := newEnv(t3.Environment{EnvironmentID: "e1", Label: "studio"}, false)
-	empty.loaded = true
-	empty.projects["p"] = t3.Project{ID: "p", Title: "example"}
-	a.envs = []*envState{empty}
+	delete(e.threads, "t1")
 	a.openID = "e1/gone"
 	if s := a.build(time.Now()); s.Home != ui.HomeNoThread {
 		t.Errorf("gone from a computer without threads: home %d", s.Home)
