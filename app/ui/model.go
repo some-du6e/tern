@@ -182,7 +182,7 @@ type TraitChoice struct {
 type ContextMenu struct {
 	Items    []MenuItem
 	Keyboard bool        // opened from the keyboard: the first item has focus
-	At       image.Point // where a mockup's opens; a live one opens at the click
+	At       image.Point // where a mockup's opens, in dp; a live one opens at the click
 }
 
 // MenuItem is one row of a menu.
@@ -364,9 +364,13 @@ type PullRequestPill struct {
 }
 
 // Alert is T3's AlertDialog asking before an action: its question, then
-// Cancel ("alert:cancel") and the action ("alert:ok").
+// Cancel ("alert:cancel") and the action ("alert:ok"), both Size, the
+// action in Variant: a pull request's merge asks with small buttons, the
+// app's confirm dialog (ConfirmDialogHost.tsx) with default ones.
 type Alert struct {
 	Title, Description, Action string
+	Variant                    ButtonVariant
+	Size                       ButtonSize
 }
 
 // GitActions is the quick action split (GitActionsControl.tsx).

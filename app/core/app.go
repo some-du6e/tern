@@ -131,7 +131,7 @@ type App struct {
 	drawers      map[string]*drawer  // each thread's terminals, by ref
 	browsers     map[string]*browser // each thread's browser panel, by ref
 	ctxRef       string              // the thread whose actions menu is open
-	ctxConfirm   bool                // Delete was clicked once and wants a second click
+	deleteAsk    string              // the thread Delete asks about, in the confirm dialog
 	ctxFrom      string              // the control that opened it, which Escape gives the focus back to
 	ctxCopy      string              // the card's copy menu open at the pointer: "path" or "branch"
 	errText      string

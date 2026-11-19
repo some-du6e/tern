@@ -557,9 +557,9 @@ func (th *Theme) alertDialog(gtx C, a *Alert, win image.Point) {
 					gtx.Constraints.Min.X = gtx.Constraints.Max.X
 					return Row(gtx,
 						flexed(func(gtx C) D { return D{Size: image.Pt(gtx.Constraints.Min.X, 0)} }),
-						rigid(th.T3Button("alert:cancel", Button{Variant: BtnOutline, Size: BtnSizeSm, Label: "Cancel", On: footerFill()})),
+						rigid(th.T3Button("alert:cancel", Button{Variant: BtnOutline, Size: a.Size, Label: "Cancel", On: footerFill()})),
 						rigid(Spacer(8, 0)),
-						rigid(th.T3Button("alert:ok", Button{Variant: BtnDefault, Size: BtnSizeSm, Label: a.Action, On: footerFill()})),
+						rigid(th.T3Button("alert:ok", Button{Variant: a.Variant, Size: a.Size, Label: a.Action, On: footerFill()})),
 					)
 				})
 				call := m.Stop()

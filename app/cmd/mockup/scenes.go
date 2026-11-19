@@ -479,7 +479,7 @@ func checksScene() *ui.Scene {
 // mergeScene asks before merging the thread's pull request.
 func mergeScene() *ui.Scene {
 	s := pullRequestsScene()
-	s.Alert = &ui.Alert{Title: "Merge pull request?", Description: "This merges #214 using merge.", Action: "Merge"}
+	s.Alert = &ui.Alert{Title: "Merge pull request?", Description: "This merges #214 using merge.", Action: "Merge", Size: ui.BtnSizeSm}
 	return s
 }
 

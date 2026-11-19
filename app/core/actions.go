@@ -386,7 +386,7 @@ func (a *App) closeMenus() {
 func (a *App) closeMenusLocked() {
 	a.picker, a.traitsOpen, a.accessOpen, a.projectsOpen, a.accountOpen = nil, false, false, false, false
 	a.detailsOpen, a.machinesOpen = false, false
-	a.ctxRef, a.ctxConfirm, a.ctxFrom, a.ctxCopy = "", false, "", ""
+	a.ctxRef, a.ctxFrom, a.ctxCopy = "", "", ""
 	a.cardMenu, a.branchPicker, a.checksOpen = "", nil, ""
 }
 
@@ -406,7 +406,7 @@ func (a *App) escape(th *ui.Theme) {
 	switch {
 	case a.ctxRef != "" || a.ctxCopy != "":
 		refocus = a.ctxFrom
-		a.ctxRef, a.ctxConfirm, a.ctxFrom, a.ctxCopy = "", false, "", ""
+		a.ctxRef, a.ctxFrom, a.ctxCopy = "", "", ""
 	case a.cardMenu != "":
 		if !a.cardAtPointer {
 			refocus = cardTriggers[a.cardMenu]

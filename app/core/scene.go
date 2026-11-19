@@ -290,7 +290,10 @@ func (a *App) build(now time.Time) *ui.Scene {
 		s.Confirm = &ui.Confirm{Title: title, Description: desc, Continue: cont, BranchOff: featureBranchOff(c.branch, dirty)}
 	}
 	if m := a.prAlert; m != nil {
-		s.Alert = &ui.Alert{Title: "Merge " + m.terms.singular + "?", Description: "This merges #" + strconv.Itoa(m.number) + " using " + m.method + ".", Action: "Merge"}
+		s.Alert = &ui.Alert{Title: "Merge " + m.terms.singular + "?", Description: "This merges #" + strconv.Itoa(m.number) + " using " + m.method + ".", Action: "Merge", Size: ui.BtnSizeSm}
+	}
+	if a.deleteAsk != "" {
+		s.Alert = a.deleteAlert()
 	}
 	s.SidebarHidden, s.SidebarW = a.sidebarHidden, a.sidebarWidth
 	s.Term = a.termView()
@@ -325,7 +328,7 @@ func (a *App) build(now time.Time) *ui.Scene {
 		}
 	}
 	s.Stats = fmt.Sprintf("%s threads   ·   %d running", len3(total), running)
-	a.menuScene(s)
+	a.menuScene(s, now)
 	if a.accountOpen {
 		s.Account = &ui.Traits{Groups: []ui.Trait{{Label: "T3 Connect", Sel: -1, Choices: []ui.TraitChoice{{Label: "Sign out", Desc: "Forgets this device's sessions"}}}}}
 	}

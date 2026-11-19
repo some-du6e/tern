@@ -99,7 +99,7 @@ func (th *Theme) contextMenu(gtx C, win image.Point, s *Scene) {
 	th.menuKeys(gtx, s.Menu.Items)
 	at := th.in.ctxAt
 	if !s.Live {
-		at = s.Menu.At
+		at = image.Pt(dp(gtx, float32(s.Menu.At.X)), dp(gtx, float32(s.Menu.At.Y)))
 	}
 	under, in := menuSpot{-1, -1}, -1
 	edge := dp(gtx, 4)

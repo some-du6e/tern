@@ -127,7 +127,14 @@ func (a *App) handleHeader(th *ui.Theme, act ui.Action) bool {
 		a.openCheck(atoi(arg))
 		return true
 	case "alert":
-		a.confirmMerge(arg == "ok")
+		a.mu.Lock()
+		deleting := a.deleteAsk != ""
+		a.mu.Unlock()
+		if deleting {
+			a.confirmDelete(th, arg == "ok")
+		} else {
+			a.confirmMerge(arg == "ok")
+		}
 		return true
 	}
 	if menu, ok := strings.CutPrefix(verb, "card."); ok && arg != "" {

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"image"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -194,7 +195,7 @@ func TestAlertDialogDrawn(t *testing.T) {
 	defer SetDark(false)
 	SetDark(true)
 	s := detailedScene()
-	s.Alert = &Alert{Title: "Merge pull request?", Description: "This merges #12 using merge.", Action: "Merge"}
+	s.Alert = &Alert{Title: "Merge pull request?", Description: "This merges #12 using merge.", Action: "Merge", Size: BtnSizeSm}
 	img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return NewTheme().Desktop(gtx, s) })
 	x := 720 + 40 // clear of the title, the description and the buttons
 	first, last := run(img, x, 300, 600, footerFill())
@@ -301,6 +302,30 @@ func TestCardDrawn(t *testing.T) {
 		img = l.pixels(t)
 		wantPixel(t, img, image.Pt(changes.X+4, changes.Y+16), over(rowTint(), fill), "hovered row")
 		wantPixel(t, img, image.Pt(changes.X+4, changes.Y-16), fill, "the row above, not hovered")
+	}
+}
+
+// The Changes row's texts sit on one baseline in T3's items-baseline span,
+// not cap-centred as the other rows' labels are: measured on T3 (Linux
+// Chrome, Inter and Liberation Mono), its caps start a dp higher in their
+// row than another row's (§3.8; cap tops 262.0 against tern's 263.0).
+func TestChangesBaseline(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("T3 was measured with Inter and Liberation Mono, the faces tern takes on Linux")
+	}
+	img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return NewTheme().Desktop(gtx, cardScene()) })
+	// The C that starts each label, at the label column.
+	capTop := func(row int) int {
+		for y := row; y < row+rowH; y++ {
+			if darkest(img, image.Rect(1157+rowLabelX, y, 1157+rowLabelX+5, y+1)) < 0xb0 {
+				return y - row
+			}
+		}
+		return -1
+	}
+	git, changes := capTop(64+1+114+1+8+32), capTop(64+1+114+1+8+64)
+	if git < 0 || changes != git-1 {
+		t.Errorf("caps start %d into the Changes row and %d into the Git row's, want a dp higher", changes, git)
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 	"gioui.org/text"
 	"gioui.org/unit"
 	"gioui.org/widget"
+	"golang.org/x/image/math/fixed"
 )
 
 type (
@@ -191,17 +192,55 @@ func (th *Theme) capText(gtx C, t Txt, s string, mid int) int {
 	if t.Size == 0 {
 		t.Size = SizeUI
 	}
+	capH := capEm * float32(gtx.Sp(t.Size))
+	return th.baseText(gtx, t, s, mid+int(capH/2+0.5))
+}
+
+// baseText draws s on one line with its baseline on y (px from the current
+// origin). It returns the line's width.
+func (th *Theme) baseText(gtx C, t Txt, s string, y int) int {
 	t.MaxLines = 1
 	g := gtx
 	g.Constraints.Min = image.Point{}
 	m := op.Record(gtx.Ops)
 	d := th.Text(g, t, s)
 	call := m.Stop()
-	baseline := d.Size.Y - d.Baseline
-	capH := capEm * float32(gtx.Sp(t.Size))
-	defer op.Offset(image.Pt(0, mid+int(capH/2+0.5)-baseline)).Push(gtx.Ops).Pop()
+	defer op.Offset(image.Pt(0, y-(d.Size.Y-d.Baseline))).Push(gtx.Ops).Pop()
 	call.Add(gtx.Ops)
 	return d.Size.X
+}
+
+// faceMetrics is the ascent and descent of t's face at its size, in px, as
+// the font has them: what a CSS line box is built from.
+func (th *Theme) faceMetrics(gtx C, t Txt) (ascent, descent float32) {
+	if t.Size == 0 {
+		t.Size = SizeUI
+	}
+	if t.Font.Typeface == "" {
+		t.Font = UI(font.Normal)
+	}
+	th.Shaper.LayoutString(text.Parameters{Font: t.Font, PxPerEm: fixed.I(gtx.Sp(t.Size)), MaxWidth: 1 << 20}, "H")
+	for g, ok := th.Shaper.NextGlyph(); ok; g, ok = th.Shaper.NextGlyph() {
+		ascent, descent = float32(g.Ascent)/64, float32(g.Descent)/64
+	}
+	return ascent, descent
+}
+
+// baselineIn is where a flex items-baseline span of texts in the faces ts
+// puts their baseline in an h tall control with a 1dp border, in px from
+// its top: each face's CSS line box (t.LineH tall, half its leading above
+// the ascent) hung on one baseline, and the span they make centred inside
+// the border.
+func (th *Theme) baselineIn(gtx C, h int, ts ...Txt) int {
+	var above, below float32
+	for _, t := range ts {
+		a, d := th.faceMetrics(gtx, t)
+		lh := float32(gtx.Sp(t.Size)) * t.LineH
+		half := (lh - a - d) / 2
+		above, below = max(above, half+a), max(below, lh-half-a)
+	}
+	px := float32(max(1, dp(gtx, 1)))
+	return int(px + (float32(h)-2*px-above-below)/2 + above + 0.5)
 }
 
 // boxText draws s wrapped in the width gtx allows, up to t.MaxLines lines

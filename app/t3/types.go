@@ -328,6 +328,7 @@ type ServerConfig struct {
 			HiddenModels []string `json:"hiddenModels"`
 			ModelOrder   []string `json:"modelOrder"`
 		} `json:"providerModelPreferences"`
+		SnoozePresets []SnoozePreset `json:"snoozePresets"` // the snooze menu's times; T3's when unset
 	} `json:"settings"`
 	Environment struct {
 		Platform struct {
@@ -341,6 +342,16 @@ type ServerConfig struct {
 			ThreadAutoSettleOptOut       bool `json:"threadAutoSettleOptOut"`
 		} `json:"capabilities"`
 	} `json:"environment"`
+}
+
+// SnoozePreset is one of the snooze menu's times (SnoozePresetSetting):
+// Minutes after now, or at Time ("18:00") on Day: today, tomorrow or a
+// weekday.
+type SnoozePreset struct {
+	Kind    string `json:"kind"` // after or at
+	Minutes int    `json:"minutes"`
+	Day     string `json:"day"`
+	Time    string `json:"time"`
 }
 
 // Keybinding is one of the server's resolved shortcuts

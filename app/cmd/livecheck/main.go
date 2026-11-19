@@ -234,7 +234,14 @@ func main() {
 	h.shot("thread-menu")
 	h.c.Handle(h.th, []ui.Action{{ID: "ctx:delete", Kind: "click"}})
 	h.shot("delete-confirm")
+	h.c.Handle(h.th, []ui.Action{{ID: "alert:cancel", Kind: "click"}})
 	// Mark unread is harmless; read-only, the server must refuse it.
+	h.router.Queue(
+		pointer.Event{Kind: pointer.Press, Position: at, Buttons: pointer.ButtonSecondary, Source: pointer.Mouse},
+		pointer.Event{Kind: pointer.Release, Position: at, Source: pointer.Mouse},
+	)
+	h.frame()
+	h.frame()
 	h.c.Handle(h.th, []ui.Action{{ID: "ctx:mark-unread", Kind: "click"}})
 	s = h.wait("menu refusal", func(s *ui.Scene) bool { return s.Error != "" })
 	fmt.Printf("thread menu refused as expected: %q\n", s.Error)

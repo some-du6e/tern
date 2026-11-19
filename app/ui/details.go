@@ -801,7 +801,10 @@ func gitRunTint() color.NRGBA {
 
 // changesRow is the change totals: "Changes", what they're against, and
 // the insertions and deletions in mono at the end, coloured once they're
-// above zero. It opens the diff.
+// above zero. It opens the diff. Unlike the other rows' labels it isn't
+// cap-trimmed: the three sit on one baseline in an items-baseline span
+// (GitActionsControl.tsx:1724–1769), which the mono face's line box makes
+// taller, so they sit about a dp above where a centred label's caps do.
 func (th *Theme) changesRow(d *ThreadDetails) W {
 	return func(gtx C) D {
 		ch := d.Changes
@@ -810,19 +813,26 @@ func (th *Theme) changesRow(d *ThreadDetails) W {
 		th.control(gtx, ctl{id: "card.changes", disabled: ch.Disabled}, r, corners{8, 8, 8, 8}.scaled(gtx), cardFill(), func(gtx C) {
 			rowIcon(gtx, "file-diff", P.MutedForeground, 0, 16)
 			mono := Txt{Size: 13, LineH: 19.5 / 13, Font: font.Font{Typeface: mono, Weight: font.Medium}}
+			base := rowFont(P.MutedForeground)
+			base.Font = UI(font.Normal)
+			y := th.baselineIn(gtx, r.Dy(), rowFont(rowText()), base, mono)
+			label := func(t Txt, s string, x, w int) int {
+				defer op.Offset(image.Pt(x, 0)).Push(gtx.Ops).Pop()
+				g := gtx
+				g.Constraints.Max.X = max(0, w)
+				return th.baseText(g, t, s, y)
+			}
 			add, del := "+"+groupDigits(ch.Insertions), "-"+groupDigits(ch.Deletions)
 			addW, delW := th.textW(gtx, mono, add), th.textW(gtx, mono, del)
 			end := w - dp(gtx, 11)
 			delX := end - delW
 			addX := delX - dp(gtx, 8) - addW
 			x := dp(gtx, rowLabelX)
-			x += th.rowLabel(gtx, rowFont(rowText()), "Changes", x, addX-x)
+			x += label(rowFont(rowText()), "Changes", x, addX-x)
 			if ch.Base != "" {
 				bx := x + dp(gtx, 6)
-				bw := min(th.textW(gtx, rowFont(P.MutedForeground), ch.Base), addX-dp(gtx, 8)-bx)
-				base := rowFont(P.MutedForeground)
-				base.Font = UI(font.Normal)
-				th.rowLabel(gtx, base, ch.Base, bx, bw)
+				bw := min(th.textW(gtx, base, ch.Base), addX-dp(gtx, 8)-bx)
+				label(base, ch.Base, bx, bw)
 				off := op.Offset(image.Pt(bx, (dp(gtx, rowH)-dp(gtx, 20))/2)).Push(gtx.Ops)
 				th.hover(gtx, "card.changes.base", image.Pt(max(0, bw), dp(gtx, 20)))
 				th.tipAt(gtx, "card.changes.base", ch.Base, image.Pt(max(0, bw), dp(gtx, 20)), true, 0)
@@ -835,9 +845,9 @@ func (th *Theme) changesRow(d *ThreadDetails) W {
 				return c
 			}
 			mono.Color = tone(ch.Insertions, P.DiffAdditionForeground)
-			th.rowLabel(gtx, mono, add, addX, addW)
+			label(mono, add, addX, addW)
 			mono.Color = tone(ch.Deletions, P.DiffDeletionForeground)
-			th.rowLabel(gtx, mono, del, delX, delW)
+			label(mono, del, delX, delW)
 		})
 		return D{Size: r.Max}
 	}

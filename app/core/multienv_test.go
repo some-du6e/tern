@@ -149,7 +149,8 @@ func menuLabels(items []ui.MenuItem) string {
 
 // A right-click on a row opens the thread's actions menu
 // (buildThreadActionMenuItems). A server whose config hasn't come leaves
-// out what needs it; Delete asks twice.
+// out what needs it. Delete closes the menu and asks in T3's confirm
+// dialog, its Confirm destructive; Cancel leaves the thread be.
 func TestThreadMenu(t *testing.T) {
 	a := testApp(t)
 	th := ui.NewTheme()
@@ -166,23 +167,61 @@ func TestThreadMenu(t *testing.T) {
 	}
 	a.handle(th, ui.Action{ID: "ctx:delete", Kind: "click"})
 	s = a.build(time.Now())
-	if s.Menu == nil || s.Menu.Items[4].Label != "Click again to delete" || !s.Menu.Items[4].Danger {
-		t.Fatalf("after one click: %+v", s.Menu)
+	if al := s.Alert; s.Menu != nil || al == nil || al.Title != `Delete thread "Same id on the Mac"?` ||
+		al.Description != "This permanently clears conversation history for this thread." || al.Action != "Confirm" ||
+		al.Variant != ui.BtnDestructive || al.Size != ui.BtnSizeDefault {
+		t.Fatalf("after Delete: menu=%v alert=%+v", s.Menu != nil, s.Alert)
 	}
-	// The Mac has no socket here, so the second click reports that.
+	a.handle(th, ui.Action{ID: "alert:cancel", Kind: "click"})
+	if s = a.build(time.Now()); s.Alert != nil || s.Error != "" {
+		t.Fatalf("after Cancel: alert=%+v error=%q", s.Alert, s.Error)
+	}
+	// The Mac has no socket here, so confirming reports that.
+	a.handle(th, ui.Action{ID: "thread:mac/same", Kind: "context"})
 	a.handle(th, ui.Action{ID: "ctx:delete", Kind: "click"})
-	s = a.build(time.Now())
-	if s.Menu != nil || !strings.Contains(s.Error, "isn't connected") {
-		t.Fatalf("after two clicks: menu=%v error=%q", s.Menu != nil, s.Error)
+	a.handle(th, ui.Action{ID: "alert:ok", Kind: "click"})
+	if s = a.build(time.Now()); s.Alert != nil || !strings.Contains(s.Error, "isn't connected") {
+		t.Fatalf("after Confirm: alert=%+v error=%q", s.Alert, s.Error)
+	}
+}
+
+// Snooze offers T3's times (resolveSnoozePresets): on a Wednesday at
+// 14:30, in an hour, in three, this evening at 6, tomorrow at 9 and next
+// Monday at 9, which names its day; late at night the evening has passed
+// and a duration past midnight names the day it wakes.
+func TestSnoozePresets(t *testing.T) {
+	shown := func(now time.Time) string {
+		var out []string
+		for _, p := range snoozePresets(now, nil) {
+			out = append(out, p.label+" "+p.when)
+		}
+		return strings.Join(out, ", ")
+	}
+	wed := time.Date(2026, 11, 18, 14, 30, 0, 0, time.UTC)
+	if got, want := shown(wed), "In 1 hour 3:30 PM, In 3 hours 5:30 PM, This evening 6:00 PM, Tomorrow 9:00 AM, Next week Mon 9:00 AM"; got != want {
+		t.Errorf("at 14:30: %s\nwant      %s", got, want)
+	}
+	if got, want := shown(wed.Add(8*time.Hour)), "In 1 hour 11:30 PM, In 3 hours Thu 1:30 AM, Tomorrow 9:00 AM, Next week Mon 9:00 AM"; got != want {
+		t.Errorf("at 22:30: %s\nwant      %s", got, want)
+	}
+	// A Monday preset on a Sunday is tomorrow; the server's own times win.
+	sun := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
+	if got, want := shown(sun), "In 1 hour 11:00 AM, In 3 hours 1:00 PM, This evening 6:00 PM, Tomorrow 9:00 AM"; got != want {
+		t.Errorf("on Sunday: %s\nwant      %s", got, want)
+	}
+	custom := snoozePresets(wed, []t3.SnoozePreset{{Kind: "after", Minutes: 2 * 24 * 60}, {Kind: "at", Day: "friday", Time: "08:00"}})
+	if len(custom) != 2 || custom[0].label != "Friday" || custom[0].when != "8:00 AM" || custom[1].label != "In 2 days" || custom[1].when != "Fri 2:30 PM" {
+		t.Errorf("the server's presets: %+v", custom)
 	}
 }
 
 // With its server's config the menu is T3's, as measured on a pinned
 // thread with a branch (05-header.md §3.3), less what tern has no surface
-// for: the branch's new thread first, Pin or Unpin, Settle, then Rename,
-// Regenerate title, Mark unread and Auto-settle behavior, Copy with the
-// branch, and Archive, off while the turn runs, and Delete. Each row has
-// its icon.
+// for: the branch's new thread first, Pin or Unpin, Settle, Snooze, then
+// Rename, Regenerate title, Mark unread and Auto-settle behavior, Copy
+// with the branch, and Archive, off while the turn runs, and Delete. Each
+// row has its icon. Snooze is off while the thread waits on an approval;
+// a snoozed thread offers to wake instead.
 func TestThreadMenuItems(t *testing.T) {
 	a := testApp(t)
 	e := a.envs[0]
@@ -192,22 +231,33 @@ func TestThreadMenuItems(t *testing.T) {
 	t1.Branch, t1.PinnedAt, t1.ActiveRunID = "main", "2026-01-01T00:00:00Z", "run-1"
 	a.handle(ui.NewTheme(), ui.Action{ID: "thread:studio/t1", Kind: "context"})
 	m := a.build(time.Now()).Menu
-	want := "New thread on main, Unpin thread, Settle thread, | Rename thread, Regenerate title, Mark unread, Auto-settle behavior ▸, " +
+	want := "New thread on main, Unpin thread, Settle thread, Snooze ▸, | Rename thread, Regenerate title, Mark unread, Auto-settle behavior ▸, " +
 		"| Copy ▸, | Archive thread (off), Delete"
 	if got := menuLabels(m.Items); got != want {
 		t.Fatalf("menu = %s\nwant   %s", got, want)
 	}
-	icons := []string{"message-square-plus", "pin-off", "circle-check", "pencil", "refresh-cw", "mail-open", "timer", "copy", "archive", "trash"}
+	icons := []string{"message-square-plus", "pin-off", "circle-check", "clock", "pencil", "refresh-cw", "mail-open", "timer", "copy", "archive", "trash"}
 	for i, it := range m.Items {
 		if it.Icon != icons[i] {
 			t.Errorf("%s: icon %q, want %q", it.Label, it.Icon, icons[i])
 		}
 	}
-	if got := menuLabels(m.Items[6].Children); got != "Follow settings, Never" || !m.Items[6].Children[0].Checked || !m.Items[6].Children[0].Radio {
-		t.Errorf("auto-settle = %s %+v", got, m.Items[6].Children)
+	if sn := m.Items[3].Children; len(sn) < 3 || !strings.Contains(menuLabels(sn), "In 1 hour") || sn[0].Detail == "" || sn[0].ID == "" {
+		t.Errorf("snooze = %s %+v", menuLabels(sn), sn)
 	}
-	if got := menuLabels(m.Items[7].Children); got != "Path, Branch, Thread, Thread ID" {
+	if got := menuLabels(m.Items[7].Children); got != "Follow settings, Never" || !m.Items[7].Children[0].Checked || !m.Items[7].Children[0].Radio {
+		t.Errorf("auto-settle = %s %+v", got, m.Items[7].Children)
+	}
+	if got := menuLabels(m.Items[8].Children); got != "Path, Branch, Thread, Thread ID" {
 		t.Errorf("copy = %s", got)
+	}
+	t1.PendingRuntimeRequest = &t3.RuntimeRequest{ID: "r1", Kind: "approval"}
+	if m = a.build(time.Now()).Menu; !m.Items[3].Off {
+		t.Errorf("Snooze while the thread waits on an approval: %+v", m.Items[3])
+	}
+	t1.SnoozedUntil = time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)
+	if m = a.build(time.Now()).Menu; m.Items[3].Label != "Wake thread" || len(m.Items[3].Children) != 0 {
+		t.Errorf("a snoozed thread's row: %+v", m.Items[3])
 	}
 }
 
@@ -230,8 +280,9 @@ func TestDetailsPopover(t *testing.T) {
 func TestNothingOpenIsANewThread(t *testing.T) {
 	a := testApp(t)
 	s := a.build(time.Now())
-	if a.draft != "p1" || a.draftEnv != "studio" || strings.Contains(s.Empty, "Pick a thread") {
-		t.Fatalf("draft %q on %q, empty %q", a.draft, a.draftEnv, s.Empty)
+	if h := s.Header; h == nil || h.Server || h.Project != "atlas" || s.Title != "New thread" || s.Card.Run.Label != "studio" ||
+		strings.Contains(s.Empty, "Pick a thread") {
+		t.Fatalf("header %+v %q, run %+v, empty %q", s.Header, s.Title, s.Card.Run, s.Empty)
 	}
 	if s.Hero != "atlas" {
 		t.Fatal("the draft should offer the project picker")
