@@ -73,26 +73,24 @@ type input struct {
 	pickHi    int
 	// The shell: whether the details card fits inline (from the last
 	// layout), and the sidebar rail's drag.
-	cardFits    bool
-	menuHover   bool // the menu row being drawn is under the pointer
-	railDrag    bool
-	railW       float32
-	railEdge    handle
-	clicks      map[string]*gesture.Click
-	context     map[string]*int // right-click targets, by the same ids
-	ptr         int             // tag for the window-wide pointer watch
-	ctxAt       image.Point     // where the last right-click landed, in window coordinates
-	editors     map[string]*widget.Editor
-	lists       map[string]*layout.List
-	focus       string
-	caret       [2]int                        // the composer's selection last frame, to step over chips
-	selectables map[string]*widget.Selectable // selectable text: sent messages, code blocks
-	copies      map[string]string             // copy buttons' text, by click id
-	copied      map[string]time.Time          // when each was last clicked, for its check
-	runs        map[string][2]string          // run buttons' language and code, by click id
-	runFailed   map[string]bool               // a run that couldn't start, for its ✕
-	paste       string                        // an editor to paste text into next frame
-	winSize     image.Point                   // the window, for popups kept inside it
+	cardFits  bool
+	menuHover bool // the menu row being drawn is under the pointer
+	railDrag  bool
+	railW     float32
+	railEdge  handle
+	clicks    map[string]*gesture.Click
+	context   map[string]*int // right-click targets, by the same ids
+	ptr       int             // tag for the window-wide pointer watch
+	ctxAt     image.Point     // where the last right-click landed, in window coordinates
+	editors   map[string]*widget.Editor
+	lists     map[string]*layout.List
+	focus     string
+	caret     [2]int               // the composer's selection last frame, to step over chips
+	copies    map[string]string    // copy buttons' text, by click id
+	copied    map[string]time.Time // when each was last clicked, for its check
+	runs      map[string]string    // run buttons' commands, by click id
+	paste     string               // an editor to paste text into next frame
+	winSize   image.Point          // the window, for popups kept inside it
 	// The sidebar's list: its keyboard tree from the last layout, each
 	// row's focus tag, the row to focus once it's laid out and the one the
 	// keyboard moved to, which scrolls into view before the next layout;
@@ -238,16 +236,8 @@ func (th *Theme) events(gtx C, id string) (*gesture.Click, *int) {
 			break
 		}
 		if e.Kind == gesture.KindClick {
-			if r, ok := th.in.runs[id]; ok {
-				err := th.Run(r[0], r[1])
-				if th.in.copied == nil {
-					th.in.copied = map[string]time.Time{}
-				}
-				if th.in.runFailed == nil {
-					th.in.runFailed = map[string]bool{}
-				}
-				th.in.copied[id], th.in.runFailed[id] = gtx.Now, err != nil
-				gtx.Execute(op.InvalidateCmd{})
+			if cmd, ok := th.in.runs[id]; ok {
+				th.push(Action{ID: "terminal.run", Kind: "click", Text: cmd})
 				continue
 			}
 			if text, ok := th.in.copies[id]; ok {
@@ -496,7 +486,8 @@ func (th *Theme) tipDelay(gtx C, id, tip string, size image.Point, up bool, alig
 	}
 	m2 := op.Record(gtx.Ops)
 	op.Offset(at).Add(gtx.Ops)
-	// Gio's renderer needs every opacity layer closed in the frame.
+	// The fade's layer ends with the tooltip: one left open past its
+	// macro has no end for the GPU to draw it to.
 	fd := paint.PushOpacity(gtx.Ops, t)
 	// It grows from 98% out of the side facing the trigger.
 	origin := f32.Pt(float32(td.Size.X)/2, 0)

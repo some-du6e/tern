@@ -107,21 +107,7 @@ func fillPath(gtx C, segs []seg, units, from, sizeDp float32, col color.NRGBA) D
 	k := s / units
 	var p clip.Path
 	p.Begin(gtx.Ops)
-	for _, sg := range segs {
-		pt := func(i int) f32.Point { return f32.Pt((sg.p[i].X-from)*k, (sg.p[i].Y-from)*k) }
-		switch sg.op {
-		case 'M':
-			p.MoveTo(pt(0))
-		case 'L':
-			p.LineTo(pt(0))
-		case 'Q':
-			p.QuadTo(pt(0), pt(1))
-		case 'C':
-			p.CubeTo(pt(0), pt(1), pt(2))
-		case 'Z':
-			p.Close()
-		}
-	}
+	addSegs(&p, segs, func(q f32.Point) f32.Point { return q.Sub(f32.Pt(from, from)).Mul(k) })
 	paint.FillShape(gtx.Ops, col, clip.Outline{Path: p.End()}.Op())
 	return D{Size: image.Pt(int(s), int(s))}
 }

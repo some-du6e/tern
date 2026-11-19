@@ -357,7 +357,7 @@ func (th *Theme) filterSearch(gtx C, s *Scene) D {
 				return d
 			}))
 		}()
-		rule := over(faded(P.Border, 0.7), P.Popover)
+		rule := over(faded(P.Border, 0xb3), P.Popover)
 		if focused {
 			rule = P.Ring
 		}
@@ -1058,7 +1058,7 @@ func (th *Theme) draftRow(gtx C, s *Scene, d *DraftRow, top int) D {
 	})
 	at(dp(gtx, 8+20+2), dp(gtx, 20), func(gtx C) D {
 		return Row(gtx, flexed(func(gtx C) D {
-			return th.Text(gtx, Txt{Size: 14, LineH: 20.0 / 14, Font: UI(font.Medium), Color: in.of(faded(SP.Foreground, 0.9)), MaxLines: 1}, d.Preview)
+			return th.Text(gtx, Txt{Size: 14, LineH: 20.0 / 14, Font: UI(font.Medium), Color: in.of(faded(SP.Foreground, 0xe6)), MaxLines: 1}, d.Preview)
 		}))
 	})
 	return D{Size: image.Pt(w, h+dp(gtx, 4))}
@@ -1079,7 +1079,7 @@ func (th *Theme) discardButton(gtx C, s *Scene, d *DraftRow, in rowInk, hot bool
 	}
 	func() {
 		defer op.Offset(image.Pt(dp(gtx, 4), (size.Y-dp(gtx, 12))/2)).Push(gtx.Ops).Pop()
-		LucideW("x", over(faded(in.of(col), k), in.bg), 12)(gtx)
+		LucideW("x", over(faded(in.of(col), uint8(k*255+0.5)), in.bg), 12)(gtx)
 	}()
 	if id != "" && k > 0 {
 		th.hit(gtx, id, size)
@@ -1092,15 +1092,8 @@ func (th *Theme) discardButton(gtx C, s *Scene, d *DraftRow, in rowInk, hot bool
 // 60%, 10dp in from the sides and 6 clear above and below.
 func (th *Theme) draftDivider(gtx C, _ int) D {
 	w := gtx.Constraints.Max.X
-	hline(gtx, over(faded(SP.SidebarBorder, 0.6), SP.Sidebar), dp(gtx, 6), dp(gtx, 10), w-dp(gtx, 10))
+	hline(gtx, over(faded(SP.SidebarBorder, 0x99), SP.Sidebar), dp(gtx, 6), dp(gtx, 10), w-dp(gtx, 10))
 	return D{Size: image.Pt(w, dp(gtx, 1+2*6))}
-}
-
-// faded is c at k of its own opacity, as Tailwind's color/NN is: a
-// translucent token keeps its own see-through, times k.
-func faded(c color.NRGBA, k float32) color.NRGBA {
-	c.A = uint8(float32(c.A)*k + 0.5)
-	return c
 }
 
 // title is a row's title, or its editor while it's renamed.
@@ -1951,7 +1944,7 @@ func (th *Theme) resultPR(gtx C, pr *PRBadge, settled, hovered bool, bg color.NR
 // them, and where the line is cut it ends in "…".
 func (th *Theme) excerpt(gtx C, e *Excerpt, bg color.NRGBA) D {
 	size := gtx.Constraints.Max
-	base := Txt{Size: 12, LineH: 16.0 / 12, Color: over(faded(SP.MutedForeground, 0.85), bg), MaxLines: 1}
+	base := Txt{Size: 12, LineH: 16.0 / 12, Color: over(faded(SP.MutedForeground, 0xd9), bg), MaxLines: 1}
 	who := base
 	who.Color = over(SP.SuccessForeground, bg)
 	name := "Agent:"

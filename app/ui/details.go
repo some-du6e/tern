@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"fmt"
 	"image"
 	"image/color"
 	"strings"
@@ -796,23 +795,6 @@ func (th *Theme) changesRow(d *ThreadDetails) W {
 		})
 		return D{Size: r.Max}
 	}
-}
-
-// groupDigits writes n with English thousands separators, as
-// Intl.NumberFormat does: 2382 is "2,382".
-func groupDigits(n int) string {
-	s := fmt.Sprint(n)
-	if n < 0 {
-		return "-" + groupDigits(-n)
-	}
-	var out []byte
-	for i := range s {
-		if i > 0 && (len(s)-i)%3 == 0 {
-			out = append(out, ',')
-		}
-		out = append(out, s[i])
-	}
-	return string(out)
 }
 
 // reasonPopover is T3's tooltip-styled popover for an action that can't

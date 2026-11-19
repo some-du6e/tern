@@ -183,7 +183,7 @@ func TestSearchExcerpt(t *testing.T) {
 		}
 	}
 	tone := func(bg color.NRGBA) (who, muted, mark Txt) {
-		muted = Txt{Size: 12, LineH: 16.0 / 12, Color: over(faded(SP.MutedForeground, 0.85), bg), MaxLines: 1}
+		muted = Txt{Size: 12, LineH: 16.0 / 12, Color: over(faded(SP.MutedForeground, 0xd9), bg), MaxLines: 1}
 		who, mark = muted, muted
 		mark.Font, mark.Color = UI(font.SemiBold), over(SP.Foreground, bg)
 		return who, muted, mark
@@ -412,7 +412,7 @@ func TestDraftRow(t *testing.T) {
 	wantPixel(t, img, image.Pt(20, 179), tint, "its bottom")
 	wantPixel(t, img, image.Pt(20, 181), SP.Sidebar, "below it")
 	// The draft's item is 100..182; then the list's 1dp gap and 6 clear.
-	rule := over(faded(SP.SidebarBorder, 0.6), SP.Sidebar)
+	rule := over(faded(SP.SidebarBorder, 0x99), SP.Sidebar)
 	wantPixel(t, img, image.Pt(20, 188), SP.Sidebar, "above the rule")
 	wantPixel(t, img, image.Pt(20, 189), rule, "the rule")
 	wantPixel(t, img, image.Pt(17, 189), SP.Sidebar, "the rule's inset")

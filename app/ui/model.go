@@ -226,54 +226,6 @@ type MenuItem struct {
 	Children []MenuItem // a submenu
 }
 
-type ItemKind int
-
-const (
-	ItemUser ItemKind = iota
-	ItemAssistant
-	ItemFold     // "Worked for 2m 14s"
-	ItemTool     // command_execution, file_change, …
-	ItemThought  // reasoning
-	ItemNotice   // system_notice, compaction
-	ItemError    // error
-	ItemTodo     // todo_list
-	ItemThinking // the live "Thinking" row while a run has no reasoning item
-)
-
-type ToolKind int
-
-const (
-	ToolCommand ToolKind = iota
-	ToolEdit
-	ToolSearch
-	ToolWeb
-	ToolAgent
-	ToolMCP
-)
-
-type Todo struct {
-	Text string
-	Done bool
-	Now  bool
-}
-
-type Item struct {
-	ID       string // click target "fold:", "tool:" or "thought:" + ID when set
-	Kind     ItemKind
-	Text     string // message markdown, thought text, fold label
-	Tool     ToolKind
-	Title    string // tool summary line: "$ go test ./..."
-	Body     string // tool output, shown when Open
-	Meta     string // "exit 0 · 1.8s", "+12 −3"
-	Open     bool
-	Live     bool
-	Failed   bool
-	Todos    []Todo
-	Attached int
-	Chips    []string // the labels of the pictures ChipText(1), ChipText(2), … in Text
-	Thumbs   []Thumb  // the attached pictures, as they load
-}
-
 type Approval struct {
 	Kind   string // "command", "file-change"
 	Detail string
@@ -655,14 +607,13 @@ type Scene struct {
 	Term          *TermView    // the open thread's terminal drawer, when open
 	Web           *BrowserView // the open thread's browser panel, when open
 
-	Title     string
-	State     ThreadState
-	Header    *ChatHeader    // the chat header, when a thread or draft is open
-	Card      *ThreadDetails // and its details card
-	Confirm   *Confirm       // a Git action asking first
-	Alert     *Alert         // a pull request action asking first
-	Items     []Item
-	MoreAbove bool
+	Title    string
+	State    ThreadState
+	Header   *ChatHeader    // the chat header, when a thread or draft is open
+	Card     *ThreadDetails // and its details card
+	Confirm  *Confirm       // a Git action asking first
+	Alert    *Alert         // a pull request action asking first
+	Timeline Timeline
 
 	Composer    string
 	Hero        string // a new thread's project: "What should we build in <Hero>?" over a centered composer

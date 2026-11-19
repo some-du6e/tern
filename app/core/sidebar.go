@@ -823,7 +823,7 @@ func (a *App) draftRow(scope map[string]bool) *ui.DraftRow {
 		return nil
 	}
 	if text == "" {
-		text = plural(n, "attachment")
+		text = units(n, "attachment")
 	}
 	return &ui.DraftRow{ID: "draft", Project: p.Title, Icon: projectIcon(p), Preview: text, Active: a.draft != ""}
 }

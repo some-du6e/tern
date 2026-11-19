@@ -280,7 +280,8 @@ func TestBranchPickerWorktrees(t *testing.T) {
 		s := built(a, time.Now())
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		return s.Card.Branch != nil && !s.Card.Branch.Disabled && a.view.sessions["ps-1"]
+		_, attached := a.view.sessions["ps-1"]
+		return s.Card.Branch != nil && !s.Card.Branch.Disabled && attached
 	})
 	th := ui.NewTheme()
 	a.handle(th, ui.Action{ID: "card.branch", Kind: "click"})

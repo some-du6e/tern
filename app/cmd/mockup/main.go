@@ -87,6 +87,12 @@ func main() {
 		{"14-details-pull-requests", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, pullRequestsScene()) }},
 		{"15-details-pr-checks", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, checksScene()) }},
 		{"16-merge-confirm", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, mergeScene()) }},
+		{"8-timeline", 1440, 2600, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, settledScene()) }},
+		{"8b-timeline-dark", 1440, 2600, func(th *ui.Theme, gtx layout.Context) layout.Dimensions {
+			ui.SetDark(true)
+			defer ui.SetDark(false)
+			return th.Desktop(gtx, settledScene())
+		}},
 	}
 	if *anim != "" {
 		if err := renderAnims(th, float32(*scale), *anim); err != nil {

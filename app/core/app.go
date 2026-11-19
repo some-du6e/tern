@@ -58,8 +58,9 @@ type App struct {
 	relay *t3.Relay
 
 	redraw func()
-	// OpenURL opens a URL on this computer: a pull request's, in its
-	// browser, or an editor's, for a folder on another machine.
+	// OpenURL opens a URL on this computer: a markdown link's or a pull
+	// request's, in its browser, or an editor's, for a folder on another
+	// machine.
 	OpenURL func(string) error
 
 	mu       sync.Mutex
@@ -76,6 +77,14 @@ type App struct {
 	view     *threadView
 	draft    string // project id while composing a new thread
 	draftEnv string // and its environment
+	// What the user opened in each thread's timeline, for the last 100.
+	disclosures     map[string]*disclosure
+	disclosureOrder []string
+	// cited is the reply a quoted response's card goes to, by its thread's
+	// ref and its message id, until the timeline has shown it; forking the
+	// reply whose fork is on its way.
+	cited   citedReply
+	forking string
 
 	choices map[string]*choice       // per thread ref, or "draft"
 	images  map[string][]pastedImage // pasted and not sent yet, same keys
@@ -259,6 +268,7 @@ func NewWithStore(store *t3.Store, redraw func()) (*App, error) {
 		working:  map[string]workingState{},
 		returned: map[string]time.Time{},
 	}
+	a.disclosures = map[string]*disclosure{}
 	_ = store.Delete("env-filter")   // from when a machine's chip filtered the inbox
 	_ = store.Delete("details-card") // from when one switch hid every thread's card
 	a.cardHidden, a.lastScripts, a.vcs = map[string]bool{}, map[string]string{}, map[string]*vcsState{}
@@ -785,41 +795,77 @@ func (a *App) saveShellCacheLocked(e *envState) {
 
 // ---------- the open thread ----------
 
-// HIDDEN carries nothing worth a row of its own.
-var hidden = map[string]bool{"checkpoint": true, "notification": true, "approval_request": true, "user_input_request": true, "run_interrupt_request": true}
-
-var toolTypes = map[string]bool{"command_execution": true, "file_change": true, "file_search": true, "web_search": true, "dynamic_tool": true, "subagent": true}
-
 type threadView struct {
-	id       string // the thread's own id
-	env      *envState
-	raw      map[string]map[string]json.RawMessage // row key -> merged item fields
-	items    map[string]*t3.TurnItem
-	runs     map[string]t3.Run
-	messages map[string]t3.Message
-	cursor   string
-	more     bool
-	loading  bool
-	loaded   bool
-	unfolded map[string]bool
-	open     map[string]bool // tool and thought rows the user expanded
+	id         string // the thread's own id
+	env        *envState
+	raw        map[string]map[string]json.RawMessage // row key -> merged item fields
+	items      map[string]*t3.TurnItem
+	runs       map[string]t3.Run
+	messages   map[string]t3.Message
+	cursor     string
+	more       bool
+	loading    bool
+	loaded     bool
+	historyErr string // why the last page of history didn't load
+	// What the user opened in the timeline: folds by run, work groups and
+	// entries by id, kept per thread (disclosureFor).
+	unfolded, groups, open map[string]bool
+	// The provider's turns, threads and the sessions attached to it, and
+	// the runtime requests, by id. Moving it to another worktree detaches
+	// its sessions.
+	turns    map[string]t3.ProviderTurn
+	pthreads map[string]t3.ProviderThread
+	sessions map[string]t3.ProviderSession
+	requests map[string]t3.RuntimeRequestRecord
+	// The latest run and its status as the timeline last saw them.
+	seenRun, seenStatus string
+	// Open entries' full items, fetched when the socket left part out: the
+	// item, the revision it was fetched for, the revision being fetched,
+	// and why one didn't load.
 	full     map[string]*t3.TurnItem
+	fullRev  map[string]string
+	fetching map[string]string
+	fetchErr map[string]string
 	cancel   func()
 	// The thread's guest link, from its record: the header says who it's
 	// shared with. unsharing is the close on its way.
 	guestShare *t3.GuestShare
 	unsharing  bool
-	// The provider sessions attached to it, by id: moving it to another
-	// worktree detaches them.
-	sessions map[string]bool
 }
 
-func newView(e *envState, id string) *threadView {
+func newView(e *envState, id string, d *disclosure) *threadView {
 	return &threadView{
 		id: id, env: e, raw: map[string]map[string]json.RawMessage{}, items: map[string]*t3.TurnItem{},
-		runs: map[string]t3.Run{}, messages: map[string]t3.Message{},
-		unfolded: map[string]bool{}, open: map[string]bool{}, full: map[string]*t3.TurnItem{},
+		runs: map[string]t3.Run{}, messages: map[string]t3.Message{}, turns: map[string]t3.ProviderTurn{},
+		pthreads: map[string]t3.ProviderThread{}, sessions: map[string]t3.ProviderSession{},
+		requests: map[string]t3.RuntimeRequestRecord{}, unfolded: d.unfolded, groups: d.groups, open: d.open, full: map[string]*t3.TurnItem{},
+		fullRev: map[string]string{}, fetching: map[string]string{}, fetchErr: map[string]string{},
 	}
+}
+
+// disclosure is what the user opened in one thread's timeline. Like T3,
+// tern keeps it for the session for the last 100 threads, so switching
+// back finds the timeline as it was (timelineScrollAnchoring.ts:131-151).
+type disclosure struct {
+	unfolded, groups, open map[string]bool
+}
+
+// disclosureFor is thread ref's disclosure. Call with the lock held.
+func (a *App) disclosureFor(ref string) *disclosure {
+	for i, r := range a.disclosureOrder {
+		if r == ref {
+			a.disclosureOrder = append(append(a.disclosureOrder[:i:i], a.disclosureOrder[i+1:]...), ref)
+			return a.disclosures[ref]
+		}
+	}
+	d := &disclosure{unfolded: map[string]bool{}, groups: map[string]bool{}, open: map[string]bool{}}
+	a.disclosures[ref] = d
+	a.disclosureOrder = append(a.disclosureOrder, ref)
+	if len(a.disclosureOrder) > 100 {
+		delete(a.disclosures, a.disclosureOrder[0])
+		a.disclosureOrder = a.disclosureOrder[1:]
+	}
+	return d
 }
 
 func rowKey(it *t3.TurnItem) string {
@@ -921,7 +967,7 @@ func (a *App) subscribeThread(e *envState, conn *t3.Conn, gen int, r string) {
 		return
 	}
 	if a.view == nil || a.view.id != id || a.view.env != e {
-		a.view = newView(e, id)
+		a.view = newView(e, id, a.disclosureFor(r))
 	}
 	if a.view.cancel != nil {
 		a.view.cancel()
@@ -959,9 +1005,20 @@ func (a *App) subscribeThread(e *envState, conn *t3.Conn, gen int, r string) {
 			if th := it.Projection.Thread; th != nil {
 				a.setGuestShare(v, th.GuestShare)
 			}
-			v.sessions = map[string]bool{}
+			v.turns = map[string]t3.ProviderTurn{}
+			for _, pt := range it.Projection.ProviderTurns {
+				v.turns[pt.ID] = pt
+			}
+			v.pthreads, v.sessions = map[string]t3.ProviderThread{}, map[string]t3.ProviderSession{}
+			for _, pt := range it.Projection.ProviderThreads {
+				v.pthreads[pt.ID] = pt
+			}
 			for _, ps := range it.Projection.ProviderSessions {
-				v.sessions[ps.ID] = true
+				v.sessions[ps.ID] = ps
+			}
+			v.requests = map[string]t3.RuntimeRequestRecord{}
+			for _, rr := range it.Projection.RuntimeRequests {
+				v.requests[rr.ID] = rr
 			}
 			v.cursor, v.more, v.loaded = it.HistoryCursor, it.HasMoreHistory, true
 		case it.Kind == "event" && it.Event != nil:
@@ -986,10 +1043,20 @@ func (a *App) subscribeThread(e *envState, conn *t3.Conn, gen int, r string) {
 				if json.Unmarshal(it.Event.Payload, &th) == nil {
 					a.setGuestShare(v, th.GuestShare)
 				}
+			case t == "provider-turn.updated":
+				var pt t3.ProviderTurn
+				if json.Unmarshal(it.Event.Payload, &pt) == nil && pt.ID != "" {
+					v.turns[pt.ID] = pt
+				}
+			case t == "provider-thread.updated":
+				var pt t3.ProviderThread
+				if json.Unmarshal(it.Event.Payload, &pt) == nil && pt.ID != "" {
+					v.pthreads[pt.ID] = pt
+				}
 			case t == "provider-session.attached" || t == "provider-session.updated":
 				var ps t3.ProviderSession
-				if json.Unmarshal(it.Event.Payload, &ps) == nil && ps.ID != "" && v.sessions != nil {
-					v.sessions[ps.ID] = true
+				if json.Unmarshal(it.Event.Payload, &ps) == nil && ps.ID != "" {
+					v.sessions[ps.ID] = ps
 				}
 			case t == "provider-session.detached":
 				var d struct {
@@ -997,6 +1064,11 @@ func (a *App) subscribeThread(e *envState, conn *t3.Conn, gen int, r string) {
 				}
 				if json.Unmarshal(it.Event.Payload, &d) == nil {
 					delete(v.sessions, d.ID)
+				}
+			case t == "runtime-request.updated":
+				var rr t3.RuntimeRequestRecord
+				if json.Unmarshal(it.Event.Payload, &rr) == nil && rr.ID != "" {
+					v.requests[rr.ID] = rr
 				}
 			}
 		}
@@ -1048,24 +1120,40 @@ func mergeRun(dst *t3.Run, src t3.Run) {
 	if src.UserMessageID != "" {
 		dst.UserMessageID = src.UserMessageID
 	}
+	if src.Ordinal != 0 {
+		dst.Ordinal = src.Ordinal
+	}
+	if src.RequestedAt != "" {
+		dst.RequestedAt = src.RequestedAt
+	}
+	if src.ActiveAttemptID != "" {
+		dst.ActiveAttemptID = src.ActiveAttemptID
+	}
 	dst.QueuePosition, dst.QueueHeld = src.QueuePosition, src.QueueHeld
 }
 
 func (a *App) loadEarlier() {
 	a.mu.Lock()
+	ok := a.loadEarlierLocked()
+	a.mu.Unlock()
+	if ok {
+		a.changed()
+	}
+}
+
+// loadEarlierLocked starts fetching the open thread's next page of history,
+// unless there's none or it's on its way. Call with the lock held.
+func (a *App) loadEarlierLocked() bool {
 	v := a.view
 	var conn *t3.Conn
 	if v != nil {
 		conn = v.env.conn
 	}
 	if v == nil || conn == nil || !v.more || v.loading || v.cursor == "" {
-		a.mu.Unlock()
-		return
+		return false
 	}
-	v.loading = true
+	v.loading, v.historyErr = true, ""
 	cursor := v.cursor
-	a.mu.Unlock()
-	a.changed()
 	go func() {
 		page, err := conn.HistoryPage(v.id, cursor)
 		a.mu.Lock()
@@ -1073,7 +1161,8 @@ func (a *App) loadEarlier() {
 		defer a.mu.Unlock()
 		v.loading = false
 		if err != nil {
-			a.fail(err)
+			// The history control says so under its button, as T3's does.
+			v.historyErr = err.Error()
 			return
 		}
 		for _, row := range page.Items {
@@ -1081,42 +1170,61 @@ func (a *App) loadEarlier() {
 		}
 		v.cursor, v.more = page.NextCursor, page.HasMoreHistory
 	}()
+	return true
 }
 
-// loadTool fetches a tool row's full item: the socket strips command output
-// and diffs.
-func (a *App) loadTool(item *t3.TurnItem) {
-	a.mu.Lock()
-	v := a.view
-	var conn *t3.Conn
-	if v != nil {
-		conn = v.env.conn
+// getTurnItem asks the server for a turn item in full. Tests replace it.
+var getTurnItem = func(conn *t3.Conn, threadID, itemID string) (json.RawMessage, error) {
+	var out struct {
+		Item json.RawMessage `json:"item"`
 	}
-	if v == nil || conn == nil || !toolTypes[item.Type] {
-		a.mu.Unlock()
+	err := conn.Call("orchestration.getTurnItem", map[string]any{"threadId": threadID, "itemId": itemID}, &out)
+	return out.Item, err
+}
+
+// fetchTool fetches an open entry's full item when the socket left part
+// of it out (T3's turnItemNeedsDetailFetch), once for each of its
+// revisions: once while it runs and again when it's done. An entry
+// opened afresh, or still open when its thread comes back, fetches the
+// same way. Call with the lock held.
+func (a *App) fetchTool(v *threadView, it *t3.TurnItem) {
+	rev := detailRevision(it)
+	if v.fullRev[it.ID] == rev || v.fetching[it.ID] == rev || v.env == nil || v.env.conn == nil {
 		return
 	}
-	if f := v.full[item.ID]; f != nil && f.UpdatedAt == item.UpdatedAt {
-		a.mu.Unlock()
-		return
-	}
-	a.mu.Unlock()
+	v.fetching[it.ID] = rev
+	conn, id := v.env.conn, it.ID
 	go func() {
-		var out struct {
-			Item json.RawMessage `json:"item"`
-		}
-		err := conn.Call("orchestration.getTurnItem", map[string]any{"threadId": v.id, "itemId": item.ID}, &out)
+		raw, err := getTurnItem(conn, v.id, id)
 		a.mu.Lock()
 		defer a.changed()
 		defer a.mu.Unlock()
-		if err != nil {
-			a.fail(err)
-			return
+		if v.fetching[id] != rev {
+			return // a later revision is on its way
 		}
+		delete(v.fetching, id)
 		var full t3.TurnItem
-		if json.Unmarshal(out.Item, &full) == nil {
-			full.UpdatedAt = item.UpdatedAt
-			v.full[item.ID] = &full
+		switch {
+		case err != nil:
+			// The open row says "Couldn't load output: …".
+			v.full[id], v.fetchErr[id] = nil, err.Error()
+		case len(raw) == 0 || string(raw) == "null":
+			v.full[id], v.fetchErr[id] = nil, "Output is no longer available."
+		case json.Unmarshal(raw, &full) == nil:
+			v.full[id] = &full
+			delete(v.fetchErr, id)
+		default:
+			v.full[id], v.fetchErr[id] = nil, "Output is no longer available."
 		}
+		v.fullRev[id] = rev
 	}()
+}
+
+// fetched is the full item fetched for it's current revision, or why it
+// couldn't load; nothing while that revision is on its way.
+func (v *threadView) fetched(it *t3.TurnItem) (*t3.TurnItem, string) {
+	if v.fullRev[it.ID] != detailRevision(it) {
+		return nil, ""
+	}
+	return v.full[it.ID], v.fetchErr[it.ID]
 }

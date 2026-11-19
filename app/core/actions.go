@@ -241,37 +241,38 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		a.stop()
 	case "more":
 		a.loadEarlier()
-	case "fold":
+	case "fold", "group":
+		// A "Worked for" fold by its run, a work group by its id.
 		a.mu.Lock()
-		if a.view != nil {
-			k := "fold:" + arg
-			a.view.unfolded[k] = !a.view.unfolded[k]
-		}
-		a.mu.Unlock()
-	case "tool":
-		a.mu.Lock()
-		var item *t3.TurnItem
-		if a.view != nil {
-			a.view.open[arg] = !a.view.open[arg]
-			if a.view.open[arg] {
-				for _, it := range a.view.items {
-					if it.ID == arg {
-						item = it
-					}
-				}
+		if v := a.view; v != nil {
+			m := v.unfolded
+			if verb == "group" {
+				m = v.groups
 			}
+			m[arg] = !m[arg]
 		}
 		a.mu.Unlock()
-		if item != nil {
-			a.loadTool(item)
-		}
-	case "thought":
+	case "entry":
+		// An open entry fetches what the socket left out as it builds.
 		a.mu.Lock()
 		if a.view != nil {
 			a.view.open[arg] = !a.view.open[arg]
 		}
 		a.mu.Unlock()
-	case "approval":
+	case "terminal.run":
+		a.runInTerminal(act.Text)
+	case "link":
+		a.openLink(arg)
+	case "cite":
+		a.goToCited(th, arg)
+	case "fork":
+		a.forkFrom(arg)
+	case "plan.download":
+		a.download(arg, []byte(act.Text))
+	case "file.download":
+		a.downloadAttachment(arg)
+	case "approval", "timeline.approval":
+		// The composer's panel, or the approval's row in the timeline.
 		a.respond(map[string]any{"decision": arg})
 	case "q":
 		qi, oi := split2(arg)

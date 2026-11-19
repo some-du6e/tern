@@ -158,8 +158,8 @@ func main() {
 	// y 100, the card's surface 2dp below that.
 	first := firstRow(s)
 	h.click(130, 100+2+24)
-	s = h.wait("thread open", func(s *ui.Scene) bool { return len(s.Items) > 0 || s.Empty == "No messages yet." })
-	fmt.Printf("opened %q (expected %q): %d rows, more=%v, model=%q effort=%q\n", s.Title, first.Title, len(s.Items), s.MoreAbove, s.Model, s.Effort)
+	s = h.wait("thread open", func(s *ui.Scene) bool { return len(s.Timeline.Rows) > 0 || s.Empty != "" })
+	fmt.Printf("opened %q (expected %q): %d rows, more=%v, model=%q effort=%q\n", s.Title, first.Title, len(s.Timeline.Rows), s.Timeline.MoreHistory, s.Model, s.Effort)
 	h.shot("thread")
 	if *bench != "" {
 		h.benchmark(*bench)
@@ -167,28 +167,32 @@ func main() {
 	}
 
 	// Unfold the first "Worked for" row, if any, through its action.
-	for _, it := range s.Items {
-		if it.Kind == ui.ItemFold {
-			h.c.Handle(h.th, []ui.Action{{ID: it.ID, Kind: "click"}})
+	for _, r := range s.Timeline.Rows {
+		if r.Kind == ui.RowTurnFold {
+			h.c.Handle(h.th, []ui.Action{{ID: "fold:" + r.Group, Kind: "click"}})
 			break
 		}
 	}
 	s = h.frame()
 	h.shot("unfolded")
-	// The newest tool row, so it's on screen at the bottom of the list.
-	for i := len(s.Items) - 1; i >= 0; i-- {
-		if it := s.Items[i]; it.Kind == ui.ItemTool && it.ID != "" {
-			h.c.Handle(h.th, []ui.Action{{ID: "tool:" + it.ID, Kind: "click"}})
-			break
+	// The newest tool row that opens, so it's on screen at the bottom of
+	// the list.
+	opened := ""
+	for i := len(s.Timeline.Rows) - 1; i >= 0 && opened == ""; i-- {
+		if r := s.Timeline.Rows[i]; r.Kind == ui.RowWork && len(r.Entries) == 1 && r.Entries[0].Expands {
+			opened = r.Entries[0].ID
+			h.c.Handle(h.th, []ui.Action{{ID: "entry:" + opened, Kind: "click"}})
 		}
 	}
 	h.wait("tool output", func(s *ui.Scene) bool {
-		for _, it := range s.Items {
-			if it.Kind == ui.ItemTool && it.Open {
-				return it.Body != "Loading…"
+		for _, r := range s.Timeline.Rows {
+			for _, e := range r.Entries {
+				if e.ID == opened && e.Open {
+					return e.Body == nil || !e.Body.Pending
+				}
 			}
 		}
-		return true
+		return opened == ""
 	})
 	h.shot("tool-open")
 

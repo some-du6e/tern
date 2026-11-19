@@ -327,12 +327,6 @@ func checksSummary(checks []t3.PullRequestCheck) string {
 	}
 	approvals := countChecks(checks, workflowApproval)
 	others := countChecks(checks, func(c t3.PullRequestCheck) bool { return c.Status == "action-required" }) - approvals
-	plural := func(k int, one, many string) string {
-		if k == 1 {
-			return one
-		}
-		return many
-	}
 	switch failed, pending, passed := countChecks(checks, checkFailed), countChecks(checks, func(c t3.PullRequestCheck) bool { return c.Status == "pending" }),
 		countChecks(checks, func(c t3.PullRequestCheck) bool { return c.Status == "success" }); {
 	case failed > 0:

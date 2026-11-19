@@ -102,15 +102,8 @@ const (
 type Theme struct {
 	Shaper *text.Shaper
 	in     input
-	md     map[string]*mdCache
-
-	richCache map[richKey]*richOps
-	signIn    signInAnim
-
-	// CanRun and Run give PowerShell and cmd code blocks their ▷: whether
-	// a block in a language can run on this PC, and running it.
-	CanRun func(lang string) bool
-	Run    func(lang, code string) error
+	tl     timelineState
+	signIn signInAnim
 
 	// ControlsLeft is where the title bar's fixed controls start, in dp:
 	// 12, or 90 on a Mac, where the traffic lights sit in the top bar
@@ -137,5 +130,5 @@ func (th *Theme) dragArea(gtx C, size image.Point) {
 func NewTheme() *Theme {
 	// The embedded faces come first; the system's fill in the scripts they
 	// don't cover, like Chinese and Japanese.
-	return &Theme{Shaper: text.NewShaper(text.WithCollection(faces())), ControlsLeft: 12}
+	return &Theme{Shaper: text.NewShaper(text.WithCollection(faces())), ControlsLeft: 12, tl: newTimelineState()}
 }

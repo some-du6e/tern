@@ -648,22 +648,20 @@ func (th *Theme) canvas(gtx C, s *Scene) {
 		return draw(g)
 	}
 	switch {
-	case s.Live && s.Hero != "" && len(s.Items) == 0:
+	case s.Live && s.Hero != "" && len(s.Timeline.Rows) == 0:
 		in(0, size.Y, func(gtx C) D {
 			gtx.Constraints.Min.Y = size.Y
 			return th.hero(gtx, s, false)
 		})
 	default:
-		// The composer goes at the bottom with a 20dp spacer under it, and
-		// the timeline fills what's above.
+		// The composer goes at the bottom with a 20dp spacer under it, over
+		// the timeline, which spans the canvas and ends in as much space.
 		m := op.Record(gtx.Ops)
 		cd := in(0, size.Y, func(gtx C) D { return th.composerArea(gtx, s, false) })
 		composer := m.Stop()
 		ch := cd.Size.Y + dp(gtx, 20)
-		in(0, size.Y-ch, func(gtx C) D {
-			gtx.Constraints.Min.Y = gtx.Constraints.Max.Y
-			return th.messages(gtx, s, false)
-		})
+		th.tl.canvasH = size.Y
+		th.timeline(gtx, s, left, w, ch)
 		th.topFade(gtx, image.Pt(size.X, size.Y))
 		func() {
 			defer op.Offset(image.Pt(0, size.Y-ch)).Push(gtx.Ops).Pop()

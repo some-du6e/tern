@@ -161,13 +161,6 @@ type GuestShare struct {
 	GuestName string `json:"guestName"`
 }
 
-// ProviderSession is a provider's session attached to a thread
-// (OrchestrationV2ProviderSession); a move to another worktree detaches
-// it, so the agent starts again there.
-type ProviderSession struct {
-	ID string `json:"id"`
-}
-
 // AppThread is the part of a thread's full record (OrchestrationV2AppThread)
 // that its stream's projection and thread events carry beyond the shell.
 type AppThread struct {
@@ -285,9 +278,91 @@ type TurnItem struct {
 	} `json:"steps"`
 	Failure *struct {
 		Message string `json:"message"`
+		Class   string `json:"class"` // usage_limit, provider_error, …
+		Code    string `json:"code"`
+		ResetAt string `json:"resetAt"`
 	} `json:"failure"`
 	Questions   []Question        `json:"questions"`
 	Attachments []json.RawMessage `json:"attachments"`
+
+	// What the timeline's rows read (orchestrationV2.ts:1559-1912).
+	ParentItemID     string `json:"parentItemId"`
+	ProviderTurnID   string `json:"providerTurnId"`
+	ProviderThreadID string `json:"providerThreadId"`
+	// A user message: turn_start, queued_turn, steer or
+	// promoted_queued_to_steer; who sent it.
+	InputIntent    string `json:"inputIntent"`
+	CreatedBy      string `json:"createdBy"`
+	CreationSource string `json:"creationSource"`
+	// A /compact T3 sent on its own: beforeCacheExpires or onReturn.
+	IdleCompaction string `json:"idleCompaction"`
+	// An assistant message: commentary, partial_answer, final_answer.
+	Phase           string             `json:"phase"`
+	OutputOmitted   bool               `json:"outputOmitted"`
+	ViewedImagePath string             `json:"viewedImagePath"`
+	ToolSurface     string             `json:"toolSurface"` // browser, computer
+	Changes         []FileChangeDetail `json:"changes"`
+	Results         []SearchResult     `json:"results"`
+	RequestKind     string             `json:"requestKind"`
+	AppName         string             `json:"appName"`
+	Options         []ApprovalOption   `json:"options"`
+	QuestionAnswer  *QuestionAnswer    `json:"questionAnswer"`
+	Retry           *struct {
+		Attempt      int  `json:"attempt"`
+		MaxAttempts  *int `json:"maxAttempts"`
+		RetryDelayMs *int `json:"retryDelayMs"`
+	} `json:"retry"`
+	Summary          string `json:"summary"`
+	BeforeTokenCount *int   `json:"beforeTokenCount"`
+	AfterTokenCount  *int   `json:"afterTokenCount"`
+	// A fork's source, or a notification's: what it came from.
+	Source *struct {
+		Type     string `json:"type"` // a fork's: run, node, provider_thread
+		ThreadID string `json:"threadId"`
+		// A notification's: subagent, delegated_task, command, monitor,
+		// background_task, system.
+		Kind string `json:"kind"`
+	} `json:"source"`
+	// A notification's outcome (completed, failed, cancelled, updated) and
+	// its body.
+	Outcome        string `json:"outcome"`
+	Detail         string `json:"detail"`
+	TargetThreadID string `json:"targetThreadId"`
+}
+
+// FileChangeDetail is one operation of a file change.
+type FileChangeDetail struct {
+	Operation string `json:"operation"`
+	Path      string `json:"path"`
+	OldPath   string `json:"oldPath"`
+	FileType  string `json:"fileType"`
+	MimeType  string `json:"mimeType"`
+}
+
+// SearchResult is a file search's match or a web search's hit.
+type SearchResult struct {
+	FileName string `json:"fileName"`
+	Line     int    `json:"line"`
+	Column   int    `json:"column"`
+	Preview  string `json:"preview"`
+	Title    string `json:"title"`
+	URL      string `json:"url"`
+	Snippet  string `json:"snippet"`
+}
+
+// ApprovalOption is one answer an approval offers.
+type ApprovalOption struct {
+	Decision string `json:"decision"` // accept, acceptForSession, decline, cancel
+	Label    string `json:"label"`
+	Warning  string `json:"warning"`
+}
+
+// QuestionAnswer is what the user answered a question with.
+type QuestionAnswer struct {
+	RequestID        string                       `json:"requestId"`
+	QuestionTextByID map[string]string            `json:"questionTextById"`
+	Answers          map[string]json.RawMessage   `json:"answers"`
+	Attachments      map[string][]json.RawMessage `json:"attachmentsByQuestionId"`
 }
 
 type Question struct {
@@ -304,13 +379,61 @@ type Question struct {
 }
 
 type Run struct {
-	ID            string `json:"id"`
-	Status        string `json:"status"`
-	StartedAt     string `json:"startedAt"`
-	CompletedAt   string `json:"completedAt"`
-	QueuePosition int    `json:"queuePosition"`
-	QueueHeld     bool   `json:"queueHeld"`
-	UserMessageID string `json:"userMessageId"`
+	ID              string `json:"id"`
+	Status          string `json:"status"`
+	StartedAt       string `json:"startedAt"`
+	CompletedAt     string `json:"completedAt"`
+	QueuePosition   int    `json:"queuePosition"`
+	QueueHeld       bool   `json:"queueHeld"`
+	UserMessageID   string `json:"userMessageId"`
+	Ordinal         int    `json:"ordinal"`
+	RequestedAt     string `json:"requestedAt"`
+	ActiveAttemptID string `json:"activeAttemptId"`
+}
+
+// ProviderTurn is one of the provider's own turns, in a run's attempt.
+type ProviderTurn struct {
+	ID           string `json:"id"`
+	RunAttemptID string `json:"runAttemptId"`
+	Ordinal      int    `json:"ordinal"`
+	Status       string `json:"status"` // pending, running, completed, interrupted, failed, cancelled
+}
+
+// ProviderThread is one of the provider's threads, and the session it
+// runs in.
+type ProviderThread struct {
+	ID                string `json:"id"`
+	ProviderSessionID string `json:"providerSessionId"`
+}
+
+// ProviderSession is a provider's session attached to a thread
+// (OrchestrationV2ProviderSession): what it can do with threads. A move to
+// another worktree detaches it, so the agent starts again there.
+type ProviderSession struct {
+	ID           string `json:"id"`
+	Capabilities struct {
+		Threads struct {
+			CanForkThread   bool `json:"canForkThread"`
+			CanForkFromTurn bool `json:"canForkFromTurn"`
+		} `json:"threads"`
+		Identity struct {
+			NativeThreadIDs string `json:"nativeThreadIds"` // none, weak, strong
+		} `json:"identity"`
+		Context struct {
+			SupportsFullThreadHandoff bool `json:"supportsFullThreadHandoff"`
+		} `json:"context"`
+	} `json:"capabilities"`
+}
+
+// RuntimeRequestRecord is a runtime request in the thread's projection:
+// how it stands, and whether the provider can still take its answer.
+type RuntimeRequestRecord struct {
+	ID                 string `json:"id"`
+	Kind               string `json:"kind"`
+	Status             string `json:"status"` // pending, resolved, expired, cancelled
+	ResponseCapability struct {
+		Type string `json:"type"` // live, message, not_resumable
+	} `json:"responseCapability"`
 }
 
 type Message struct {
@@ -323,13 +446,16 @@ type Message struct {
 type ThreadItem struct {
 	Kind       string `json:"kind"`
 	Projection *struct {
-		Thread           *AppThread        `json:"thread"`
-		ProviderSessions []ProviderSession `json:"providerSessions"`
+		Thread           *AppThread `json:"thread"`
 		VisibleTurnItems []struct {
 			Item json.RawMessage `json:"item"`
 		} `json:"visibleTurnItems"`
-		Runs     []Run     `json:"runs"`
-		Messages []Message `json:"messages"`
+		Runs             []Run                  `json:"runs"`
+		Messages         []Message              `json:"messages"`
+		ProviderTurns    []ProviderTurn         `json:"providerTurns"`
+		ProviderThreads  []ProviderThread       `json:"providerThreads"`
+		ProviderSessions []ProviderSession      `json:"providerSessions"`
+		RuntimeRequests  []RuntimeRequestRecord `json:"runtimeRequests"`
 	} `json:"projection"`
 	HistoryCursor  string `json:"historyCursor"`
 	HasMoreHistory bool   `json:"hasMoreHistory"`
@@ -354,6 +480,10 @@ type Attachment struct {
 	Name      string `json:"name"`
 	MimeType  string `json:"mimeType"`
 	SizeBytes int    `json:"sizeBytes"`
+	// A file's source: _tag "pasted-text" for text pasted as a file.
+	Source *struct {
+		Tag string `json:"_tag"`
+	} `json:"source,omitempty"`
 }
 
 // ServerConfig is the part of server.getConfig the composer, the sidebar

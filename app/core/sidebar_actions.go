@@ -785,7 +785,8 @@ func presetID(p t3.SnoozePreset) string {
 	return "at:" + p.Day + ":" + p.Time
 }
 
-func plural(n int, unit string) string {
+// units is n of unit, plural past one: "1 hour", "3 hours".
+func units(n int, unit string) string {
 	if n == 1 {
 		return "1 " + unit
 	}
@@ -804,11 +805,11 @@ func resolvePreset(p t3.SnoozePreset, now time.Time) (snoozeChoice, bool) {
 		c.until = now.Add(time.Duration(p.Minutes) * time.Minute)
 		switch {
 		case p.Minutes%(24*60) == 0:
-			c.label = "In " + plural(p.Minutes/(24*60), "day")
+			c.label = "In " + units(p.Minutes/(24*60), "day")
 		case p.Minutes%60 == 0:
-			c.label = "In " + plural(p.Minutes/60, "hour")
+			c.label = "In " + units(p.Minutes/60, "hour")
 		default:
-			c.label = "In " + plural(p.Minutes, "minute")
+			c.label = "In " + units(p.Minutes, "minute")
 		}
 	} else {
 		switch p.Day {

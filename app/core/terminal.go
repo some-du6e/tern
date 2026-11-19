@@ -44,7 +44,7 @@ type terminal struct {
 	threadID string
 	attached bool   // the server has the shell: a resize before that is lost
 	closed   bool   // the tab was closed: nothing reattaches it
-	run      string // typed into the shell once it's there: a project script
+	queued   string // text to type once the shell has started: a project script, a code block
 }
 
 const (
@@ -70,6 +70,58 @@ func (a *App) toggleTerminal() {
 			d.open = false
 			a.fail(err)
 		}
+	}
+}
+
+// runInTerminal is a code block's "Run in terminal": the command runs in
+// one of the open thread's terminals that isn't running anything, the
+// active one first, or in a new one, with the drawer open on it
+// (useChatTerminalActions.ts:201-290, projectScriptTerminal.ts).
+func (a *App) runInTerminal(command string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.openID == "" || command == "" {
+		return
+	}
+	d := a.drawers[a.openID]
+	if d == nil {
+		d = &drawer{}
+		a.drawers[a.openID] = d
+	}
+	d.open = true
+	idle := func(t *terminal) bool { return !t.busy && t.status == "running" }
+	reuse := -1
+	for i, t := range d.terms {
+		if idle(t) && (reuse < 0 || i == d.active) {
+			reuse = i
+		}
+	}
+	if reuse >= 0 {
+		d.active = reuse
+	} else if err := a.newTerminalLocked(d, ""); err != nil {
+		d.open = len(d.terms) > 0
+		a.fail(err)
+		return
+	}
+	term := d.terms[d.active]
+	term.queued += command + "\r"
+	if term.attached {
+		term.typeQueued()
+	}
+}
+
+// typeQueued types what waited for the shell to start. Call with the
+// lock held.
+func (term *terminal) typeQueued() {
+	s := term.queued
+	term.queued = ""
+	if s == "" {
+		return
+	}
+	defer func() { recover() }() // the terminal closed meanwhile
+	select {
+	case term.input <- func() { term.emu.SendText(s) }:
+	default:
 	}
 }
 
@@ -103,7 +155,7 @@ func (a *App) newTerminalLocked(d *drawer, run string) error {
 		emu: vt.NewSafeEmulator(termCols, termRows), input: make(chan func(), 256), cols: termCols, rows: termRows}
 	d.terms = append(d.terms, term)
 	d.active = len(d.terms) - 1
-	term.ref, term.cwd, term.conn, term.threadID, term.run = a.openID, cwd, e.conn, t.ID, run
+	term.ref, term.cwd, term.conn, term.threadID, term.queued = a.openID, cwd, e.conn, t.ID, run
 	go term.pump(a)
 	go func() {
 		for f := range term.input {
@@ -176,10 +228,7 @@ func (a *App) termEvent(term *terminal, ev t3.TermEvent) {
 			if cols, rows := term.cols, term.rows; cols != termCols || rows != termRows {
 				go term.conn.TerminalResize(term.threadID, term.id, cols, rows)
 			}
-			if term.run != "" {
-				go term.conn.TerminalWrite(term.threadID, term.id, term.run)
-				term.run = ""
-			}
+			term.typeQueued()
 		}
 		if ev.Snapshot != nil {
 			term.status = ev.Snapshot.Status

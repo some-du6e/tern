@@ -36,7 +36,6 @@ const fadeIn = 280 * time.Millisecond
 
 func run(w *app.Window) error {
 	th := ui.NewTheme()
-	th.CanRun, th.Run = shell.Runnable, shell.Run
 	th.ControlsLeft, th.Frameless = controlsLeft, frameless
 	// T3 follows the system's light or dark setting; so does tern.
 	var dark atomic.Bool
@@ -119,15 +118,6 @@ func nextTick(now time.Time, s *ui.Scene) time.Time {
 }
 
 // moving reports whether anything on screen animates. The sign-in screen
-// schedules its own frames.
-func moving(s *ui.Scene) bool {
-	if s.State == ui.ThreadRunning {
-		return true
-	}
-	for _, it := range s.Items {
-		if it.Live {
-			return true
-		}
-	}
-	return false
-}
+// schedules its own frames, and so does the timeline: its timers once a
+// second, its shimmer and shine once a step, and only for rows on screen.
+func moving(s *ui.Scene) bool { return s.State == ui.ThreadRunning }
