@@ -46,6 +46,14 @@ func main() {
 		{"5-new-thread-commands", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, draftScene()) }},
 		{"6-sign-in", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.SignInScreen(gtx, signInScene()) }},
 		{"7-phone", 390, 844, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Phone(gtx, phoneScene()) }},
+		{"8-terminal", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, terminalScene()) }},
+		{"8b-terminal-split-dark", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions {
+			ui.SetDark(true)
+			defer ui.SetDark(false)
+			return th.Desktop(gtx, terminalSplitScene())
+		}},
+		{"8c-terminal-empty", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, terminalEmptyScene()) }},
+		{"8d-terminal-close", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, terminalCloseScene()) }},
 	}
 	if *anim != "" {
 		if err := renderAnims(th, float32(*scale), *anim); err != nil {
