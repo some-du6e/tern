@@ -101,6 +101,41 @@ func (a *App) previousWorktree(e *envState, p t3.Project) *t3.Thread {
 	return best
 }
 
+// keybindings are the shortcuts the shell and the card take and show
+// (primaryServerKeybindingsAtom): with no primary environment, the first
+// connected one's rules after T3's defaults for the commands they leave
+// alone; the defaults until one has its config. Call with the lock held.
+func (a *App) keybindings() []ui.Keybinding {
+	for _, e := range a.envs {
+		if e.conn != nil && e.config != nil {
+			return ui.MergeKeys(uiKeys(e.config.Keybindings))
+		}
+	}
+	return ui.MergeKeys(nil)
+}
+
+// uiKeys is the server's rules as the ui takes them.
+func uiKeys(ks []t3.Keybinding) []ui.Keybinding {
+	out := make([]ui.Keybinding, 0, len(ks))
+	for _, k := range ks {
+		sh := k.Shortcut
+		out = append(out, ui.Keybinding{Command: k.Command, Key: sh.Key, Mod: sh.Mod, Meta: sh.Meta, Ctrl: sh.Ctrl,
+			Shift: sh.Shift, Alt: sh.Alt, When: uiWhen(k.When)})
+	}
+	return out
+}
+
+// uiWhen is a rule's condition as the ui takes it, not's operand on the left.
+func uiWhen(w *t3.KeybindingWhen) *ui.When {
+	if w == nil {
+		return nil
+	}
+	if w.Type == "not" {
+		return &ui.When{Op: w.Type, Left: uiWhen(w.Node)}
+	}
+	return &ui.When{Op: w.Type, Name: w.Name, Left: uiWhen(w.Left), Right: uiWhen(w.Right)}
+}
+
 // cardItems are the card's rows the "Show in thread details" menu turns
 // on and off (threadDetailsItems.ts), in its order; all on by default.
 // T3's Servers, Automations, Lineage, Side chats, Usage limits and Context
@@ -177,7 +212,7 @@ func (a *App) cardScene(s *ui.Scene, e *envState, t *t3.Thread, p t3.Project, ha
 		d.OpenIn = o
 	}
 	if a.cardMenu == "openin" {
-		d.Menu = &ui.CardMenu{For: "openin", Rows: editorMenu(choices, pref, mode, target, e.env.Label, a.hintSeen, cwd == "")}
+		d.Menu = &ui.CardMenu{For: "openin", Rows: editorMenu(choices, pref, ui.KeyLabel(s.Keys, "editor.openFavorite"), mode, target, e.env.Label, a.hintSeen, cwd == "")}
 	}
 
 	// Project scripts.
@@ -189,9 +224,15 @@ func (a *App) cardScene(s *ui.Scene, e *envState, t *t3.Thread, p t3.Project, ha
 		d.Scripts = sc
 	}
 	if a.cardMenu == "scripts" && sc.Any {
+		// Each with its shortcut from its environment's own rules
+		// (ProjectScriptsControl.tsx).
+		var keys []ui.Keybinding
+		if e.config != nil {
+			keys = uiKeys(e.config.Keybindings)
+		}
 		var rows []ui.MenuRow
 		for _, s := range p.Scripts {
-			rows = append(rows, ui.MenuRow{Label: scriptLabel(s), Icon: ui.ScriptIcon(s.Icon)})
+			rows = append(rows, ui.MenuRow{Label: scriptLabel(s), Icon: ui.ScriptIcon(s.Icon), Shortcut: ui.KeyLabel(keys, "script."+s.ID+".run")})
 		}
 		// With no primary the split is the Actions form, whose menu doesn't
 		// light rows on hover (highlightItemOnHover).
@@ -340,8 +381,8 @@ func runMenu(worktree string, newWorktree bool, prev *t3.Thread) []ui.MenuRow {
 }
 
 // editorMenu lists the editors to make the preferred one, the preferred
-// with Open in's shortcut, or says why there are none.
-func editorMenu(choices []string, pref string, mode openMode, target t3.RemoteOpenTarget, machine string, hintSeen, noFolder bool) []ui.MenuRow {
+// with Open in's shortcut (key), or says why there are none.
+func editorMenu(choices []string, pref, key string, mode openMode, target t3.RemoteOpenTarget, machine string, hintSeen, noFolder bool) []ui.MenuRow {
 	switch {
 	case mode == openNone:
 		return []ui.MenuRow{{Label: "No SSH route to " + machine, Disabled: true}}
@@ -354,7 +395,7 @@ func editorMenu(choices []string, pref string, mode openMode, target t3.RemoteOp
 	for _, id := range choices {
 		r := ui.MenuRow{Label: editorLabel(id), Icon: "editor:" + id, Disabled: noFolder}
 		if id == pref {
-			r.Shortcut = ui.Shortcut("O")
+			r.Shortcut = key
 		}
 		rows = append(rows, r)
 	}

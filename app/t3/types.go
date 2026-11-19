@@ -315,6 +315,7 @@ type ServerConfig struct {
 	AvailableEditors     []string           `json:"availableEditors"`
 	RemoteOpenTargets    []RemoteOpenTarget `json:"remoteOpenTargets"`
 	ScratchWorkspaceRoot string             `json:"scratchWorkspaceRoot"`
+	Keybindings          []Keybinding       `json:"keybindings"`
 	Settings             struct {
 		EnvironmentIcon       string          `json:"environmentIcon"`
 		DefaultModelSelection *ModelSelection `json:"defaultModelSelection"`
@@ -340,6 +341,32 @@ type ServerConfig struct {
 			ThreadAutoSettleOptOut       bool `json:"threadAutoSettleOptOut"`
 		} `json:"capabilities"`
 	} `json:"environment"`
+}
+
+// Keybinding is one of the server's resolved shortcuts
+// (ResolvedKeybindingRule): the command, its key ("b", "escape", "f6")
+// with the modifiers it wants, and the condition it holds in.
+type Keybinding struct {
+	Command  string `json:"command"`
+	Shortcut struct {
+		Key   string `json:"key"`
+		Meta  bool   `json:"metaKey"`
+		Ctrl  bool   `json:"ctrlKey"`
+		Shift bool   `json:"shiftKey"`
+		Alt   bool   `json:"altKey"`
+		Mod   bool   `json:"modKey"` // Cmd on a Mac, Ctrl elsewhere
+	} `json:"shortcut"`
+	When *KeybindingWhen `json:"whenAst"`
+}
+
+// KeybindingWhen is a keybinding's condition (KeybindingWhenNode): an
+// identifier such as terminalFocus, or the not, and, or of others.
+type KeybindingWhen struct {
+	Type  string          `json:"type"` // identifier, not, and, or
+	Name  string          `json:"name"`
+	Node  *KeybindingWhen `json:"node"` // not's
+	Left  *KeybindingWhen `json:"left"`
+	Right *KeybindingWhen `json:"right"`
 }
 
 type Provider struct {

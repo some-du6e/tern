@@ -91,6 +91,7 @@ func TestThreadMenuDrawn(t *testing.T) {
 		}
 	}
 	// A menu of short rows is 128 wide.
+	SetDark(false)
 	s := headerScene()
 	s.Live = false
 	s.Menu = &ContextMenu{At: image.Pt(300, 41), Items: []MenuItem{{ID: "pin", Label: "Pin", Icon: "pin"}}}
@@ -161,7 +162,9 @@ func TestThreadMenuKeys(t *testing.T) {
 }
 
 // The pointer coming onto a row focuses it (§5.2): onto Copy it opens the
-// submenu beside it, 4dp right of the row, and leaves the focus on Copy,
+// submenu beside it, 4dp right of the row and level with it (measured:
+// row right 711.13, top 316.09, submenu at 715.13, 316.09), and leaves the
+// focus on Copy,
 // so one Escape closes the lot, as measured; onto a row without one it
 // closes it. The keyboard can move the focus off the row the pointer
 // rests on.
@@ -169,16 +172,21 @@ func TestThreadMenuHover(t *testing.T) {
 	s := headerScene()
 	s.Menu = threadMenu()
 	l := newLive(image.Pt(1440, 900), nil)
+	// As if right-clicked over the empty canvas.
+	at := image.Pt(600, 200)
+	l.th.in.ctxAt = at
 	l.draw = func(gtx C) { l.th.Desktop(gtx, s) }
 	l.frame(0)
 	var ops op.Ops
 	gtx := layout.Context{Ops: &ops, Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Constraints{Max: image.Pt(2000, 52)}}
-	// The menu opens at the window's corner, kept 4dp in.
 	w := menuWidth(l.th, gtx, s.Menu.Items)
-	copyY := 4 + 5 + 2*28 + 9
-	sub := image.Pt(4+w-5+4, copyY+14) // the submenu's left border
+	copyY := at.Y + 5 + 2*28 + 9
+	// The submenu's top border, level with Copy's top, past the menu: it
+	// starts 4dp right of the row, on the menu's own right border.
+	sub := image.Pt(at.X+w-5+4+20, copyY)
 	border := over(alpha(P.ContrastForeground, 0x1a), rgb(0xffffff))
-	l.move(40, float32(copyY+14))
+	wantPixel(t, l.pixels(t), sub, P.Background, "no submenu before the pointer comes")
+	l.move(float32(at.X+40), float32(copyY+14))
 	l.frame(0)
 	l.frame(0)
 	wantPixel(t, l.pixels(t), sub, border, "the submenu, 4dp right of Copy")
@@ -186,7 +194,7 @@ func TestThreadMenuHover(t *testing.T) {
 	if acts := l.frame(0); len(acts) != 1 || acts[0].ID != "menus.escape" {
 		t.Errorf("Escape with the submenu open by hover: %+v, want the menu closed", acts)
 	}
-	l.move(40, 4+5+14) // onto Rename
+	l.move(float32(at.X+40), float32(at.Y+5+14)) // onto Rename
 	l.frame(0)
 	l.frame(0)
 	wantPixel(t, l.pixels(t), sub, P.Background, "the submenu, closed")

@@ -12,7 +12,6 @@ import (
 	"gioui.org/f32"
 	"gioui.org/font"
 	"gioui.org/io/clipboard"
-	"gioui.org/io/event"
 	"gioui.org/io/key"
 	"gioui.org/layout"
 	"gioui.org/op"
@@ -146,17 +145,20 @@ func checksOpen(d *ThreadDetails) bool {
 	return false
 }
 
-// shellKeys handles T3's shell shortcuts (keybindings.ts): mod+B the
-// sidebar, mod+J the terminal, mod+Alt+B the right panel, mod+Shift+B the
-// thread details, mod+O Open in editor. It asks before anything else does,
-// so the shortcuts work from the terminal too.
+// shellCommands are the commands the shell runs from the keyboard.
+var shellCommands = []string{"sidebar.toggle", "terminal.toggle", "rightPanel.toggle", "threadPanel.toggle", "editor.openFavorite"}
+
+// shellKeys runs the shell's commands from their keybindings (s.Keys,
+// keybindings.ts): the sidebar, the terminal drawer, the right panel, the
+// thread details and Open in editor, each when it can act. It asks before
+// anything else does, so they work from the terminal too, unless a rule's
+// condition keeps them out of it (threadPanel.toggle's !terminalFocus).
 func (th *Theme) shellKeys(gtx C, s *Scene) {
-	filters := []event.Filter{
-		key.Filter{Name: "B", Required: key.ModShortcut, Optional: key.ModShift | key.ModAlt},
-		key.Filter{Name: "J", Required: key.ModShortcut},
-		key.Filter{Name: "O", Required: key.ModShortcut},
+	keys, ctx := s.keys(), th.keyContext(gtx, s)
+	filters := keyFilters(keys, shellCommands, ctx)
+	if len(filters) == 0 {
+		return
 	}
-	shift, alt := key.ModShift, key.ModAlt
 	for {
 		ev, ok := gtx.Event(filters...)
 		if !ok {
@@ -166,22 +168,54 @@ func (th *Theme) shellKeys(gtx C, s *Scene) {
 		if !ok || ke.State != key.Press {
 			continue
 		}
-		mods := ke.Modifiers & (shift | alt)
-		switch {
-		case ke.Name == "J" && panels(s):
-			th.push(Action{ID: "terminal.toggle", Kind: "click"})
-		case ke.Name == "O" && s.Card != nil && s.Card.OpenIn != nil && !s.Card.OpenIn.Disabled:
-			th.push(Action{ID: "card.openin", Kind: "click"})
-		case ke.Name == "B" && mods == shift && s.Card != nil:
-			// The keyboard's open shows the card's first row focused.
-			th.in.keyFocus = true
-			th.push(th.detailsAction())
-		case ke.Name == "B" && mods == alt && panels(s):
-			th.push(Action{ID: "browser.toggle", Kind: "click"})
-		case ke.Name == "B" && mods == 0:
+		switch keyCommand(keys, ke, ctx) {
+		case "sidebar.toggle":
 			th.push(Action{ID: "sidebar.toggle", Kind: "click"})
+		case "terminal.toggle":
+			if panels(s) {
+				th.push(Action{ID: "terminal.toggle", Kind: "click"})
+			}
+		case "rightPanel.toggle":
+			if panels(s) {
+				th.push(Action{ID: "browser.toggle", Kind: "click"})
+			}
+		case "threadPanel.toggle":
+			if s.Card != nil {
+				// The keyboard's open shows the card's first row focused.
+				th.in.keyFocus = true
+				th.push(th.detailsAction())
+			}
+		case "editor.openFavorite":
+			if s.Card != nil && s.Card.OpenIn != nil && !s.Card.OpenIn.Disabled {
+				th.push(Action{ID: "card.openin", Kind: "click"})
+			}
 		}
 	}
+}
+
+// keyContext is what the rules' conditions see (ShortcutMatchContext):
+// tern is T3's desktop app; the terminal drawer and the browser panel,
+// open or holding the focus; and a field holding it.
+func (th *Theme) keyContext(gtx C, s *Scene) map[string]bool {
+	editable := false
+	for _, ed := range th.in.editors {
+		editable = editable || gtx.Focused(ed)
+	}
+	return map[string]bool{
+		"isDesktop":     true,
+		"terminalFocus": gtx.Focused(&th.in.term), "terminalOpen": s.Term != nil,
+		"previewFocus": gtx.Focused(&th.in.browser), "previewOpen": s.Web != nil,
+		"editableFocus": editable,
+	}
+}
+
+// keys is the scene's keybindings, T3's defaults for a scene that has
+// none of its own.
+func (s *Scene) keys() []Keybinding {
+	if s.Keys == nil {
+		return defaultKeys
+	}
+	return s.Keys
 }
 
 // shellEscape is Escape that nothing with the focus took (a field, the
@@ -442,7 +476,7 @@ func (th *Theme) sidebarTrigger(gtx C, s *Scene, visible bool) {
 	if visible {
 		icon = "panel-left-close"
 	}
-	th.titleButtonW("sidebar.toggle", "Toggle main sidebar ("+Shortcut("B")+")",
+	th.titleButtonW("sidebar.toggle", withKey("Toggle main sidebar", s.keys(), "sidebar.toggle"),
 		titleButton{icon: icon, onArt: visible, muted: true, x: x})(gtx)
 }
 
@@ -456,11 +490,11 @@ func (th *Theme) titlebarControls(gtx C, s *Scene, size image.Point, panelOpen b
 	}
 	var ctls []ctl
 	if !panelOpen {
-		ctls = append(ctls, ctl{th.detailsID(), "Toggle thread details (" + ShortcutShift("B") + ")",
+		ctls = append(ctls, ctl{th.detailsID(), withKey("Toggle thread details", s.keys(), "threadPanel.toggle"),
 			titleButton{icon: "square-menu", pressed: th.detailsShown(s), disabled: s.Card == nil}})
 	}
 	none := !panels(s)
-	term, right := "Toggle terminal drawer ("+Shortcut("J")+")", "Toggle right panel ("+ShortcutAlt("B")+")"
+	term, right := withKey("Toggle terminal drawer", s.keys(), "terminal.toggle"), withKey("Toggle right panel", s.keys(), "rightPanel.toggle")
 	if none {
 		term, right = "Terminal drawer is unavailable", "Right panel is unavailable"
 	}
@@ -555,7 +589,7 @@ func (th *Theme) chatColumn(gtx C, s *Scene, x int, panelOpen, narrow bool) {
 			// The details toggle moves into the header while the panel is open.
 			bx := size.X - dp(gtx, 12+controlSize)
 			defer op.Offset(image.Pt(bx, dp(gtx, 12))).Push(gtx.Ops).Pop()
-			th.titleButtonW(th.detailsID(), "Toggle thread details ("+ShortcutShift("B")+")",
+			th.titleButtonW(th.detailsID(), withKey("Toggle thread details", s.keys(), "threadPanel.toggle"),
 				titleButton{icon: "square-menu", pressed: th.detailsShown(s), disabled: s.Card == nil, x: x + bx})(gtx)
 		}
 	}()

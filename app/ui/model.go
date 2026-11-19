@@ -488,6 +488,7 @@ type Scene struct {
 	Account                  *Traits      // the account menu, open over the sidebar footer
 	Projects                 *Traits      // the new-thread project menu, one group per machine
 	Menu                     *ContextMenu // a thread's actions menu, at the click or under the header's title
+	Keys                     []Keybinding // the shortcuts: the server's after T3's defaults (MergeKeys); nil for the defaults
 	Details                  bool         // the thread details popover is open
 	DetailsCard              bool         // the details card is shown inline, where it fits
 	SidebarHidden            bool         // the sidebar is collapsed

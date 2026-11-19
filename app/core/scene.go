@@ -271,6 +271,7 @@ func (a *App) build(now time.Time) *ui.Scene {
 	s.Net = a.net
 	s.Error = a.errText
 	s.Notice = a.notice
+	s.Keys = a.keybindings()
 	s.Details = a.detailsOpen
 	cardKey := a.openID
 	if a.draft != "" {

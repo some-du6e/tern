@@ -2,8 +2,14 @@ package ui
 
 import (
 	"image"
+	"runtime"
 	"testing"
 	"time"
+
+	"gioui.org/io/key"
+	"gioui.org/layout"
+	"gioui.org/op"
+	"gioui.org/unit"
 )
 
 // The lane rule reproduces T3's measured lanes at 1440x900 with the
@@ -120,4 +126,60 @@ func TestTitlebarTooltipsInside(t *testing.T) {
 	y := 12 + 28 + 4 + 13
 	wantPixel(t, img, image.Pt(1435-3, y), P.Popover, "the details tooltip's right end")
 	wantPixel(t, img, image.Pt(1435+4, y), P.Background, "the window past it")
+}
+
+// The toggles' shortcuts are the server's (§3.4, §5.3): with its rules
+// moving the terminal drawer to mod+Alt+J and the right panel to
+// mod+Alt+Shift+B, as on the server T3 was measured against, the terminal
+// toggle's tooltip says so, as wide as that label (and still held 5dp in),
+// and mod+J does nothing while mod+Alt+J toggles the drawer. A later rule
+// that takes a command's keys leaves it without a shortcut.
+func TestShortcutsFromKeybindings(t *testing.T) {
+	keys := MergeKeys([]Keybinding{
+		{Command: "terminal.toggle", Key: "j", Mod: true, Alt: true},
+		{Command: "rightPanel.toggle", Key: "b", Mod: true, Alt: true, Shift: true},
+	})
+	term, right := "Ctrl+Alt+J", "Ctrl+Alt+Shift+B"
+	if runtime.GOOS == "darwin" {
+		term, right = "⌥⌘J", "⌥⇧⌘B"
+	}
+	if got := KeyLabel(keys, "terminal.toggle"); got != term {
+		t.Errorf("the terminal drawer's shortcut %q, want %q", got, term)
+	}
+	if got := KeyLabel(keys, "rightPanel.toggle"); got != right {
+		t.Errorf("the right panel's shortcut %q, want %q", got, right)
+	}
+	if got := KeyLabel(MergeKeys([]Keybinding{{Command: "chat.find", Key: "j", Mod: true}}), "terminal.toggle"); got != "" {
+		t.Errorf("mod+J taken by a later rule, the drawer's shortcut is still %q", got)
+	}
+
+	s := &Scene{Live: true, Title: "A thread", Header: &ChatHeader{Server: true, Project: "atlas"}, Card: &ThreadDetails{}, Keys: keys}
+	l := newLive(image.Pt(1440, 900), nil)
+	l.draw = func(gtx C) { l.th.Desktop(gtx, s) }
+	l.frame(0)
+	l.move(1367+14, 12+14)
+	l.frame(0)
+	l.frame(800 * time.Millisecond)
+	img := l.pixels(t)
+	var ops op.Ops
+	gtx := layout.Context{Ops: &ops, Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Constraints{Max: image.Pt(2000, 100)}}
+	w := l.th.tooltip(gtx, "Toggle terminal drawer ("+term+")").Size.X
+	y := 12 + 28 + 4 + 13
+	wantPixel(t, img, image.Pt(1435-w+3, y), P.Popover, "the tooltip's left end, as wide as its label")
+	wantPixel(t, img, image.Pt(1435-w-4, y), P.Background, "left of it")
+	chord := func(mods key.Modifiers) bool {
+		l.r.Queue(key.Event{Name: "J", Modifiers: mods, State: key.Press}, key.Event{Name: "J", Modifiers: mods, State: key.Release})
+		for _, a := range l.frame(10 * time.Millisecond) {
+			if a.ID == "terminal.toggle" {
+				return true
+			}
+		}
+		return false
+	}
+	if chord(key.ModShortcut) {
+		t.Error("mod+J toggled the drawer after the server moved it")
+	}
+	if !chord(key.ModShortcut | key.ModAlt) {
+		t.Error("mod+Alt+J didn't toggle the drawer")
+	}
 }

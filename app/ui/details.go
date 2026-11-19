@@ -34,23 +34,6 @@ const (
 	cardFade  = 24  // the scroll area's --fade-size
 )
 
-// ShortcutShift is Shortcut with Shift: ⇧⌘B on a Mac, Ctrl+Shift+B
-// elsewhere (keybindings.ts: ⌃⌥⇧⌘ order on a Mac, words elsewhere).
-func ShortcutShift(k string) string {
-	if s := Shortcut(k); s[0] != 'C' {
-		return "⇧" + s
-	}
-	return "Ctrl+Shift+" + k
-}
-
-// ShortcutAlt is Shortcut with Alt: ⌥⌘B on a Mac, Ctrl+Alt+B elsewhere.
-func ShortcutAlt(k string) string {
-	if s := Shortcut(k); s[0] != 'C' {
-		return "⌥" + s
-	}
-	return "Ctrl+Alt+" + k
-}
-
 // iconToggle is an icon button with a lucide icon, lit while what it opens
 // is open.
 func (th *Theme) iconToggle(icon string, on bool) W {
