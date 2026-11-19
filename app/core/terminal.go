@@ -1,6 +1,7 @@
 package core
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"runtime"
@@ -320,10 +321,16 @@ func (a *App) streamTerminalLocked(term *terminal) {
 	conn := term.conn
 	term.stop = conn.TerminalAttach(o, func(ev t3.TermEvent) { a.termEvent(term, ev) }, func(err error) {
 		a.mu.Lock()
-		again := err != nil && !term.gone
+		gone := term.gone
 		a.mu.Unlock()
-		if again {
+		switch {
+		case err == nil || gone:
+		case errors.Is(err, t3.ErrClosed):
 			go a.reattach(term, conn)
+		default:
+			// The server refused it: say why in the terminal, as T3 does.
+			term.emu.system(err.Error())
+			a.changed()
 		}
 	})
 }
