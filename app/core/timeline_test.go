@@ -383,7 +383,7 @@ func TestApprovalProviderGone(t *testing.T) {
 		th.ActivityRunStatus, th.PendingRuntimeRequest = "waiting", &t3.RuntimeRequest{ID: "req-1", Kind: "command"}
 		rr := t3.RuntimeRequestRecord{ID: "req-1", Kind: "command", Status: "pending"}
 		rr.ResponseCapability.Type = c.capability
-		tt.a.view.requests["req-1"] = rr
+		tt.a.view.requests = map[string]t3.RuntimeRequestRecord{"req-1": rr}
 		rows := tt.rows()
 		wantShape(t, c.capability, rows, "user:p, working, work:ap")
 		if a := rows[2].Entries[0].Approval; a == nil || a.Live != c.live {
