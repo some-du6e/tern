@@ -769,7 +769,8 @@ func TestMiddleTruncate(t *testing.T) {
 // the tail.
 func TestHoverCardBranch(t *testing.T) {
 	th := NewTheme()
-	branch := strings.Repeat("investigate-", 4) + "times"
+	// Five words: SF Pro, narrower than Inter, fits four in the card whole.
+	branch := strings.Repeat("investigate-", 5) + "times"
 	s := &Scene{Sidebar: Sidebar{Items: []SidebarItem{{Row: &ThreadRow{ID: "e/1", Title: "T", Branch: branch, Age: "1h", Hover: true}}}}}
 	img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, s) })
 	glass := over(alpha(P.Popover, 0xd5), P.Background)
