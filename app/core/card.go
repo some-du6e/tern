@@ -27,6 +27,19 @@ type vcsState struct {
 	// switching is the ref a switch is moving the checkout to; the branch
 	// row names it until the switch lands, as T3's optimistic label does.
 	switching string
+	preview   *changesPreview
+}
+
+// changesPreview is the branch's comparison as the Diff panel makes it
+// (review.getDiffPreview), asked for the status whose totals make rev:
+// the totals of its files and the ref they're against, which the Changes
+// row counts once files says it gave file counts. A new one keeps the last
+// one's until it lands.
+type changesPreview struct {
+	rev      string
+	files    bool
+	ins, del int
+	base     string
 }
 
 // gitRun is a stacked action or pull in progress: its phase's label, the
@@ -254,10 +267,15 @@ func (a *App) cardScene(s *ui.Scene, e *envState, t *t3.Thread, p t3.Project, ha
 	}
 
 	// The pull requests go under the branch row, or without one where it
-	// would be, with nothing from Git to fall back on. They're read while
-	// the card can be seen: shown inline, or its popover open.
+	// would be, with nothing from Git to fall back on. They, and the
+	// branch's comparison the Changes row counts, are read while the card
+	// can be seen: shown inline, or its popover open.
+	cardKey := a.openID
+	if t == nil {
+		cardKey = "draft"
+	}
+	visible := !a.cardHidden[cardKey] || a.detailsOpen
 	if show("branch") && t != nil {
-		visible := !a.cardHidden[a.openID] || a.detailsOpen
 		d.PRs = a.prsScene(e, p, prItems(e, t, a.branchPR(e, t, p, v)), termsFor(st), now, visible)
 	}
 	if !offersGit {
@@ -290,8 +308,13 @@ func (a *App) cardScene(s *ui.Scene, e *envState, t *t3.Thread, p t3.Project, ha
 	hasRemote := st == nil || st.HasPrimaryRemote
 	q := resolveQuickAction(st, busy, isDefault, hasRemote)
 	ins, del, base, known := 0, 0, "", st != nil
+	var preview *changesPreview
+	if known && show("changes") && visible {
+		a.previewChangesLocked(e, v)
+		preview = v.preview
+	}
 	if known {
-		ins, del, base = changesTotals(st)
+		ins, del, base = changesTotals(st, preview)
 	}
 	done := v.done
 	if done != nil && now.After(done.until) {

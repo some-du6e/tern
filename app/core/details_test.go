@@ -151,7 +151,7 @@ func TestGitMenuReasons(t *testing.T) {
 func TestChangesTotals(t *testing.T) {
 	st := status(nil)
 	st.WorkingTree.Insertions, st.WorkingTree.Deletions = 3, 1
-	if ins, del, base := changesTotals(st); ins != 3 || del != 1 || base != "" {
+	if ins, del, base := changesTotals(st, nil); ins != 3 || del != 1 || base != "" {
 		t.Errorf("working tree: +%d -%d %q", ins, del, base)
 	}
 	st.BranchChanges = &struct {
@@ -159,16 +159,22 @@ func TestChangesTotals(t *testing.T) {
 		Insertions int    `json:"insertions"`
 		Deletions  int    `json:"deletions"`
 	}{BaseRef: "main"}
-	if ins, del, base := changesTotals(st); ins != 3 || del != 1 || base != "" {
+	if ins, del, base := changesTotals(st, nil); ins != 3 || del != 1 || base != "" {
 		t.Errorf("an empty branch range keeps the dirty tree: +%d -%d %q", ins, del, base)
 	}
 	st.BranchChanges.Insertions, st.BranchChanges.Deletions = 2382, 7
-	if ins, del, base := changesTotals(st); ins != 2382 || del != 7 || base != "main" {
+	if ins, del, base := changesTotals(st, nil); ins != 2382 || del != 7 || base != "main" {
 		t.Errorf("branch: +%d -%d %q", ins, del, base)
+	}
+	if ins, del, base := changesTotals(st, &changesPreview{files: true, ins: 2380, del: 7, base: "release"}); ins != 2380 || del != 7 || base != "release" {
+		t.Errorf("the Diff panel's comparison: +%d -%d %q", ins, del, base)
+	}
+	if ins, _, _ := changesTotals(st, &changesPreview{ins: 5}); ins != 2382 {
+		t.Errorf("a comparison without file counts: +%d, want the status's", ins)
 	}
 	st.WorkingTree.Insertions, st.WorkingTree.Deletions = 0, 0
 	st.BranchChanges.Insertions, st.BranchChanges.Deletions = 0, 0
-	if _, _, base := changesTotals(st); base != "main" {
+	if _, _, base := changesTotals(st, nil); base != "main" {
 		t.Errorf("all clean: base %q, want the branch's", base)
 	}
 }

@@ -123,6 +123,20 @@ func (c *Conn) SubscribeVcsStatus(cwd string, onStatus func(VcsStatusEvent), onE
 	}, onEnd)
 }
 
+// ReviewDiffPreview is review.getDiffPreview's answer as the details card
+// reads it, metadata only (review.ts): each source's kind, the ref it
+// compares with, and its files' line counts when it has them.
+type ReviewDiffPreview struct {
+	Sources []struct {
+		Kind    string `json:"kind"` // working-tree, branch-range, commit
+		BaseRef string `json:"baseRef"`
+		Files   []struct {
+			Additions int `json:"additions"`
+			Deletions int `json:"deletions"`
+		} `json:"files"` // absent without file stats
+	} `json:"sources"`
+}
+
 // VcsRef is a branch or other ref a checkout can switch to.
 type VcsRef struct {
 	Name         string `json:"name"`

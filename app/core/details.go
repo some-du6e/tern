@@ -364,9 +364,13 @@ func featureBranchOff(branch string, dirty bool) string {
 }
 
 // changesTotals is what the Changes row counts (resolveChangesTotals): the
+// Diff panel's comparison of the branch when it has file counts, else the
 // branch's changes when there are any, else the working tree's, else
 // whichever exists. Base is "" for the working tree.
-func changesTotals(st *t3.VcsStatus) (ins, del int, base string) {
+func changesTotals(st *t3.VcsStatus, p *changesPreview) (ins, del int, base string) {
+	if p != nil && p.files {
+		return p.ins, p.del, p.base
+	}
 	tree := st.WorkingTree
 	if b := st.BranchChanges; b != nil && (b.Insertions > 0 || b.Deletions > 0) {
 		return b.Insertions, b.Deletions, b.BaseRef

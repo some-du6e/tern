@@ -130,9 +130,9 @@ func darkShots() []shot {
 // render draws s on a theme of its own, so nothing one shot leaves open
 // or on its way carries into the next, and lets its transitions run: the
 // frame it writes out comes 300ms after the one that starts them. With the
-// pointer resting on it, the pointer comes on the second frame, the first
-// that has something under it, and the last comes 800ms on, past a
-// tooltip's 600ms wait and its fade.
+// pointer resting on it, the pointer comes after the first frame, once
+// there's something under it to tell, and the last frame comes 800ms on,
+// past a tooltip's 600ms wait and its fade.
 func render(s shot, scale float32, path string) error {
 	th := ui.NewTheme()
 	size := image.Pt(int(float32(s.w)*scale), int(float32(s.h)*scale))
@@ -146,12 +146,12 @@ func render(s shot, scale float32, path string) error {
 	frames := []time.Duration{0, 300 * time.Millisecond}
 	var router input.Router
 	var src input.Source
-	if s.hover != (image.Point{}) {
+	hover := s.hover != (image.Point{})
+	if hover {
 		frames = []time.Duration{0, 10 * time.Millisecond, 800 * time.Millisecond}
-		router.Queue(pointer.Event{Kind: pointer.Move, Source: pointer.Mouse, Position: f32.Pt(float32(s.hover.X)*scale, float32(s.hover.Y)*scale)})
 		src = router.Source()
 	}
-	for _, d := range frames {
+	for i, d := range frames {
 		ops.Reset()
 		s.draw(th, layout.Context{
 			Ops:         ops,
@@ -161,6 +161,9 @@ func render(s shot, scale float32, path string) error {
 			Source:      src,
 		})
 		router.Frame(ops)
+		if hover && i == 0 {
+			router.Queue(pointer.Event{Kind: pointer.Move, Source: pointer.Mouse, Position: f32.Pt(float32(s.hover.X)*scale, float32(s.hover.Y)*scale)})
+		}
 	}
 	if err := win.Frame(ops); err != nil {
 		return err

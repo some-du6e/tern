@@ -3,6 +3,7 @@ package core
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -164,6 +165,46 @@ func (a *App) draftStrategyLocked() (map[string]any, error) {
 		s["branch"] = a.draftBranch
 	}
 	return s, nil
+}
+
+// previewChangesLocked asks for the checkout's branch comparison as the
+// Diff panel does (review.getDiffPreview: metadata only, the branch range,
+// whitespace kept), again whenever its status's totals change, for the
+// Changes row to count. Call with the lock held.
+func (a *App) previewChangesLocked(e *envState, v *vcsState) {
+	st := v.status
+	if st == nil || e.conn == nil {
+		return
+	}
+	rev := fmt.Sprint(st.RefName, st.WorkingTree.Insertions, st.WorkingTree.Deletions, st.BranchChanges)
+	if v.preview != nil && v.preview.rev == rev {
+		return
+	}
+	p := &changesPreview{rev: rev}
+	if old := v.preview; old != nil {
+		p.files, p.ins, p.del, p.base = old.files, old.ins, old.del, old.base
+	}
+	v.preview = p
+	conn, cwd := e.conn, v.cwd
+	go func() {
+		var res t3.ReviewDiffPreview
+		if conn.Call("review.getDiffPreview", map[string]any{"cwd": cwd, "ignoreWhitespace": false, "metadataOnly": true, "sourceKind": "branch-range"}, &res) != nil {
+			return
+		}
+		a.mu.Lock()
+		p.files, p.ins, p.del, p.base = false, 0, 0, ""
+		for _, s := range res.Sources {
+			if s.Kind != "branch-range" || s.Files == nil {
+				continue
+			}
+			p.files, p.base = true, s.BaseRef
+			for _, f := range s.Files {
+				p.ins, p.del = p.ins+f.Additions, p.del+f.Deletions
+			}
+		}
+		a.mu.Unlock()
+		a.changed()
+	}()
 }
 
 // failf shows "what: err" in the error banner, from any goroutine.

@@ -247,6 +247,61 @@ func TestCommitDialog(t *testing.T) {
 	}
 }
 
+// The Changes row counts the branch's comparison as the Diff panel asks
+// for it (review.getDiffPreview: metadata only, the branch range,
+// whitespace kept) once it has file counts, and asks again when the
+// status's totals change; an answer without file counts leaves the
+// status's (05-header.md §5.12).
+func TestChangesPreview(t *testing.T) {
+	a, f := liveApp(t, status(func(s *t3.VcsStatus) {
+		s.HasWorkingTreeChanges = true
+		s.WorkingTree.Insertions, s.WorkingTree.Deletions = 3, 1
+	}))
+	asked := func(n int) fakeReq {
+		t.Helper()
+		eventually(t, fmt.Sprintf("comparison %d is asked for", n), func() bool {
+			built(a, time.Now())
+			return len(f.requests("review.getDiffPreview")) >= n
+		})
+		return f.requests("review.getDiffPreview")[n-1]
+	}
+	answer := func(files ...[2]int) map[string]any {
+		src := map[string]any{"id": "branch", "kind": "branch-range", "title": "Branch", "baseRef": "main", "headRef": "feature",
+			"diff": "", "diffHash": "h", "truncated": false}
+		if files != nil {
+			var list []any
+			for i, n := range files {
+				list = append(list, map[string]any{"path": fmt.Sprint("file", i), "previousPath": nil, "additions": n[0], "deletions": n[1]})
+			}
+			src["files"] = list
+		}
+		return map[string]any{"cwd": "/home/dev/code/atlas", "generatedAt": "2026-11-18T00:00:00Z", "sources": []any{src}}
+	}
+	r := asked(1)
+	if r.Payload["cwd"] != "/home/dev/code/atlas" || r.Payload["metadataOnly"] != true || r.Payload["sourceKind"] != "branch-range" ||
+		r.Payload["ignoreWhitespace"] != false || r.Payload["baseRef"] != nil {
+		t.Fatalf("payload %v", r.Payload)
+	}
+	if c := built(a, time.Now()).Card.Changes; c.Insertions != 3 || c.Deletions != 1 || c.Base != "Uncommitted" {
+		t.Fatalf("before the comparison lands: %+v", c)
+	}
+	f.exit(r, answer([2]int{10, 2}, [2]int{5, 0}))
+	eventually(t, "the comparison's totals", func() bool {
+		c := built(a, time.Now()).Card.Changes
+		return c.Insertions == 15 && c.Deletions == 2 && c.Base == "vs main"
+	})
+	next := status(func(s *t3.VcsStatus) {
+		s.HasWorkingTreeChanges = true
+		s.WorkingTree.Insertions, s.WorkingTree.Deletions = 4, 1
+	})
+	f.chunk(f.wait("subscribeVcsStatus", 1), map[string]any{"_tag": "localUpdated", "local": next.VcsStatusLocal})
+	f.exit(asked(2), answer())
+	eventually(t, "the status's totals", func() bool {
+		c := built(a, time.Now()).Card.Changes
+		return c.Insertions == 4 && c.Deletions == 1 && c.Base == "Uncommitted"
+	})
+}
+
 // A failed action says so and leaves the row as it was.
 func TestGitActionFails(t *testing.T) {
 	a, f := liveApp(t, status(func(s *t3.VcsStatus) { s.HasWorkingTreeChanges = true }))
