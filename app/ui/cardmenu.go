@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"gioui.org/font"
+	"gioui.org/io/event"
 	"gioui.org/io/key"
 	"gioui.org/layout"
 	"gioui.org/op"
@@ -28,12 +29,15 @@ func inBorder(w W) W {
 }
 
 // cardMenuState is the open card menu's keyboard: its focus, the menu it
-// is for, the row the arrows or the pointer light, and the typeahead.
+// is for, the row the arrows or the pointer light, the row the pointer was
+// over last frame (the pointer lights a row as it comes onto it, so the
+// keyboard can move the light off one it rests on), and the typeahead.
 type cardMenuState struct {
 	tag     int
 	open    string
 	hi      int  // the lit row, -1 for none
 	pointer bool // the pointer lit it, and unlights it when it leaves
+	under   int
 	typed   string
 	typedAt time.Time
 }
@@ -69,7 +73,7 @@ func nextRow(rows []MenuRow, i, dir int) int {
 func (th *Theme) cardMenuKeys(gtx C, m *CardMenu) {
 	cs := &th.in.cardMenu
 	if cs.open != m.For {
-		*cs = cardMenuState{open: m.For, hi: -1}
+		*cs = cardMenuState{open: m.For, hi: -1, under: -1}
 		if th.in.keyFocus {
 			cs.hi = nextRow(m.Rows, -1, 1)
 		}
@@ -141,6 +145,7 @@ func (th *Theme) cardMenu(gtx C, m *CardMenu, w int) D {
 	th.cardMenuKeys(gtx, m)
 	gtx.Constraints = layout.Constraints{Min: image.Pt(w, 0), Max: image.Pt(w, gtx.Constraints.Max.Y)}
 	hovered := -1
+	rec := op.Record(gtx.Ops)
 	d := popupFrame(gtx, inBorder(func(gtx C) D {
 		return pad(4, 4, 4, 4).Layout(gtx, func(gtx C) D {
 			var kids []layout.FlexChild
@@ -204,15 +209,25 @@ func (th *Theme) cardMenu(gtx C, m *CardMenu, w int) D {
 			return Col(gtx, kids...)
 		})
 	}))
-	// The pointer lights the row under it (unless the menu doesn't light
-	// rows on hover), and unlights it when it leaves.
-	switch {
-	case m.NoHover:
-	case hovered >= 0 && cs.hi != hovered:
-		cs.hi, cs.pointer = hovered, true
-		gtx.Execute(op.InvalidateCmd{})
-	case hovered < 0 && cs.pointer:
-		cs.hi, cs.pointer = -1, false
+	call := rec.Stop()
+	// Under its rows, the menu holds the keyboard's focus and takes the
+	// presses between them, so they don't close it.
+	func() {
+		defer clip.Rect{Max: d.Size}.Push(gtx.Ops).Pop()
+		event.Op(gtx.Ops, &cs.tag)
+	}()
+	call.Add(gtx.Ops)
+	// The pointer lights the row it comes onto (unless the menu doesn't
+	// light rows on hover), and unlights it when it leaves.
+	if hovered != cs.under {
+		cs.under = hovered
+		switch {
+		case m.NoHover:
+		case hovered >= 0:
+			cs.hi, cs.pointer = hovered, true
+		case cs.pointer:
+			cs.hi, cs.pointer = -1, false
+		}
 		gtx.Execute(op.InvalidateCmd{})
 	}
 	return d
@@ -272,15 +287,18 @@ func (th *Theme) cardMenuRow(gtx C, r MenuRow, lit bool) D {
 			switch {
 			case r.Kind == MenuRadioRow && r.Detail != "":
 				// The previous worktree (PreviousWorktreeItemContent.tsx):
-				// its icon 4dp down, by the first line, and its branch under
-				// the label.
+				// its icon 4dp down, by the first line, then the label's 20dp
+				// line and the branch's 16dp one in 12px muted under it.
 				return layout.Flex{Alignment: layout.Start}.Layout(gtx,
 					rigid(func(gtx C) D { return pad(4, 4, 0, -2).Layout(gtx, LucideW(r.Icon, text, 12)) }),
 					flexed(func(gtx C) D {
-						return Col(gtx, rigid(label), rigid(func(gtx C) D {
+						w := gtx.Constraints.Max.X
+						th.capText(gtx, Txt{Size: 14, LineH: 20.0 / 14, Color: text}, r.Label, dp(gtx, 10))
+						func() {
+							defer op.Offset(image.Pt(0, dp(gtx, 20))).Push(gtx.Ops).Pop()
 							th.middleTruncate(gtx, Txt{Size: 12, LineH: 16.0 / 12, Color: P.MutedForeground}, r.Detail, dp(gtx, 8))
-							return D{Size: image.Pt(gtx.Constraints.Max.X, dp(gtx, 16))}
-						}))
+						}()
+						return D{Size: image.Pt(w, dp(gtx, 20+16))}
 					}))
 			case r.Kind == MenuRadioRow:
 				kids = append(kids, rigid(func(gtx C) D { return pad(0, 4, 0, -2).Layout(gtx, LucideW(r.Icon, text, 12)) }))

@@ -122,14 +122,18 @@ func TestCrumbLayout(t *testing.T) {
 			t.Errorf("wide, at %d: %q, want %q", c.x, got, c.want)
 		}
 	}
-	// 70 wide: the title keeps its 40 and the project gives way.
-	w = 70
+	// 100 wide: the title keeps its 40 and the project gives way, down to
+	// what's left past the separator and its gaps.
+	w = 100
 	l.frame(time.Second)
-	if got := clicked(l, 70-40+2); got != "header.title" {
+	if got := clicked(l, 100-40+2); got != "header.title" {
 		t.Errorf("tight, the title's 40: %q", got)
 	}
-	if got := clicked(l, 70-40-12-sep-12-2); got != "header.project" {
+	if got := clicked(l, 100-40-12-sep-12-2); got != "header.project" {
 		t.Errorf("tight, the project's end: %q", got)
+	}
+	if got := clicked(l, 100-40-12-sep-12+2); got != "" {
+		t.Errorf("tight, past the project's end: %q", got)
 	}
 	// A parent with room is whole; without, "...".
 	s.Header.Parent, s.Title = "Plan the parser rewrite", "Child"

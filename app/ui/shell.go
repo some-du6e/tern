@@ -118,6 +118,9 @@ func (th *Theme) Desktop(gtx C, s *Scene) D {
 	if s.Alert != nil {
 		th.alertDialog(gtx, s.Alert, size)
 	}
+	if s.Live {
+		th.shellEscape(gtx, s)
+	}
 	return D{Size: size}
 }
 
@@ -145,19 +148,13 @@ func checksOpen(d *ThreadDetails) bool {
 
 // shellKeys handles T3's shell shortcuts (keybindings.ts): mod+B the
 // sidebar, mod+J the terminal, mod+Alt+B the right panel, mod+Shift+B the
-// thread details, mod+O Open in editor; and Escape, which closes the open
-// menu or popover a level at a time, or answers the dialog's Abort.
+// thread details, mod+O Open in editor. It asks before anything else does,
+// so the shortcuts work from the terminal too.
 func (th *Theme) shellKeys(gtx C, s *Scene) {
 	filters := []event.Filter{
 		key.Filter{Name: "B", Required: key.ModShortcut, Optional: key.ModShift | key.ModAlt},
 		key.Filter{Name: "J", Required: key.ModShortcut},
 		key.Filter{Name: "O", Required: key.ModShortcut},
-	}
-	// Gio hands a key to the first handler that asks for it, and this one
-	// asks first: Escape is the shell's only while it has something to
-	// close and the focus isn't on a field, terminal or menu of its own.
-	if (s.Confirm != nil || s.Alert != nil || menuOpen(s)) && !th.focusTakesEscape(gtx) {
-		filters = append(filters, key.Filter{Name: key.NameEscape})
 	}
 	shift, alt := key.ModShift, key.ModAlt
 	for {
@@ -171,12 +168,6 @@ func (th *Theme) shellKeys(gtx C, s *Scene) {
 		}
 		mods := ke.Modifiers & (shift | alt)
 		switch {
-		case ke.Name == key.NameEscape && s.Confirm != nil:
-			th.push(Action{ID: "confirm:abort", Kind: "click"})
-		case ke.Name == key.NameEscape && s.Alert != nil:
-			th.push(Action{ID: "alert:cancel", Kind: "click"})
-		case ke.Name == key.NameEscape:
-			th.push(Action{ID: "menus.escape", Kind: "click"})
 		case ke.Name == "J" && panels(s):
 			th.push(Action{ID: "terminal.toggle", Kind: "click"})
 		case ke.Name == "O" && s.Card != nil && s.Card.OpenIn != nil && !s.Card.OpenIn.Disabled:
@@ -193,15 +184,30 @@ func (th *Theme) shellKeys(gtx C, s *Scene) {
 	}
 }
 
-// focusTakesEscape reports whether the focus is on something with its own
-// Escape: a text field, the terminal, the browser panel or a menu.
-func (th *Theme) focusTakesEscape(gtx C) bool {
-	for _, ed := range th.in.editors {
-		if gtx.Focused(ed) {
-			return true
+// shellEscape is Escape that nothing with the focus took (a field, the
+// terminal, the browser panel and the menus take their own): it answers
+// the dialog's Abort or Cancel, or closes the open menu or popover a level
+// at a time, and with nothing open does nothing. It asks after everything
+// else has, so the focus has the first turn, and every frame, since Gio
+// keeps a key only when the frame before asked for it.
+func (th *Theme) shellEscape(gtx C, s *Scene) {
+	for {
+		ev, ok := gtx.Event(key.Filter{Name: key.NameEscape})
+		if !ok {
+			return
+		}
+		if ke, ok := ev.(key.Event); !ok || ke.State != key.Press {
+			continue
+		}
+		switch {
+		case s.Confirm != nil:
+			th.push(Action{ID: "confirm:abort", Kind: "click"})
+		case s.Alert != nil:
+			th.push(Action{ID: "alert:cancel", Kind: "click"})
+		case menuOpen(s):
+			th.push(Action{ID: "menus.escape", Kind: "click"})
 		}
 	}
-	return gtx.Focused(&th.in.term) || gtx.Focused(&th.in.browser) || gtx.Focused(&th.in.menu.tag) || gtx.Focused(&th.in.cardMenu.tag)
 }
 
 // detailsAction toggles the details card where it fits, else its popover.
@@ -367,14 +373,16 @@ type titleButton struct {
 
 func (th *Theme) titleButtonW(id, tip string, b titleButton) W {
 	return func(gtx C) D {
-		hovered := false
+		hovered, focused := false, false
 		if !b.disabled {
 			c, _ := th.events(gtx, id)
 			hovered = c.Hovered()
+			focused = th.keyTarget(gtx, id)
 		}
 		s := dp(gtx, controlSize)
 		r := image.Rectangle{Max: image.Pt(s, s)}
 		icon := alpha(P.Foreground, 0xcc) // the icon at 80%
+		under := P.Background
 		switch {
 		case b.onArt && hovered:
 			fill(gtx, alpha(rgb(0xffffff), 0x1a), r, dp(gtx, 8))
@@ -384,13 +392,28 @@ func (th *Theme) titleButtonW(id, tip string, b titleButton) W {
 		case b.disabled:
 			icon = alpha(P.MutedForeground, 0xcc)
 		case hovered || b.pressed:
-			fill(gtx, over(P.Accent, P.Background), r, dp(gtx, 8))
+			under = over(P.Accent, P.Background)
+			fill(gtx, under, r, dp(gtx, 8))
 			if b.pressed {
 				icon = alpha(P.AccentForeground, 0xcc)
 			}
 		}
 		if b.muted && !b.onArt {
 			icon = P.ContrastMutedForeground
+		}
+		// The keyboard's ring inside the 1dp transparent border, fading in
+		// over 150ms: 1dp of the background then 2dp of --ring, or on the
+		// art 1dp clear then 2dp of white.
+		if t := th.transition(gtx, id+".ring", focused, transitionDur); t > 0 {
+			func() {
+				defer paint.PushOpacity(gtx.Ops, t).Pop()
+				px := max(1, dp(gtx, 1))
+				if b.onArt {
+					strokeRect(gtx, rgb(0xffffff), r.Inset(2*px), dp(gtx, 8)-2*px, float32(2*px))
+					return
+				}
+				focusRing(gtx, r, corners{8, 8, 8, 8}.scaled(gtx), under)
+			}()
 		}
 		off := op.Offset(image.Pt((s-dp(gtx, 16))/2, (s-dp(gtx, 16))/2)).Push(gtx.Ops)
 		LucideW(b.icon, icon, 16)(gtx)

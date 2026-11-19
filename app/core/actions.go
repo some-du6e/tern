@@ -165,14 +165,8 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		a.errText = ""
 		a.mu.Unlock()
 	case "menus.close":
-		a.mu.Lock()
-		details := a.detailsOpen
-		a.closeMenusLocked()
-		a.mu.Unlock()
-		if details {
-			// The details popover hands the focus back to the composer.
-			th.Focus("composer")
-		}
+		// A press outside leaves the focus where the press put it (§5.3).
+		a.closeMenus()
 	case "menus.escape":
 		a.escape(th)
 	case "browser.toggle":
@@ -404,10 +398,11 @@ var cardTriggers = map[string]string{"run": "card.run", "openin": "card.editors"
 // (02-primitives.md port note 9): the thread's menu, a menu off the
 // details card, its branch picker or a checks popover hand the focus back
 // to the control that opened them; then the details popover, which hands
-// it to the composer; then the composer's own menus.
+// it back to the header's details toggle (05-header.md §5.3); then the
+// composer's own menus.
 func (a *App) escape(th *ui.Theme) {
 	a.mu.Lock()
-	refocus, composer := "", false
+	refocus := ""
 	switch {
 	case a.ctxRef != "" || a.ctxCopy != "":
 		refocus = a.ctxFrom
@@ -430,16 +425,13 @@ func (a *App) escape(th *ui.Theme) {
 		}
 		a.checksOpen = ""
 	case a.detailsOpen:
-		a.detailsOpen, composer = false, true
+		a.detailsOpen, refocus = false, "details"
 	default:
 		a.closeMenusLocked()
 	}
 	a.mu.Unlock()
-	switch {
-	case refocus != "":
+	if refocus != "" {
 		th.FocusTarget(refocus)
-	case composer:
-		th.Focus("composer")
 	}
 }
 

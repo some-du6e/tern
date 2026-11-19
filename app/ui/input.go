@@ -505,12 +505,13 @@ func (th *Theme) tipShown(gtx C, id, tip string, size image.Point, up, hovered, 
 
 // tooltip is T3's tooltip popup (TooltipPopup): popover surface, 1dp
 // border, radius 6, 12/16.5 text padded 4 by 8 inside the border, and its
-// lip and small shadow.
+// lip and small shadow: 26.5dp tall on one line (§3.2).
 func (th *Theme) tooltip(gtx C, tip string) D { return th.tipBox(gtx, tip, false) }
 
 // tipBox is a tooltip's box, or with glass a tooltip-styled popover's
 // (popover.tsx tooltipStyle): the dropdown glass as it paints over the
 // window, inside a 1dp border at the foreground's 10%, with 12/16 text.
+// Its lines are CSS line boxes, which Gio's own label doesn't make.
 func (th *Theme) tipBox(gtx C, tip string, glass bool) D {
 	t := Txt{Size: 12, LineH: 16.5 / 12, Color: P.PopoverForeground}
 	bg, border := P.Popover, over(P.Border, P.Popover)
@@ -520,7 +521,7 @@ func (th *Theme) tipBox(gtx C, tip string, glass bool) D {
 		border = over(alpha(P.ContrastForeground, 0x1a), bg)
 	}
 	m := op.Record(gtx.Ops)
-	d := pad(5, 9, 5, 9).Layout(gtx, func(gtx C) D { return th.Text(gtx, t, tip) })
+	d := pad(5, 9, 5, 9).Layout(gtx, func(gtx C) D { return th.boxText(gtx, t, tip) })
 	call := m.Stop()
 	r := image.Rectangle{Max: d.Size}
 	rad := dp(gtx, 6)

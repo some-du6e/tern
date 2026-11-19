@@ -2,6 +2,8 @@ package ui
 
 import (
 	"image"
+	"slices"
+	"strconv"
 
 	"gioui.org/gesture"
 	"gioui.org/io/event"
@@ -19,51 +21,99 @@ import (
 // beside their rows. The glass is solid, as T3 paints it without backdrop
 // blur. The header's title and right-click open it, and a sidebar row's.
 
-// menuState is the open context menu: the submenu open at each level, by
-// item index, and the highlighted item at each level, -1 for none.
+// menuState is the open context menu: the item each open submenu hangs
+// from, level by level; where the keyboard's focus is, an item of a level
+// or that level's menu itself (-1), as T3 moves the DOM focus between its
+// buttons; and what the pointer was over last frame, since T3 acts when
+// the pointer comes onto a row or into a menu (mouseenter), not while it
+// rests there.
 type menuState struct {
-	open    bool
-	path    []int
-	hi      []int
-	tag     int // the menu's keyboard focus
-	outside int // the window's presses, which close it
-	hover   map[string]*gesture.Hover
+	open        bool
+	path        []int
+	level, item int
+	under       menuSpot // the row under the pointer, level -1 for none
+	in          int      // the menu under the pointer, -1 for none
+	tag         int      // the keyboard's focus
+	outside     int      // the window's presses, which close it
+	subs        map[string]*gesture.Click
+}
+
+// menuSpot is a row of the open menus: its level and its index there.
+type menuSpot struct{ level, item int }
+
+// items is the menu at level, down the open submenus from root.
+func (ms *menuState) items(root []MenuItem, level int) []MenuItem {
+	items := root
+	for _, i := range ms.path[:level] {
+		items = items[i].Children
+	}
+	return items
+}
+
+// prune keeps the open submenus and the focus to what's still in root:
+// the items can change under an open menu.
+func (ms *menuState) prune(root []MenuItem) {
+	items := root
+	for l, i := range ms.path {
+		if i < 0 || i >= len(items) || len(items[i].Children) == 0 {
+			ms.path = ms.path[:l]
+			break
+		}
+		items = items[i].Children
+	}
+	if ms.level > len(ms.path) {
+		ms.level, ms.item = len(ms.path), -1
+	}
+	if items := ms.items(root, ms.level); ms.item >= len(items) || ms.item >= 0 && items[ms.item].Off {
+		ms.item = -1
+	}
+}
+
+// openSub opens the focused item's submenu and moves the focus onto its
+// first item that can be picked, as a click or Enter on its row does.
+func (ms *menuState) openSub(items []MenuItem) {
+	ms.path = append(ms.path[:ms.level], ms.item)
+	if first := nextEnabled(items[ms.item].Children, -1, 1); first >= 0 {
+		ms.level, ms.item = ms.level+1, first
+	}
 }
 
 // contextMenu draws s.Menu at the right-click (or under the header's
-// title), kept 4dp inside the window. Opened from the keyboard it starts
-// on its first item.
+// title) and its open submenus, each 4dp right of its row. One frame after
+// a menu opens T3 moves it to stay 4dp inside the window
+// (clampMenuPosition), a submenu from that spot right of its row, so one
+// that won't fit there ends up against the window's edge rather than on
+// the row's other side.
 func (th *Theme) contextMenu(gtx C, win image.Point, s *Scene) {
 	ms := &th.in.menu
 	if !ms.open {
-		*ms = menuState{open: true, hi: []int{-1}, hover: ms.hover}
+		*ms = menuState{open: true, item: -1, under: menuSpot{-1, -1}, in: -1, subs: ms.subs}
+		// Opened from the keyboard it starts on its first item; from the
+		// pointer, on the menu itself (contextMenuFallback.ts:611–618).
 		if s.Menu.Keyboard || th.in.keyFocus {
-			ms.hi[0] = nextEnabled(s.Menu.Items, -1, 1)
+			ms.item = nextEnabled(s.Menu.Items, -1, 1)
 		}
 		gtx.Execute(key.FocusCmd{Tag: &ms.tag})
 	}
+	ms.prune(s.Menu.Items)
 	th.menuKeys(gtx, s.Menu.Items)
-	items := s.Menu.Items
-	var from image.Rectangle // the row the submenu opens from
 	at := th.in.ctxAt
 	if !s.Live {
 		at = s.Menu.At
 	}
-	for level := 0; level <= len(ms.path); level++ {
-		for len(ms.hi) <= level {
-			ms.hi = append(ms.hi, -1)
-		}
+	under, in := menuSpot{-1, -1}, -1
+	edge := dp(gtx, 4)
+	for level := 0; ; level++ {
+		items := ms.items(s.Menu.Items, level)
 		m := op.Record(gtx.Ops)
-		d, rows := th.menuLevel(gtx, items, level)
+		d, rows, hovered, inside := th.menuLevel(gtx, items, level)
 		call := m.Stop()
-		if level > 0 {
-			// Beside its row, 4dp off; on the other side when it won't fit.
-			at = image.Pt(from.Max.X+dp(gtx, 4), from.Min.Y)
-			if at.X+d.Size.X > win.X {
-				at.X = from.Min.X - d.Size.X - dp(gtx, 4)
-			}
+		if hovered >= 0 {
+			under = menuSpot{level, hovered}
 		}
-		edge := dp(gtx, 4)
+		if inside {
+			in = level
+		}
 		at.X = max(edge, min(at.X, win.X-d.Size.X-edge))
 		at.Y = max(edge, min(at.Y, win.Y-d.Size.Y-edge))
 		m2 := op.Record(gtx.Ops)
@@ -73,13 +123,38 @@ func (th *Theme) contextMenu(gtx C, win image.Point, s *Scene) {
 		if level == len(ms.path) {
 			break
 		}
-		i := ms.path[level]
-		if i < 0 || i >= len(items) || len(items[i].Children) == 0 {
-			ms.path = ms.path[:level]
-			break
+		row := rows[ms.path[level]].Add(at)
+		at = image.Pt(row.Max.X+edge, row.Min.Y)
+	}
+	th.menuPointer(gtx, s.Menu.Items, under, in)
+}
+
+// menuPointer follows the pointer as T3's menu does: coming into a menu
+// closes the submenus past it; coming onto a row focuses it, and opens its
+// submenu or closes the ones past it. It acts on what changed since the
+// last frame, so the keyboard can move the focus off a row the pointer
+// rests on.
+func (th *Theme) menuPointer(gtx C, root []MenuItem, under menuSpot, in int) {
+	ms := &th.in.menu
+	changed := false
+	if in != ms.in {
+		ms.in = in
+		if in >= 0 && len(ms.path) > in {
+			ms.path, changed = ms.path[:in], true
 		}
-		from = rows[i].Add(at)
-		items = items[i].Children
+	}
+	if under != ms.under {
+		ms.under, changed = under, true
+		if under.level >= 0 && under.level <= len(ms.path) {
+			items := ms.items(root, under.level)
+			ms.level, ms.item, ms.path = under.level, under.item, ms.path[:under.level]
+			if len(items[under.item].Children) > 0 {
+				ms.path = append(ms.path, under.item)
+			}
+		}
+	}
+	if changed {
+		gtx.Execute(op.InvalidateCmd{})
 	}
 }
 
@@ -124,33 +199,22 @@ func nextEnabled(items []MenuItem, i, dir int) int {
 	return -1
 }
 
-// menuKeys is the menu's keyboard: the arrows move through the items that
-// can be picked, wrapping; Home and End go to the ends; Right and Enter
-// open a submenu on its first item, Left and Escape close it; Escape on
-// the first menu, or Tab, closes the lot; Enter and Space pick the item.
-// They act on the deepest menu with a highlight.
+// menuKeys is the menu's keyboard (contextMenuFallback.ts:284–343), on
+// the menu that has the focus: Down and Up move it through the items that
+// can be picked, wrapping, Home and End to the ends; Right opens the
+// focused item's submenu on its first item, and Enter and Space pick the
+// item or open it the same way; Left and Escape in a submenu close it,
+// back on its row; Escape on the first menu, or Tab, closes them all.
+// Moving off the row of an open submenu closes it. Alt, Ctrl and Cmd
+// chords aren't the menu's.
 func (th *Theme) menuKeys(gtx C, root []MenuItem) {
 	ms := &th.in.menu
-	// The items can change under an open menu: keep the path to submenus
-	// that are still there.
-	items := root
-	for l, i := range ms.path {
-		if i < 0 || i >= len(items) || len(items[i].Children) == 0 {
-			ms.path = ms.path[:l]
-			break
-		}
-		items = items[i].Children
-	}
+	f := func(name key.Name) key.Filter { return key.Filter{Focus: &ms.tag, Name: name, Optional: key.ModShift} }
 	for {
-		ev, ok := gtx.Event(
-			key.FocusFilter{Target: &ms.tag},
-			key.Filter{Focus: &ms.tag, Name: key.NameDownArrow}, key.Filter{Focus: &ms.tag, Name: key.NameUpArrow},
-			key.Filter{Focus: &ms.tag, Name: key.NameHome}, key.Filter{Focus: &ms.tag, Name: key.NameEnd},
-			key.Filter{Focus: &ms.tag, Name: key.NameRightArrow}, key.Filter{Focus: &ms.tag, Name: key.NameLeftArrow},
-			key.Filter{Focus: &ms.tag, Name: key.NameEscape}, key.Filter{Focus: &ms.tag, Name: key.NameTab},
-			key.Filter{Focus: &ms.tag, Name: key.NameReturn}, key.Filter{Focus: &ms.tag, Name: key.NameEnter},
-			key.Filter{Focus: &ms.tag, Name: key.NameSpace},
-		)
+		ev, ok := gtx.Event(key.FocusFilter{Target: &ms.tag},
+			f(key.NameDownArrow), f(key.NameUpArrow), f(key.NameHome), f(key.NameEnd),
+			f(key.NameRightArrow), f(key.NameLeftArrow), f(key.NameEscape), f(key.NameTab),
+			f(key.NameReturn), f(key.NameEnter), f(key.NameSpace))
 		if !ok {
 			return
 		}
@@ -158,59 +222,56 @@ func (th *Theme) menuKeys(gtx C, root []MenuItem) {
 		if !ok || e.State != key.Press {
 			continue
 		}
-		lvl := 0
-		for l := len(ms.path); l >= 0; l-- {
-			if l < len(ms.hi) && ms.hi[l] >= 0 {
-				lvl = l
-				break
+		items := ms.items(root, ms.level)
+		var on []int
+		for i, it := range items {
+			if !it.Off {
+				on = append(on, i)
 			}
 		}
-		items := root
-		for _, i := range ms.path[:min(lvl, len(ms.path))] {
-			items = items[i].Children
-		}
-		hi := ms.hi[lvl]
-		if hi >= len(items) {
-			hi = -1
-		}
-		openSub := func() {
-			ms.path = append(ms.path[:lvl], hi)
-			for len(ms.hi) <= lvl+1 {
-				ms.hi = append(ms.hi, -1)
-			}
-			ms.hi[lvl+1] = nextEnabled(items[hi].Children, -1, 1)
+		at, target := slices.Index(on, ms.item), -1
+		switch n := len(on); {
+		case n == 0:
+		case e.Name == key.NameDownArrow:
+			target = on[(at+1)%n]
+		case e.Name == key.NameUpArrow && at < 0:
+			target = on[n-1]
+		case e.Name == key.NameUpArrow:
+			target = on[(at-1+n)%n]
+		case e.Name == key.NameHome:
+			target = on[0]
+		case e.Name == key.NameEnd:
+			target = on[n-1]
 		}
 		switch e.Name {
-		case key.NameDownArrow, key.NameUpArrow:
-			dir := 1
-			if e.Name == key.NameUpArrow {
-				dir = -1
-			}
-			ms.hi[lvl], ms.path = nextEnabled(items, hi, dir), ms.path[:min(lvl, len(ms.path))]
-		case key.NameHome:
-			ms.hi[lvl] = nextEnabled(items, -1, 1)
-		case key.NameEnd:
-			ms.hi[lvl] = nextEnabled(items, 0, -1)
 		case key.NameRightArrow:
-			if hi >= 0 && len(items[hi].Children) > 0 {
-				openSub()
+			if ms.item >= 0 && len(items[ms.item].Children) > 0 {
+				ms.openSub(items)
+			}
+		case key.NameReturn, key.NameEnter, key.NameSpace:
+			switch {
+			case ms.item < 0:
+			case len(items[ms.item].Children) > 0:
+				ms.openSub(items)
+			default:
+				th.push(Action{ID: "ctx:" + items[ms.item].ID, Kind: "click"})
 			}
 		case key.NameLeftArrow, key.NameEscape:
-			if lvl > 0 {
-				ms.hi[lvl], ms.path = -1, ms.path[:lvl-1]
-			} else if e.Name == key.NameEscape {
+			switch {
+			case ms.level > 0:
+				ms.level--
+				ms.item, ms.path = ms.path[ms.level], ms.path[:ms.level]
+			case e.Name == key.NameEscape:
 				th.push(Action{ID: "menus.escape", Kind: "click"})
 			}
 		case key.NameTab:
 			th.push(Action{ID: "menus.escape", Kind: "click"})
-		default: // Enter, Space
-			switch {
-			case hi < 0 || items[hi].Off:
-			case len(items[hi].Children) > 0:
-				openSub()
-			default:
-				th.push(Action{ID: "ctx:" + items[hi].ID, Kind: "click"})
+		}
+		if target >= 0 {
+			if len(ms.path) > ms.level && ms.path[ms.level] != target {
+				ms.path = ms.path[:ms.level]
 			}
+			ms.item = target
 		}
 	}
 }
@@ -220,8 +281,10 @@ func (th *Theme) menuKeys(gtx C, root []MenuItem) {
 // window inside a 1dp border at the foreground's 10%, padded 4; rows 28dp,
 // padded 4 by 8, 14/20 in the foreground with 16dp icons 8dp before the
 // label, a detail 8 + 16dp after it in 12px muted, a chevron on a
-// submenu's row; 1dp separators 4 by 8 in.
-func (th *Theme) menuLevel(gtx C, items []MenuItem, level int) (D, []image.Rectangle) {
+// submenu's row; 1dp separators 4 by 8 in. It reports the row under the
+// pointer (-1 for none) and whether the pointer is in the menu, which
+// takes the presses between its rows so they don't close it.
+func (th *Theme) menuLevel(gtx C, items []MenuItem, level int) (D, []image.Rectangle, int, bool) {
 	ms := &th.in.menu
 	px := max(1, dp(gtx, 1))
 	bg := cardFill()
@@ -256,15 +319,15 @@ func (th *Theme) menuLevel(gtx C, items []MenuItem, level int) (D, []image.Recta
 	r := image.Rectangle{Max: size}
 	fill(gtx, bg, r, dp(gtx, 8))
 	strokeRect(gtx, over(alpha(P.ContrastForeground, 0x1a), bg), r, dp(gtx, 8), float32(px))
+	id := "ctx.menu:" + strconv.Itoa(level)
+	inside := th.hoverState(gtx, id)
+	st := clip.Rect(r).Push(gtx.Ops)
+	event.Op(gtx.Ops, th.hoverTag(id))
 	if level == 0 {
-		st := clip.Rect(r).Push(gtx.Ops)
 		event.Op(gtx.Ops, &ms.tag)
-		st.Pop()
-	} else {
-		// A press between a submenu's rows stays in the menu.
-		th.hover(gtx, "ctx.level", size)
 	}
 	rows := make([]image.Rectangle, len(items))
+	hovered := -1
 	y := edge
 	for i, it := range items {
 		if it.Sep && i > 0 {
@@ -274,53 +337,61 @@ func (th *Theme) menuLevel(gtx C, items []MenuItem, level int) (D, []image.Recta
 		rows[i] = image.Rect(edge, y, width-edge, y+rowH)
 		func() {
 			defer op.Offset(rows[i].Min).Push(gtx.Ops).Pop()
-			th.menuRow(gtx, it, level, i, rows[i].Size())
+			if th.menuRow(gtx, items, level, i, rows[i].Size()) {
+				hovered = i
+			}
 		}()
 		y += rowH
 	}
-	return D{Size: size}, rows
+	st.Pop()
+	return D{Size: size}, rows, hovered, inside
 }
 
-// menuRow is one row of a menu: highlighted under the pointer or the
-// keyboard with accent (a destructive row with its colour at 10%), muted
-// at 64% when it can't be picked. Hovering a submenu's row opens it;
-// hovering another closes the ones past it.
-func (th *Theme) menuRow(gtx C, it MenuItem, level, i int, size image.Point) {
+// menuRow is row i of the menu at level: highlighted while it has the
+// focus or the pointer with accent (a destructive row with its colour at
+// 10%), muted at 64% when it can't be picked, which also takes no pointer.
+// A click picks it, or opens its submenu on the submenu's first item. It
+// reports whether the pointer is over it.
+func (th *Theme) menuRow(gtx C, items []MenuItem, level, i int, size image.Point) bool {
 	ms := &th.in.menu
+	it := items[i]
 	sub := len(it.Children) > 0
 	hovered := false
 	switch {
 	case it.Off:
 	case sub:
-		if ms.hover == nil {
-			ms.hover = map[string]*gesture.Hover{}
+		if ms.subs == nil {
+			ms.subs = map[string]*gesture.Click{}
 		}
-		k := it.ID
-		h := ms.hover[k]
-		if h == nil {
-			h = new(gesture.Hover)
-			ms.hover[k] = h
+		c := ms.subs[it.ID]
+		if c == nil {
+			c = new(gesture.Click)
+			ms.subs[it.ID] = c
 		}
-		hovered = h.Update(gtx.Source)
+		for {
+			e, ok := c.Update(gtx.Source)
+			if !ok {
+				break
+			}
+			if e.Kind == gesture.KindClick {
+				ms.level, ms.item = level, i
+				ms.openSub(items)
+				gtx.Execute(op.InvalidateCmd{})
+			}
+		}
+		hovered = c.Hovered()
 		defer func() {
 			st := clip.Rect{Max: size}.Push(gtx.Ops)
-			h.Add(gtx.Ops)
+			c.Add(gtx.Ops)
 			st.Pop()
 		}()
 	default:
+		// T3's rows keep the default cursor.
 		c, _ := th.events(gtx, "ctx:"+it.ID)
 		hovered = c.Hovered()
-		defer th.hit(gtx, "ctx:"+it.ID, size)
+		defer th.hover(gtx, "ctx:"+it.ID, size)
 	}
-	if hovered && (ms.hi[level] != i || (sub && (len(ms.path) <= level || ms.path[level] != i))) {
-		ms.hi[level] = i
-		ms.path = ms.path[:min(level, len(ms.path))]
-		if sub {
-			ms.path = append(ms.path, i)
-		}
-		gtx.Execute(op.InvalidateCmd{})
-	}
-	lit := !it.Off && ms.hi[level] == i
+	lit := !it.Off && (hovered || ms.level == level && ms.item == i)
 	danger := it.Danger && !sub
 	glass := cardFill()
 	bg, text, iconCol := glass, P.ContrastForeground, P.MutedForeground
@@ -372,4 +443,5 @@ func (th *Theme) menuRow(gtx C, it MenuItem, level, i int, size image.Point) {
 		}))
 	}
 	RowGap(g, 8, kids...)
+	return hovered
 }
