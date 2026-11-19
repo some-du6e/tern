@@ -41,19 +41,23 @@ type VcsStatusLocal struct {
 	RefName               string                 `json:"refName"` // empty on a detached HEAD
 	HasWorkingTreeChanges bool                   `json:"hasWorkingTreeChanges"`
 	WorkingTree           struct {
-		Files []struct {
-			Path       string `json:"path"`
-			Insertions int    `json:"insertions"`
-			Deletions  int    `json:"deletions"`
-		} `json:"files"`
-		Insertions int `json:"insertions"`
-		Deletions  int `json:"deletions"`
+		RootPath   string    `json:"rootPath"` // the folder the files' paths are under
+		Files      []VcsFile `json:"files"`
+		Insertions int       `json:"insertions"`
+		Deletions  int       `json:"deletions"`
 	} `json:"workingTree"`
 	BranchChanges *struct {
 		BaseRef    string `json:"baseRef"`
 		Insertions int    `json:"insertions"`
 		Deletions  int    `json:"deletions"`
 	} `json:"branchChanges"`
+}
+
+// VcsFile is one of a working tree's changed files and its line counts.
+type VcsFile struct {
+	Path       string `json:"path"`
+	Insertions int    `json:"insertions"`
+	Deletions  int    `json:"deletions"`
 }
 
 // VcsStatusRemote is the half that needs the remote: upstream and the pull

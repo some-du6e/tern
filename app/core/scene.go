@@ -289,6 +289,9 @@ func (a *App) build(now time.Time) *ui.Scene {
 		title, desc, cont := confirmCopy(c.action, c.branch, c.includesCommit, termsFor(st))
 		s.Confirm = &ui.Confirm{Title: title, Description: desc, Continue: cont, BranchOff: featureBranchOff(c.branch, dirty)}
 	}
+	if c := a.commit; c != nil {
+		s.Commit = a.commitScene(c)
+	}
 	if m := a.prAlert; m != nil {
 		s.Alert = &ui.Alert{Title: "Merge " + m.terms.singular + "?", Description: "This merges #" + strconv.Itoa(m.number) + " using " + m.method + ".", Action: "Merge", Size: ui.BtnSizeSm}
 	}

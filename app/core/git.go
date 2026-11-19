@@ -187,7 +187,7 @@ func (a *App) gitQuick() {
 	a.mu.Unlock()
 	switch q.kind {
 	case "run_action":
-		a.runGit(q.action, false, false)
+		a.runGit(q.action, false, false, gitCommit{})
 	case "run_pull":
 		a.pull()
 	case "open_publish":
@@ -198,8 +198,9 @@ func (a *App) gitQuick() {
 
 // runGit runs a stacked action (commit, push, create_pr, commit_push or
 // commit_push_pr) through git.runStackedAction, asking first on the
-// default branch unless confirmed, and shows its progress on the row.
-func (a *App) runGit(action string, featureBranch, confirmed bool) {
+// default branch unless confirmed, and shows its progress on the row. A
+// commit from its dialog brings its message and files.
+func (a *App) runGit(action string, featureBranch, confirmed bool, commit gitCommit) {
 	a.mu.Lock()
 	e, t, p, v := a.checkout()
 	if v == nil || v.running != nil || e.conn == nil {
@@ -223,6 +224,12 @@ func (a *App) runGit(action string, featureBranch, confirmed bool) {
 	payload := map[string]any{"actionId": t3.NewID(), "cwd": v.cwd, "action": action}
 	if featureBranch {
 		payload["featureBranch"] = true
+	}
+	if commit.message != "" {
+		payload["commitMessage"] = commit.message
+	}
+	if commit.files != nil {
+		payload["filePaths"] = commit.files
 	}
 	if t != nil {
 		payload["threadId"] = t.ID
@@ -595,9 +602,9 @@ func (a *App) moveThread(conn *t3.Conn, id, branch, worktree string, sessions []
 	}
 }
 
-// openInEditor opens the checkout in editor: on its own machine with
-// shell.openInEditor, or here through the editor's remote URL.
-func (a *App) openInEditor(editor string) {
+// openInEditor opens path, or with none the checkout, in editor: on its own
+// machine with shell.openInEditor, or here through the editor's remote URL.
+func (a *App) openInEditor(editor, path string) {
 	a.mu.Lock()
 	e, t, p, _ := a.checkout()
 	if e == nil || editor == "" {
@@ -606,6 +613,9 @@ func (a *App) openInEditor(editor string) {
 	}
 	mode, target := remoteOpen(e)
 	cwd, conn, open := gitCwd(a.worktreeOf(t), p), e.conn, a.OpenURL
+	if path != "" {
+		cwd = path
+	}
 	a.lastEditor = editor
 	if mode == openRemote {
 		a.hintSeen = true

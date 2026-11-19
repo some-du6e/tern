@@ -14,10 +14,12 @@ var lucideSegs sync.Map // icon → []seg
 
 // drawnIcons are T3's own icons in lucide's style, 24x24 outlines drawn
 // like lucide's: the Mac mini and Mac Studio machine marks
-// (EnvironmentMachineIcon.tsx), whose filled dots become lucide dots, and
-// a menu checkbox's check (menu.tsx MenuCheckboxItem).
+// (EnvironmentMachineIcon.tsx), whose filled dots become lucide dots, the
+// check a menu checkbox and a Checkbox draw (menu.tsx MenuCheckboxItem,
+// checkbox.tsx) and a mixed Checkbox's dash.
 var drawnIcons = map[string]string{
 	"menu-check": `M5.252 12.7 10.2 18.63 18.748 5.37`,
+	"mixed":      `M5.252 12h13.496`,
 	"mac-mini":   `M5.5 6H18.5A2.5 2.5 0 0 1 21 8.5V15.5A2.5 2.5 0 0 1 18.5 18H5.5A2.5 2.5 0 0 1 3 15.5V8.5A2.5 2.5 0 0 1 5.5 6ZM7.5 12h.01`,
 	"mac-studio": `M5 5H19A2 2 0 0 1 21 7V17A2 2 0 0 1 19 19H5A2 2 0 0 1 3 17V7A2 2 0 0 1 5 5ZM7 15h.01M11 15h.01M15 15h.01`,
 }

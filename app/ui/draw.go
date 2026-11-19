@@ -226,6 +226,14 @@ func (th *Theme) faceMetrics(gtx C, t Txt) (ascent, descent float32) {
 	return ascent, descent
 }
 
+// lineBase is where a CSS line box of t (t.LineH tall) puts its baseline,
+// in px from its top: half its leading above the face's ascent.
+func (th *Theme) lineBase(gtx C, t Txt) int {
+	a, d := th.faceMetrics(gtx, t)
+	lh := float32(gtx.Sp(t.Size)) * t.LineH
+	return int((lh-a-d)/2 + a + 0.5)
+}
+
 // baselineIn is where a flex items-baseline span of texts in the faces ts
 // puts their baseline in an h tall control with a 1dp border, in px from
 // its top: each face's CSS line box (t.LineH tall, half its leading above

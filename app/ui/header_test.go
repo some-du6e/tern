@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"bytes"
 	"image"
 	"runtime"
 	"testing"
@@ -216,6 +217,26 @@ func TestHeaderDrawn(t *testing.T) {
 		return l.frame(0)
 	}(); len(acts) == 0 || acts[0].ID != "header.title" || acts[0].Kind != "click" {
 		t.Errorf("Enter on the title: %+v", acts)
+	}
+}
+
+// A project's lucide icon is drawn in its colour; a name tern doesn't
+// draw shows T3's fallback, folder-code, not a monogram tile
+// (ProjectFavicon.tsx).
+func TestProjectIconFallback(t *testing.T) {
+	th := NewTheme()
+	draw := func(w W) []byte {
+		return drawn(t, image.Pt(14, 14), 2, func(gtx C) D {
+			fill(gtx, P.Background, image.Rectangle{Max: gtx.Constraints.Max}, 0)
+			return w(gtx)
+		}).Pix
+	}
+	fallback := draw(LucideW("folder-code", projectIconColor("violet"), 14))
+	if !bytes.Equal(draw(th.projectIcon(ProjectIcon{Lucide: "rocket", Color: "violet"}, 14)), fallback) {
+		t.Error("a lucide name tern doesn't draw isn't drawn as folder-code")
+	}
+	if bytes.Equal(draw(th.projectIcon(ProjectIcon{Lucide: "server", Color: "violet"}, 14)), fallback) {
+		t.Error("a lucide name tern draws fell back to folder-code")
 	}
 }
 

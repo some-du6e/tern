@@ -534,6 +534,70 @@ func TestConfirmDialogDrawn(t *testing.T) {
 	wantPixel(t, img, image.Pt(1148+140, 64+4), over(alpha(rgb(0), 0xa3), fill), "the backdrop over the card")
 }
 
+// T3's Commit dialog (05-header.md §5.11, 02-primitives.md §3.21), 512
+// wide in the middle of the window: its ✕ is a 32dp ghost button 8dp
+// inside the border at the top right, and it and the backdrop close it.
+// While editing, a file in the commit has its 16dp checkbox filled with
+// --primary; one left out has the bare field, and the header's is mixed.
+// Commit at the footer's end is --primary, faded off once no file is in.
+func TestCommitDialogDrawn(t *testing.T) {
+	defer SetDark(false)
+	SetDark(true)
+	s := cardScene()
+	s.Commit = &CommitDialog{Branch: "main", Default: true, Opens: true, Editing: true, Files: []CommitFile{
+		{Path: "src/parser.go", Insertions: 12, Deletions: 3},
+		{Path: "README.md", Insertions: 1, Excluded: true},
+	}}
+	l := newLive(image.Pt(1440, 900), nil)
+	l.draw = func(gtx C) { l.th.Desktop(gtx, s) }
+	l.frame(0)
+	img := l.pixels(t)
+	left, right := (1440-512)/2, (1440+512)/2
+	top, bottom := run(img, 720, 0, 900, P.Popover)
+	if top < 0 || bottom-top < 400 {
+		t.Fatalf("the popup's fill spans y %d..%d at the middle", top, bottom)
+	}
+	wantPixel(t, img, image.Pt(left, 450), over(alpha(rgb(0xffffff), 0x14), P.Popover), "the popup's left border")
+	// The checkboxes' column: the popup's border and the panel's 24, the
+	// summary's 12, the list's 4, the row's 8, then half the box.
+	first, last := run(img, left+1+24+12+4+8+8, top, bottom, P.Primary)
+	if first < 0 || last-first+1 != 16 {
+		t.Errorf("--primary spans y %d..%d down the checkboxes, want the one file in the commit's 16dp box", first, last)
+	}
+	commit := image.Pt(right-1-24-5, bottom-16-14)
+	wantPixel(t, img, commit, P.Primary, "Commit")
+	for _, c := range []struct {
+		x, y int
+		want string
+	}{{left + 1 + 24 + 12 + 4 + 8 + 8, first + 8, "commit.file:0"}, {right - 1 - 8 - 16, top + 8 + 16, "dialog:close"}, {100, 450, "commit:cancel"}} {
+		if got := clickedAt(l, c.x, c.y); got != c.want {
+			t.Errorf("a click at %d, %d is %q, want %q", c.x, c.y, got, c.want)
+		}
+	}
+	s.Commit.Files[0].Excluded = true
+	l.frame(time.Second)
+	img = l.pixels(t)
+	if first, _ := run(img, left+1+24+12+4+8+8, top, bottom, P.Primary); first >= 0 {
+		t.Errorf("--primary at y %d with every file out", first)
+	}
+	// Gio fades an opacity layer in linear light, so 64% comes out lighter
+	// than Chrome's sRGB mix: it's --primary faded toward the popup.
+	if got := img.RGBAAt(commit.X, commit.Y); nearPixel(got, P.Primary) || got.B <= P.Popover.B || got.B >= P.Primary.B {
+		t.Errorf("Commit, off, is #%02x%02x%02x, want --primary faded toward the popup", got.R, got.G, got.B)
+	}
+}
+
+// clickedAt is what a click at x, y hits: its action's target, or "".
+func clickedAt(l *live, x, y int) string {
+	l.click(float32(x), float32(y))
+	for _, a := range l.frame(time.Second) {
+		if a.Kind == "click" {
+			return a.ID
+		}
+	}
+	return ""
+}
+
 // Branch names keep their end when they don't fit: T3's middle truncation
 // splits off the last segment, or a word near the last ten characters.
 func TestSplitMiddle(t *testing.T) {

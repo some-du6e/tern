@@ -98,6 +98,13 @@ func (a *App) handleHeader(th *ui.Theme, act ui.Action) bool {
 		// A pull request row opens it, as a middle click does.
 		a.openPR(atoi(strings.TrimPrefix(id, "card.pr:")))
 		return true
+	case id == "commit.message":
+		// The Commit dialog reads its message when it commits; Escape in
+		// it closes the dialog, as anywhere else in it.
+		if act.Kind == "key" && act.Text == "⎋" {
+			a.commitAnswer(th, "cancel")
+		}
+		return true
 	case act.Kind != "click":
 		return false
 	}
@@ -125,6 +132,28 @@ func (a *App) handleHeader(th *ui.Theme, act ui.Action) bool {
 		return true
 	case "card.check":
 		a.openCheck(atoi(arg))
+		return true
+	case "commit":
+		a.commitAnswer(th, arg)
+		return true
+	case "commit.all", "commit.file":
+		a.pickCommitFiles(verb == "commit.all", atoi(arg))
+		return true
+	case "commit.open":
+		a.openCommitFile(atoi(arg))
+		return true
+	case "dialog":
+		// A dialog's ✕: the Commit dialog's Cancel, the default branch
+		// dialog's Abort.
+		a.mu.Lock()
+		commit := a.commit != nil
+		if !commit {
+			a.confirm = nil
+		}
+		a.mu.Unlock()
+		if commit {
+			a.commitAnswer(th, "cancel")
+		}
 		return true
 	case "alert":
 		a.mu.Lock()
@@ -206,7 +235,7 @@ func (a *App) handleHeader(th *ui.Theme, act ui.Action) bool {
 			pref = preferredEditor(a.editorChoices(e, mode), a.lastEditor)
 		}
 		a.mu.Unlock()
-		a.openInEditor(pref)
+		a.openInEditor(pref, "")
 	case "card.script":
 		a.runPrimaryScript()
 	case "card.branch":
@@ -254,7 +283,7 @@ func (a *App) handleHeader(th *ui.Theme, act ui.Action) bool {
 		a.confirm = nil
 		a.mu.Unlock()
 		if c != nil && arg != "abort" {
-			a.runGit(c.action, arg == "branch", true)
+			a.runGit(c.action, arg == "branch", true, gitCommit{})
 		}
 	default:
 		return false
@@ -321,13 +350,20 @@ func (a *App) cardMenuPick(th *ui.Theme, menu string, i int) {
 			st := v.status
 			items = buildGitMenu(st, v.running != nil, st == nil || st.HasPrimaryRemote)
 		}
-		a.mu.Unlock()
 		if i < 0 || i >= len(items) || items[i].disabled {
+			a.mu.Unlock()
 			return
 		}
-		// T3's Commit opens its commit dialog first; tern commits every
-		// change with a generated message, as its quick action does.
-		a.runGit(map[string]string{"commit": "commit", "push": "push", "pr": "create_pr"}[items[i].id], false, false)
+		if items[i].id == "commit" {
+			// Commit reviews its files first, in its dialog
+			// (openDialogForMenuItem); Push and Create PR run at once.
+			a.commit = &commitAsk{excluded: map[string]bool{}}
+			a.mu.Unlock()
+			th.SetEditorText("commit.message", "")
+			return
+		}
+		a.mu.Unlock()
+		a.runGit(map[string]string{"push": "push", "pr": "create_pr"}[items[i].id], false, false, gitCommit{})
 	case "items":
 		// Row 0 is the label; then the items, a separator and Reset.
 		switch {
@@ -349,6 +385,90 @@ func (a *App) cardMenuPick(th *ui.Theme, menu string, i int) {
 	default:
 		a.mu.Unlock()
 	}
+}
+
+// commitAnswer answers the Commit dialog (GitActionsControl.tsx): edit
+// turns its files' checkboxes on or off; ok commits the files it takes
+// with its message, branch does so on a new branch (runDialogAction,
+// runDialogActionOnNewBranch), neither while it takes none; cancel closes
+// it. Closing clears it for next time.
+func (a *App) commitAnswer(th *ui.Theme, arg string) {
+	a.mu.Lock()
+	c := a.commit
+	if c == nil {
+		a.mu.Unlock()
+		return
+	}
+	if arg == "edit" {
+		c.editing = !c.editing
+		a.mu.Unlock()
+		return
+	}
+	var commit gitCommit
+	if _, _, _, v := a.checkout(); v != nil && v.status != nil {
+		for _, f := range v.status.WorkingTree.Files {
+			if !c.excluded[f.Path] {
+				commit.files = append(commit.files, f.Path)
+			}
+		}
+	}
+	run := arg == "ok" || arg == "branch"
+	if run && len(commit.files) == 0 {
+		a.mu.Unlock()
+		return
+	}
+	if len(c.excluded) == 0 {
+		// With every file in, the server commits the whole working tree.
+		commit.files = nil
+	}
+	a.commit = nil
+	a.mu.Unlock()
+	commit.message = strings.TrimSpace(th.EditorText("commit.message"))
+	th.SetEditorText("commit.message", "")
+	if run {
+		a.runGit("commit", arg == "branch", true, commit)
+	}
+}
+
+// pickCommitFiles turns the Commit dialog's file i in or out of the
+// commit, or with all every file: out when they're all in, else in.
+func (a *App) pickCommitFiles(all bool, i int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	_, _, _, v := a.checkout()
+	c := a.commit
+	if c == nil || v == nil || v.status == nil {
+		return
+	}
+	files := v.status.WorkingTree.Files
+	switch {
+	case all && len(c.excluded) == 0:
+		for _, f := range files {
+			c.excluded[f.Path] = true
+		}
+	case all:
+		c.excluded = map[string]bool{}
+	case i >= 0 && i < len(files) && c.excluded[files[i].Path]:
+		delete(c.excluded, files[i].Path)
+	case i >= 0 && i < len(files):
+		c.excluded[files[i].Path] = true
+	}
+}
+
+// openCommitFile opens the Commit dialog's file i in the preferred editor,
+// under the folder the status names (openChangedFileInEditor).
+func (a *App) openCommitFile(i int) {
+	a.mu.Lock()
+	e, _, _, v := a.checkout()
+	if e == nil || v == nil || v.status == nil || v.status.WorkingTree.RootPath == "" || i < 0 || i >= len(v.status.WorkingTree.Files) {
+		a.mu.Unlock()
+		return
+	}
+	path := pathUnder(v.status.WorkingTree.RootPath, v.status.WorkingTree.Files[i].Path)
+	mode, _ := remoteOpen(e)
+	pref := preferredEditor(a.editorChoices(e, mode), a.lastEditor)
+	a.mu.Unlock()
+	a.openInEditor(pref, path)
 }
 
 // runPrimaryScript runs the script the scripts split shows.

@@ -146,6 +146,107 @@ func TestGitMenuActions(t *testing.T) {
 	})
 }
 
+// The Git menu's Commit asks first, in T3's dialog (05-header.md §5.11):
+// the branch, that it's the default one, and the working tree's files. A
+// file left out while editing stays out of filePaths, and the trimmed
+// message goes as commitMessage; Commit on new branch commits every file
+// on a feature branch; with every file out nothing commits; Cancel, the ✕
+// and Escape close it; each opening starts afresh. A file's row opens it
+// in the editor, under the status's folder.
+func TestCommitDialog(t *testing.T) {
+	a, f := liveApp(t, status(func(s *t3.VcsStatus) {
+		s.RefName, s.IsDefaultRef, s.HasWorkingTreeChanges = "main", true, true
+		s.WorkingTree.RootPath = "/home/dev/code/atlas"
+		s.WorkingTree.Files = []t3.VcsFile{{Path: "src/parser.go", Insertions: 12, Deletions: 3}, {Path: "README.md", Insertions: 1}}
+	}))
+	a.envs[0].config.AvailableEditors = []string{"vscode"}
+	f.on("shell.openInEditor", func(f *fakeEnv, r fakeReq) { f.exit(r, nil) })
+	th := ui.NewTheme()
+	open := func() *ui.CommitDialog {
+		t.Helper()
+		a.handle(th, ui.Action{ID: "card.gitmenu", Kind: "click"})
+		if m := built(a, time.Now()).Card.Menu; m == nil || m.Rows[0].Label != "Commit" || m.Rows[0].Disabled {
+			t.Fatalf("menu %+v", m)
+		}
+		a.handle(th, ui.Action{ID: "card.git:0", Kind: "click"})
+		s := built(a, time.Now())
+		if s.Card.Menu != nil || s.Commit == nil {
+			t.Fatalf("Commit closes the menu for its dialog: menu %+v, dialog %+v", s.Card.Menu, s.Commit)
+		}
+		return s.Commit
+	}
+	finish := func(r fakeReq) {
+		t.Helper()
+		f.chunk(r, map[string]any{"kind": "action_finished", "result": map[string]any{"toast": map[string]any{"title": "Committed"}}})
+		f.exit(r, nil)
+		eventually(t, "the commit finishes", func() bool { return built(a, time.Now()).Card.Git.Success != nil })
+	}
+	d := open()
+	if d.Branch != "main" || !d.Default || !d.Opens || d.Editing || len(d.Files) != 2 ||
+		d.Files[0] != (ui.CommitFile{Path: "src/parser.go", Insertions: 12, Deletions: 3}) || d.Files[1].Excluded {
+		t.Fatalf("dialog %+v", d)
+	}
+	if n := len(f.requests("git.runStackedAction")); n != 0 {
+		t.Fatalf("%d actions ran before the dialog said to", n)
+	}
+	a.handle(th, ui.Action{ID: "commit:edit", Kind: "click"})
+	a.handle(th, ui.Action{ID: "commit.file:1", Kind: "click"})
+	if d := built(a, time.Now()).Commit; !d.Editing || d.Files[0].Excluded || !d.Files[1].Excluded {
+		t.Fatalf("README left out: %+v", d)
+	}
+	a.handle(th, ui.Action{ID: "commit.open:0", Kind: "click"})
+	if r := f.wait("shell.openInEditor", 1); r.Payload["cwd"] != "/home/dev/code/atlas/src/parser.go" || r.Payload["editor"] != "vscode" {
+		t.Fatalf("open payload %v", r.Payload)
+	}
+	th.SetEditorText("commit.message", "  Fix the parser  ")
+	a.handle(th, ui.Action{ID: "commit:ok", Kind: "click"})
+	r := f.wait("git.runStackedAction", 1)
+	if r.Payload["action"] != "commit" || r.Payload["commitMessage"] != "Fix the parser" || r.Payload["featureBranch"] != nil ||
+		fmt.Sprint(r.Payload["filePaths"]) != "[src/parser.go]" {
+		t.Fatalf("commit payload %v", r.Payload)
+	}
+	if s := built(a, time.Now()); s.Commit != nil || s.Confirm != nil || th.EditorText("commit.message") != "" {
+		t.Fatal("committing closes the dialog and clears it, without asking on the default branch")
+	}
+	finish(r)
+
+	if d := open(); d.Editing || d.Files[1].Excluded {
+		t.Fatalf("reopened %+v", d)
+	}
+	a.handle(th, ui.Action{ID: "commit:branch", Kind: "click"})
+	r = f.wait("git.runStackedAction", 2)
+	if r.Payload["action"] != "commit" || r.Payload["featureBranch"] != true || r.Payload["filePaths"] != nil || r.Payload["commitMessage"] != nil {
+		t.Fatalf("new branch payload %v", r.Payload)
+	}
+	finish(r)
+
+	open()
+	a.handle(th, ui.Action{ID: "commit:edit", Kind: "click"})
+	a.handle(th, ui.Action{ID: "commit.all", Kind: "click"})
+	a.handle(th, ui.Action{ID: "commit:ok", Kind: "click"})
+	a.handle(th, ui.Action{ID: "commit:branch", Kind: "click"})
+	if d := built(a, time.Now()).Commit; d == nil || !d.Files[0].Excluded || !d.Files[1].Excluded {
+		t.Fatalf("every file out, it stays open: %+v", d)
+	}
+	a.handle(th, ui.Action{ID: "commit.all", Kind: "click"})
+	if d := built(a, time.Now()).Commit; d.Files[0].Excluded || d.Files[1].Excluded {
+		t.Fatalf("all back in: %+v", d)
+	}
+	for _, shut := range []ui.Action{{ID: "commit:cancel", Kind: "click"}, {ID: "dialog:close", Kind: "click"}, {ID: "commit.message", Kind: "key", Text: "⎋"}} {
+		if shut.ID != "commit:cancel" {
+			open()
+		}
+		a.handle(th, shut)
+		if s := built(a, time.Now()); s.Commit != nil {
+			t.Fatalf("%+v leaves the dialog open", shut)
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := len(f.requests("git.runStackedAction")); n != 2 {
+		t.Fatalf("%d actions ran, want the two commits", n)
+	}
+}
+
 // A failed action says so and leaves the row as it was.
 func TestGitActionFails(t *testing.T) {
 	a, f := liveApp(t, status(func(s *t3.VcsStatus) { s.HasWorkingTreeChanges = true }))

@@ -50,6 +50,20 @@ type pendingGit struct {
 	includesCommit bool
 }
 
+// commitAsk is the Git menu's Commit in its dialog: the files left out of
+// the commit, by path, and whether they're being picked.
+type commitAsk struct {
+	excluded map[string]bool
+	editing  bool
+}
+
+// gitCommit is what the Commit dialog gives a commit: its message ("" to
+// have one generated) and its files, nil for them all.
+type gitCommit struct {
+	message string
+	files   []string
+}
+
 // refPicker is the open branch picker: its search and highlight, and the
 // refs the server found for the search (vcs.listRefs with the query), a
 // page at a time. Each search gets a new generation, so a page for an
@@ -442,6 +456,38 @@ func gitProgress(r *gitRun, now time.Time) *ui.GitProgress {
 		p.Elapsed = gitElapsed(now.Sub(start))
 	}
 	return p
+}
+
+// commitScene is the Commit dialog over the checkout's status
+// (GitActionsControl.tsx): its branch, "(detached HEAD)" without one, and
+// its working tree's files, the ones left out marked, which open while the
+// status says where they are. Call with the lock held.
+func (a *App) commitScene(c *commitAsk) *ui.CommitDialog {
+	d := &ui.CommitDialog{Branch: "(detached HEAD)", Editing: c.editing}
+	_, _, _, v := a.checkout()
+	if v == nil || v.status == nil {
+		return d
+	}
+	st := v.status
+	if st.RefName != "" {
+		d.Branch = st.RefName
+	}
+	d.Default, d.Opens = st.IsDefaultRef, st.WorkingTree.RootPath != ""
+	for _, f := range st.WorkingTree.Files {
+		d.Files = append(d.Files, ui.CommitFile{Path: f.Path, Insertions: f.Insertions, Deletions: f.Deletions, Excluded: c.excluded[f.Path]})
+	}
+	return d
+}
+
+// pathUnder is path, relative as the status writes it, under folder dir on
+// dir's machine (resolvePathLinkTarget): joined with dir's own separator,
+// a backslash for a Windows path.
+func pathUnder(dir, path string) string {
+	sep := "/"
+	if len(dir) > 2 && dir[1] == ':' && (dir[2] == '\\' || dir[2] == '/') || strings.HasPrefix(dir, `\\`) || strings.Contains(dir, `:\`) {
+		sep = `\`
+	}
+	return strings.TrimRight(dir, `/\`) + sep + strings.TrimLeft(path, `/\`)
 }
 
 // pickerRefs are the refs the open picker lists from: the server's pages

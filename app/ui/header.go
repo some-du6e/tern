@@ -432,13 +432,18 @@ func (th *Theme) SelectAll(id string) {
 // projectIcon is a project's mark sizeDp square (ProjectFavicon.tsx,
 // ProjectMonogram.tsx): a monogram on a tile of its colour at 14% with
 // corners at 25%, bold mono stretched to 6 units of its 16-unit box for one
-// letter or 12 for two; or a lucide icon in its colour.
+// letter or 12 for two; or a lucide icon in its colour, folder-code for a
+// name tern doesn't draw, as T3 does for one lucide lacks.
 func (th *Theme) projectIcon(ic ProjectIcon, sizeDp float32) W {
 	return func(gtx C) D {
 		col := projectIconColor(ic.Color)
 		s := dp(gtx, sizeDp)
-		if ic.Lucide != "" && lucide[ic.Lucide] != "" {
-			return LucideW(ic.Lucide, col, sizeDp)(gtx)
+		if ic.Lucide != "" {
+			name := ic.Lucide
+			if lucide[name] == "" {
+				name = "folder-code"
+			}
+			return LucideW(name, col, sizeDp)(gtx)
 		}
 		r := image.Rect(0, 0, s, s)
 		fill(gtx, over(alpha(col, 0x24), P.Background), r, s/4)

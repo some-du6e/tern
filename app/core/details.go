@@ -68,7 +68,7 @@ func projectIcon(p t3.Project) ui.ProjectIcon {
 				text = ic.Monogram
 			}
 			if text == "" {
-				return ui.ProjectIcon{Lucide: ic.Name, Color: ic.Color, Monogram: mono}
+				return ui.ProjectIcon{Lucide: ic.Name, Color: ic.Color}
 			}
 		}
 		if text != "" {

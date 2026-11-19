@@ -934,6 +934,22 @@ func (th *Theme) middleTruncate(gtx C, t Txt, s string, mid int) {
 	th.capText(gtx, t, "…"+tail, mid)
 }
 
+// startTruncate draws s on one line in the width gtx allows, its baseline
+// on y, cutting its start rather than its end when it doesn't fit, as
+// StartTruncatedPath's right-to-left ellipsis does: "…" and the longest
+// end of s that fits after it.
+func (th *Theme) startTruncate(gtx C, t Txt, s string, y int) {
+	w := gtx.Constraints.Max.X
+	if th.textW(gtx, t, s) <= w {
+		th.baseText(gtx, t, s, y)
+		return
+	}
+	r := []rune(s)
+	// The longest end that fits, found by halves.
+	n := sort.Search(len(r), func(k int) bool { return th.textW(gtx, t, "…"+string(r[len(r)-k-1:])) > w })
+	th.baseText(gtx, t, "…"+string(r[len(r)-n:]), y)
+}
+
 // splitMiddle is T3's splitForMiddleTruncate: the tail is the last path
 // segment when that's at most 16 long, else the last 10, moved to start on
 // a word where one is near. An empty tail means s ends with the usual

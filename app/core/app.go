@@ -114,6 +114,7 @@ type App struct {
 	checksAll     bool
 	branchPicker  *refPicker
 	confirm       *pendingGit
+	commit        *commitAsk
 	vcs           map[string]*vcsState
 	lastEditor    string
 	hintSeen      bool
@@ -815,7 +816,7 @@ func (a *App) closeThreadLocked() {
 	a.openID = ""
 	a.picker, a.traitsOpen, a.accessOpen, a.projectsOpen = nil, false, false, false
 	a.renaming, a.cardMenu, a.branchPicker, a.confirm, a.prsOpen = "", "", nil, nil, false
-	a.prAlert = nil
+	a.prAlert, a.commit = nil, nil
 }
 
 // openThread shows a thread, by ref, and subscribes to it. Call without the

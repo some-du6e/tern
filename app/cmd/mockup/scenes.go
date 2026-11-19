@@ -362,6 +362,13 @@ func titleMenuScene() *ui.Scene {
 		{ID: "new-thread-on-branch", Label: "New thread on t3/go-client", Icon: "message-square-plus"},
 		{ID: "pin", Label: "Pin thread", Icon: "pin"},
 		{ID: "settle", Label: "Settle thread", Icon: "circle-check"},
+		{ID: "snooze", Label: "Snooze", Icon: "clock", Children: []ui.MenuItem{
+			{ID: "snooze:after:60", Label: "In 1 hour", Detail: "3:30 PM"},
+			{ID: "snooze:after:180", Label: "In 3 hours", Detail: "5:30 PM"},
+			{ID: "snooze:at:today:18:00", Label: "This evening", Detail: "6:00 PM"},
+			{ID: "snooze:at:tomorrow:09:00", Label: "Tomorrow", Detail: "9:00 AM"},
+			{ID: "snooze:at:monday:09:00", Label: "Next week", Detail: "Mon 9:00 AM"},
+		}},
 		{ID: "rename", Label: "Rename thread", Icon: "pencil", Sep: true},
 		{ID: "regenerate-title", Label: "Regenerate title", Icon: "refresh-cw"},
 		{ID: "mark-unread", Label: "Mark unread", Icon: "mail-open"},
@@ -378,6 +385,45 @@ func titleMenuScene() *ui.Scene {
 		{ID: "archive", Label: "Archive thread", Icon: "archive", Off: true, Sep: true},
 		{ID: "delete", Label: "Delete", Icon: "trash", Danger: true},
 	}}
+	return s
+}
+
+// hintScene is a quick action that can't run, which explains itself in a
+// popover while the pointer rests on it, and a project without scripts,
+// whose row adds one (off: tern has no Add Action dialog yet).
+func hintScene() *ui.Scene {
+	s := runningScene()
+	s.Card.Git = &ui.GitActions{Label: "Push", Icon: "cloud-upload", Hint: "No local commits to push."}
+	s.Card.Scripts = &ui.Scripts{}
+	return s
+}
+
+// commitScene is the Git menu's Commit reviewing first on the default
+// branch: the working tree's files, every one in.
+func commitScene() *ui.Scene {
+	s := questionScene()
+	s.Commit = &ui.CommitDialog{Branch: "main", Default: true, Opens: true, Files: []ui.CommitFile{
+		{Path: "app/ui/watch/pairing.go", Insertions: 24},
+		{Path: "app/ui/watch/session.go", Insertions: 6},
+		{Path: "docs/watch-pairing.md", Insertions: 1},
+	}}
+	return s
+}
+
+// commitEditScene is the Commit dialog picking its files, the notes left
+// out.
+func commitEditScene() *ui.Scene {
+	s := commitScene()
+	s.Commit.Editing = true
+	s.Commit.Files[2].Excluded = true
+	return s
+}
+
+// deleteScene asks before deleting the thread, in T3's confirm dialog.
+func deleteScene() *ui.Scene {
+	s := runningScene()
+	s.Alert = &ui.Alert{Title: `Delete thread "Port the T3 Connect client to Go"?`,
+		Description: "This permanently clears conversation history for this thread.", Action: "Confirm", Variant: ui.BtnDestructive}
 	return s
 }
 

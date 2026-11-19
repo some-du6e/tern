@@ -245,7 +245,7 @@ type GuestLine struct {
 // tile, or a lucide icon, in one of T3's project colours.
 type ProjectIcon struct {
 	Monogram string // one or two letters
-	Lucide   string // the icon, when the project chose one
+	Lucide   string // the icon, when the project chose one; folder-code for one tern doesn't draw
 	Color    string // gray, red, orange, … rose (projectIconColors.ts)
 }
 
@@ -466,6 +466,29 @@ type Confirm struct {
 	BranchOff          string // why the feature branch button is disabled, "" when it isn't
 }
 
+// CommitDialog is T3's "Commit changes" dialog (GitActionsControl.tsx),
+// which the Git menu's Commit opens: the branch it commits on, the working
+// tree's changed files ("none" without any), and an optional message
+// ("commit.message"). While Editing each file has a checkbox
+// ("commit.file:<i>", "commit.all" for them all), and one left out reads
+// "Excluded". A file's name opens it in the editor ("commit.open:<i>"). Its
+// buttons are "commit:cancel", "commit:branch" (Commit on new branch),
+// "commit:ok" and "commit:edit".
+type CommitDialog struct {
+	Branch  string // "(detached HEAD)" without one
+	Default bool   // the default branch, which it warns of
+	Files   []CommitFile
+	Opens   bool // the files open in the editor: the status says where they are
+	Editing bool
+}
+
+// CommitFile is one of the working tree's changed files.
+type CommitFile struct {
+	Path                  string
+	Insertions, Deletions int
+	Excluded              bool
+}
+
 type Scene struct {
 	Envs        []Env
 	Search      string
@@ -507,6 +530,7 @@ type Scene struct {
 	Header    *ChatHeader    // the chat header, when a thread or draft is open
 	Card      *ThreadDetails // and its details card
 	Confirm   *Confirm       // a Git action asking first
+	Commit    *CommitDialog  // the Git menu's Commit, reviewing first
 	Alert     *Alert         // a pull request action asking first
 	Items     []Item
 	MoreAbove bool

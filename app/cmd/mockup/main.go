@@ -13,7 +13,10 @@ import (
 	"path/filepath"
 	"time"
 
+	"gioui.org/f32"
 	"gioui.org/gpu/headless"
+	"gioui.org/io/input"
+	"gioui.org/io/pointer"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/unit"
@@ -22,9 +25,15 @@ import (
 )
 
 type shot struct {
-	name string
-	w, h int
-	draw func(th *ui.Theme, gtx layout.Context) layout.Dimensions
+	name  string
+	w, h  int
+	draw  func(th *ui.Theme, gtx layout.Context) layout.Dimensions
+	hover image.Point // where the pointer rests, in dp; nowhere at 0, 0
+}
+
+// desktop draws scene's window.
+func desktop(scene func() *ui.Scene) func(th *ui.Theme, gtx layout.Context) layout.Dimensions {
+	return func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, scene()) }
 }
 
 func main() {
@@ -35,35 +44,49 @@ func main() {
 	if err := os.MkdirAll(*out, 0o755); err != nil {
 		log.Fatal(err)
 	}
+	none := image.Point{}
 	shots := []shot{
-		{"1-thread", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, runningScene()) }},
-		{"2-approval-model-picker", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, approvalScene()) }},
-		{"2b-model-options", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, traitsScene()) }},
-		{"2c-codex-options", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, codexScene()) }},
-		{"3-diff", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, diffScene()) }},
-		{"4-question", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, questionScene()) }},
-		{"5-new-thread-commands", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, draftScene()) }},
-		{"6-sign-in", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.SignInScreen(gtx, signInScene()) }},
-		{"7-phone", 390, 844, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Phone(gtx, phoneScene()) }},
-		{"8-details-git-menu", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, gitMenuScene()) }},
-		{"9-details-popover", 1000, 800, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, popoverScene()) }},
-		{"10-details-compact-running", 1440, 300, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, gitRunningScene()) }},
-		{"11-git-confirm", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, confirmScene()) }},
-		{"12-draft-workspace-menu", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, draftMenuScene()) }},
+		{"1-thread", 1440, 900, desktop(runningScene), none},
+		{"2-approval-model-picker", 1440, 900, desktop(approvalScene), none},
+		{"2b-model-options", 1440, 900, desktop(traitsScene), none},
+		{"2c-codex-options", 1440, 900, desktop(codexScene), none},
+		{"3-diff", 1440, 900, desktop(diffScene), none},
+		{"4-question", 1440, 900, desktop(questionScene), none},
+		{"5-new-thread-commands", 1440, 900, desktop(draftScene), none},
+		{"6-sign-in", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.SignInScreen(gtx, signInScene()) }, none},
+		{"7-phone", 390, 844, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Phone(gtx, phoneScene()) }, none},
+		{"8-details-git-menu", 1440, 900, desktop(gitMenuScene), none},
+		{"9-details-popover", 1000, 800, desktop(popoverScene), none},
+		{"10-details-compact-running", 1440, 300, desktop(gitRunningScene), none},
+		{"11-git-confirm", 1440, 900, desktop(confirmScene), none},
+		{"12-draft-workspace-menu", 1440, 900, desktop(draftMenuScene), none},
 		{"13-header-rename", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions {
 			th.SetEditorText("header.title", "Port the T3 Connect client to Go")
 			return th.Desktop(gtx, renameScene())
-		}},
-		{"14-details-pull-requests", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, pullRequestsScene()) }},
-		{"15-details-pr-checks", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, checksScene()) }},
-		{"16-merge-confirm", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, mergeScene()) }},
-		{"17-header-title-menu", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, titleMenuScene()) }},
-		{"18-details-branch-picker", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, branchPickerScene()) }},
-		{"19-no-project-draft", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, noProjectScene()) }},
-		{"20-details-init-git-actions", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, initGitScene()) }},
-		{"21-details-items-menu", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, itemsMenuScene()) }},
-		{"22-header-subagent-collapsed", 760, 500, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, subagentScene()) }},
-		{"23-details-essential", 1440, 238, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, runningScene()) }},
+		}, none},
+		{"14-details-pull-requests", 1440, 900, desktop(pullRequestsScene), none},
+		{"15-details-pr-checks", 1440, 900, desktop(checksScene), none},
+		{"16-merge-confirm", 1440, 900, desktop(mergeScene), none},
+		{"17-header-title-menu", 1440, 900, desktop(titleMenuScene), none},
+		{"18-details-branch-picker", 1440, 900, desktop(branchPickerScene), none},
+		{"19-no-project-draft", 1440, 900, desktop(noProjectScene), none},
+		{"20-details-init-git-actions", 1440, 900, desktop(initGitScene), none},
+		{"21-details-items-menu", 1440, 900, desktop(itemsMenuScene), none},
+		{"22-header-subagent-collapsed", 760, 500, desktop(subagentScene), none},
+		{"23-details-essential", 1440, 238, desktop(runningScene), none},
+		// The pointer on the title: its chevron, and its tooltip under it.
+		{"24-header-title-hover", 1440, 900, desktop(runningScene), image.Pt(393, 26)},
+		// The pointer on a quick action that can't run: its reason; and a
+		// project without scripts, whose row adds one.
+		{"25-details-hint-reason", 1440, 900, desktop(hintScene), image.Pt(1257, 236)},
+		// The pointer on the thread menu's Snooze: its submenu.
+		{"26-thread-menu-snooze", 1440, 900, desktop(titleMenuScene), image.Pt(393, 41+5+3*28+14)},
+		{"27-delete-confirm", 1440, 900, desktop(deleteScene), none},
+		{"28-git-commit", 1440, 900, func(th *ui.Theme, gtx layout.Context) layout.Dimensions {
+			th.SetEditorText("commit.message", "Pair the watch with a scoped session")
+			return th.Desktop(gtx, commitScene())
+		}, none},
+		{"29-git-commit-editing", 1440, 900, desktop(commitEditScene), none},
 	}
 	if *anim != "" {
 		if err := renderAnims(ui.NewTheme(), float32(*scale), *anim); err != nil {
@@ -89,23 +112,27 @@ func main() {
 
 // darkShots are the header and the details card in T3's dark theme.
 func darkShots() []shot {
-	desktop := func(scene func() *ui.Scene) func(th *ui.Theme, gtx layout.Context) layout.Dimensions {
-		return func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, scene()) }
-	}
+	none := image.Point{}
 	return []shot{
-		{"d1-thread-dark", 1440, 900, desktop(runningScene)},
-		{"d8-details-git-menu-dark", 1440, 900, desktop(gitMenuScene)},
-		{"d9-details-popover-dark", 1000, 800, desktop(popoverScene)},
-		{"d12-draft-workspace-menu-dark", 1440, 900, desktop(draftMenuScene)},
-		{"d14-details-pull-requests-dark", 1440, 900, desktop(pullRequestsScene)},
-		{"d17-header-title-menu-dark", 1440, 900, desktop(titleMenuScene)},
-		{"d19-no-project-draft-dark", 1440, 900, desktop(noProjectScene)},
+		{"d1-thread-dark", 1440, 900, desktop(runningScene), none},
+		{"d8-details-git-menu-dark", 1440, 900, desktop(gitMenuScene), none},
+		{"d9-details-popover-dark", 1000, 800, desktop(popoverScene), none},
+		{"d12-draft-workspace-menu-dark", 1440, 900, desktop(draftMenuScene), none},
+		{"d14-details-pull-requests-dark", 1440, 900, desktop(pullRequestsScene), none},
+		{"d17-header-title-menu-dark", 1440, 900, desktop(titleMenuScene), none},
+		{"d19-no-project-draft-dark", 1440, 900, desktop(noProjectScene), none},
+		{"d25-details-hint-reason-dark", 1440, 900, desktop(hintScene), image.Pt(1257, 236)},
+		{"d27-delete-confirm-dark", 1440, 900, desktop(deleteScene), none},
+		{"d29-git-commit-editing-dark", 1440, 900, desktop(commitEditScene), none},
 	}
 }
 
 // render draws s on a theme of its own, so nothing one shot leaves open
 // or on its way carries into the next, and lets its transitions run: the
-// frame it writes out comes 300ms after the one that starts them.
+// frame it writes out comes 300ms after the one that starts them. With the
+// pointer resting on it, the pointer comes on the second frame, the first
+// that has something under it, and the last comes 800ms on, past a
+// tooltip's 600ms wait and its fade.
 func render(s shot, scale float32, path string) error {
 	th := ui.NewTheme()
 	size := image.Pt(int(float32(s.w)*scale), int(float32(s.h)*scale))
@@ -116,14 +143,24 @@ func render(s shot, scale float32, path string) error {
 	defer win.Release()
 	ops := new(op.Ops)
 	now := time.Now()
-	for _, at := range []time.Time{now, now.Add(300 * time.Millisecond)} {
+	frames := []time.Duration{0, 300 * time.Millisecond}
+	var router input.Router
+	var src input.Source
+	if s.hover != (image.Point{}) {
+		frames = []time.Duration{0, 10 * time.Millisecond, 800 * time.Millisecond}
+		router.Queue(pointer.Event{Kind: pointer.Move, Source: pointer.Mouse, Position: f32.Pt(float32(s.hover.X)*scale, float32(s.hover.Y)*scale)})
+		src = router.Source()
+	}
+	for _, d := range frames {
 		ops.Reset()
 		s.draw(th, layout.Context{
 			Ops:         ops,
 			Metric:      unit.Metric{PxPerDp: scale, PxPerSp: scale},
 			Constraints: layout.Exact(size),
-			Now:         at,
+			Now:         now.Add(d),
+			Source:      src,
 		})
+		router.Frame(ops)
 	}
 	if err := win.Frame(ops); err != nil {
 		return err

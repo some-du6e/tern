@@ -114,6 +114,9 @@ func (th *Theme) Desktop(gtx C, s *Scene) D {
 	if s.Confirm != nil {
 		th.confirmDialog(gtx, s.Confirm, size)
 	}
+	if s.Commit != nil {
+		th.commitDialog(gtx, s.Commit, size)
+	}
 	if s.Alert != nil {
 		th.alertDialog(gtx, s.Alert, size)
 	}
@@ -236,6 +239,8 @@ func (th *Theme) shellEscape(gtx C, s *Scene) {
 		switch {
 		case s.Confirm != nil:
 			th.push(Action{ID: "confirm:abort", Kind: "click"})
+		case s.Commit != nil:
+			th.push(Action{ID: "commit:cancel", Kind: "click"})
 		case s.Alert != nil:
 			th.push(Action{ID: "alert:cancel", Kind: "click"})
 		case menuOpen(s):

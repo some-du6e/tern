@@ -581,8 +581,11 @@ func footerFill() color.NRGBA { return over(faded(P.Muted, 0.72), P.Popover) }
 
 // dialog draws body as T3's dialog in the middle of a win-sized window, up
 // to maxW wide: the backdrop over everything, then the popup with the
-// dialog glass's border, shadow and dark top light. A press on the
-// backdrop clicks dismiss; with none, the backdrop keeps its presses.
+// dialog glass's border, shadow and dark top light. A Dialog closes on a
+// press on its backdrop, which clicks dismiss, and on its ✕, a 32dp ghost
+// button 8dp inside the border at the top right ("dialog:close"). An
+// AlertDialog, with no dismiss, has neither: its backdrop keeps its
+// presses.
 func (th *Theme) dialog(gtx C, win image.Point, maxW float32, dismiss string, body W) {
 	m := op.Record(gtx.Ops)
 	backdrop := alpha(rgb(0xfcfcfc), 0x99)
@@ -621,6 +624,11 @@ func (th *Theme) dialog(gtx C, win image.Point, maxW float32, dismiss string, bo
 		// The popup keeps its presses.
 		th.hit(gtx, "dialog.popup", r.Max)
 		call.Add(gtx.Ops)
+		if dismiss != "" {
+			px, s := max(1, dp(gtx, 1)), dp(gtx, 32)
+			defer op.Offset(image.Pt(r.Max.X-px-dp(gtx, 8)-s, px+dp(gtx, 8))).Push(gtx.Ops).Pop()
+			th.T3Button("dialog:close", Button{Variant: BtnGhost, Size: BtnSizeIcon, Icon: "x", On: P.Popover})(gtx)
+		}
 	}()
 	op.Defer(gtx.Ops, m.Stop())
 }
@@ -664,4 +672,256 @@ func (th *Theme) confirmBody(gtx C, c *Confirm) D {
 			})
 		}),
 	)
+}
+
+// commitDialog is c as T3's Commit dialog (GitActionsControl.tsx; Dialog,
+// docs/ui/02-primitives.md §3.21) in the middle of a win-sized window: its
+// header, then a panel of the summary and the message, then Cancel, Commit
+// on new branch and Commit in the bare footer, the last two off while the
+// commit takes no file.
+func (th *Theme) commitDialog(gtx C, c *CommitDialog, win image.Point) {
+	th.dialog(gtx, win, 512, "commit:cancel", func(gtx C) D { return th.commitBody(gtx, c) })
+}
+
+// commitBody is the dialog inside the popup's 1dp border: the header padded
+// 24 (12 under it, as a panel follows), the panel padded 4 by 24 with 16
+// between its parts, and the bare footer padded 16 by 24.
+func (th *Theme) commitBody(gtx C, c *CommitDialog) D {
+	taken := 0
+	for _, f := range c.Files {
+		if !f.Excluded {
+			taken++
+		}
+	}
+	block := func(top, bottom float32, w W) layout.FlexChild {
+		return rigid(func(gtx C) D {
+			gtx.Constraints.Min.X = gtx.Constraints.Max.X
+			return pad(top, 24, bottom, 24).Layout(gtx, func(gtx C) D {
+				gtx.Constraints.Min.X = gtx.Constraints.Max.X
+				return w(gtx)
+			})
+		})
+	}
+	return inBorder(func(gtx C) D {
+		return Col(gtx,
+			block(24, 12, func(gtx C) D {
+				return Col(gtx,
+					rigid(func(gtx C) D {
+						return th.Text(gtx, Txt{Size: 20, LineH: 27.5 / 20, Font: UI(font.SemiBold), Color: P.PopoverForeground}, "Commit changes")
+					}),
+					rigid(Spacer(0, 8)),
+					rigid(func(gtx C) D {
+						return th.Text(gtx, Txt{Size: 14, LineH: 20.0 / 14, Color: P.MutedForeground}, "Review and confirm your commit. Leave the message blank to auto-generate one.")
+					}),
+				)
+			}),
+			block(4, 4, func(gtx C) D {
+				return Col(gtx,
+					rigid(func(gtx C) D { return th.commitSummary(gtx, c, taken) }),
+					rigid(Spacer(0, 16)),
+					rigid(func(gtx C) D {
+						return th.boxText(gtx, Txt{Size: 14, LineH: 20.0 / 14, Font: UI(font.Medium), Color: P.PopoverForeground}, "Commit message (optional)")
+					}),
+					rigid(Spacer(0, 4)),
+					rigid(th.T3Textarea("commit.message", "Leave empty to auto-generate", P.Popover)),
+				)
+			}),
+			block(16, 16, func(gtx C) D {
+				none := taken == 0
+				return RowGap(gtx, 8,
+					flexed(func(gtx C) D { return D{Size: image.Pt(gtx.Constraints.Min.X, 0)} }),
+					rigid(th.T3Button("commit:cancel", Button{Variant: BtnOutline, Size: BtnSizeSm, Label: "Cancel", On: P.Popover})),
+					rigid(th.T3Button("commit:branch", Button{Variant: BtnOutline, Size: BtnSizeSm, Label: "Commit on new branch", Disabled: none, On: P.Popover})),
+					rigid(th.T3Button("commit:ok", Button{Variant: BtnDefault, Size: BtnSizeSm, Label: "Commit", Disabled: none, On: P.Popover})),
+				)
+			}),
+		)
+	})(gtx)
+}
+
+// commitSummary is the dialog's summary box: rounded 12, zinc-25 (white at
+// 3.5% in dark) in a 1dp ring of black (white) at 5%, padded 12, its 14/20
+// rows 12 apart. "Branch" and the branch, "Default branch" in --warning at
+// the end on the default one; then the files: the header's checkbox while
+// editing, "Files", "(N of M)" when some are left out and Edit or Done at
+// the end; 4dp under it their list and the totals of the ones it takes, or
+// "none".
+func (th *Theme) commitSummary(gtx C, c *CommitDialog, taken int) D {
+	bg, ring := over(Tailwind["zinc-25"], P.Popover), over(alpha(rgb(0), 0x0d), P.Popover)
+	if dark {
+		bg, ring = over(alpha(rgb(0xffffff), 0x09), P.Popover), over(alpha(rgb(0xffffff), 0x0d), P.Popover)
+	}
+	text := Txt{Size: 14, LineH: 20.0 / 14, Color: P.PopoverForeground, MaxLines: 1}
+	muted, strong, warn := text, text, text
+	muted.Color, strong.Font, warn.Color = P.MutedForeground, UI(font.Medium), P.Warning
+	gap := func(gtx C) D { return D{Size: image.Pt(gtx.Constraints.Min.X, 0)} }
+	m := op.Record(gtx.Ops)
+	d := pad(12, 12, 12, 12).Layout(gtx, func(gtx C) D {
+		gtx.Constraints.Min.X = gtx.Constraints.Max.X
+		branch := func(gtx C) D {
+			kids := []layout.FlexChild{
+				rigid(func(gtx C) D { return th.Text(gtx, muted, "Branch") }),
+				flexed(func(gtx C) D { return th.Text(gtx, strong, c.Branch) }),
+			}
+			if c.Default {
+				kids = append(kids, rigid(func(gtx C) D { return th.Text(gtx, warn, "Default branch") }))
+			}
+			return RowGap(gtx, 8, kids...)
+		}
+		some := len(c.Files) > 0
+		header := func(gtx C) D {
+			var kids []layout.FlexChild
+			if c.Editing && some {
+				kids = append(kids, rigid(th.T3Checkbox("commit.all", taken == len(c.Files), taken > 0 && taken < len(c.Files), bg)))
+			}
+			kids = append(kids, rigid(func(gtx C) D { return th.Text(gtx, muted, "Files") }))
+			if taken < len(c.Files) && !c.Editing {
+				kids = append(kids, rigid(func(gtx C) D { return th.Text(gtx, muted, fmt.Sprintf("(%d of %d)", taken, len(c.Files))) }))
+			}
+			kids = append(kids, flexed(gap))
+			if some {
+				label := "Edit"
+				if c.Editing {
+					label = "Done"
+				}
+				kids = append(kids, rigid(th.T3Button("commit:edit", Button{Variant: BtnGhost, Size: BtnSizeXs, Label: label, On: bg})))
+			}
+			return RowGap(gtx, 8, kids...)
+		}
+		files := func(gtx C) D {
+			if !some {
+				return th.Text(gtx, strong, "none")
+			}
+			ins, del := 0, 0
+			for _, f := range c.Files {
+				if !f.Excluded {
+					ins, del = ins+f.Insertions, del+f.Deletions
+				}
+			}
+			return Col(gtx,
+				rigid(func(gtx C) D { return th.commitFiles(gtx, c, bg) }),
+				rigid(Spacer(0, 8)),
+				rigid(func(gtx C) D {
+					return Row(gtx, flexed(gap), rigid(func(gtx C) D { return th.diffCounts(gtx, ins, del) }))
+				}),
+			)
+		}
+		return Col(gtx, rigid(branch), rigid(Spacer(0, 12)), rigid(header), rigid(Spacer(0, 4)), rigid(files))
+	})
+	call := m.Stop()
+	r, rad, px := image.Rectangle{Max: d.Size}, dp(gtx, 12), max(1, dp(gtx, 1))
+	fill(gtx, ring, r.Inset(-px), rad+px)
+	fill(gtx, bg, r, rad)
+	call.Add(gtx.Ops)
+	return d
+}
+
+// commitFiles is the dialog's 176dp list of files (rounded 8, --card or
+// white at 2.5% in dark, in a 1dp ring at 5%), scrolling past its height:
+// rows of 14/20 mono padded 4 by 8, 4 apart inside its 4, accent at 50%
+// under the pointer. Each starts with its checkbox while editing, then its
+// path, cut at its start when it's too long, then its counts or
+// "Excluded"; a click on the path or the counts opens the file, where the
+// status says which folder it's in.
+func (th *Theme) commitFiles(gtx C, c *CommitDialog, under color.NRGBA) D {
+	card, ring := over(P.Card, under), over(alpha(rgb(0), 0x0d), under)
+	if dark {
+		card, ring = over(alpha(rgb(0xffffff), 0x06), under), over(alpha(rgb(0xffffff), 0x0d), under)
+	}
+	w, h, px := gtx.Constraints.Max.X, dp(gtx, 176), max(1, dp(gtx, 1))
+	r, rad := image.Rect(0, 0, w, h), dp(gtx, 8)
+	fill(gtx, ring, r.Inset(-px), rad+px)
+	fill(gtx, card, r, rad)
+	defer clip.UniformRRect(r, rad).Push(gtx.Ops).Pop()
+	t := diffMono()
+	base := dp(gtx, 4) + th.lineBase(gtx, t)
+	l := th.List("commit.files", false)
+	g := gtx
+	g.Constraints = layout.Exact(r.Max)
+	pad(4, 4, 4, 4).Layout(g, func(gtx C) D {
+		return l.Layout(gtx, len(c.Files), func(gtx C, i int) D {
+			f := c.Files[i]
+			rw, rh := gtx.Constraints.Max.X, dp(gtx, 28)
+			row := fmt.Sprintf("commit.row:%d", i)
+			bg := card
+			if th.hoverState(gtx, row) {
+				bg = over(faded(P.Accent, 0.5), card)
+				fill(gtx, bg, image.Rect(0, 0, rw, rh), dp(gtx, 6))
+			}
+			x := dp(gtx, 8)
+			if c.Editing {
+				func() {
+					defer op.Offset(image.Pt(x, (rh-dp(gtx, 16))/2)).Push(gtx.Ops).Pop()
+					th.T3Checkbox(fmt.Sprintf("commit.file:%d", i), !f.Excluded, false, bg)(gtx)
+				}()
+				x += dp(gtx, 16+8)
+			}
+			end := rw - dp(gtx, 8)
+			path, countsW := t, th.textW(gtx, t, "Excluded")
+			path.Color = P.PopoverForeground
+			if f.Excluded {
+				path.Color = P.MutedForeground
+			} else {
+				countsW = th.diffCountsW(gtx, f.Insertions, f.Deletions)
+			}
+			func() {
+				defer op.Offset(image.Pt(end-countsW, 0)).Push(gtx.Ops).Pop()
+				if f.Excluded {
+					th.baseText(gtx, path, "Excluded", base)
+					return
+				}
+				th.diffCountsAt(gtx, f.Insertions, f.Deletions, base)
+			}()
+			func() {
+				defer op.Offset(image.Pt(x, 0)).Push(gtx.Ops).Pop()
+				g := gtx
+				g.Constraints.Max.X = max(0, end-countsW-dp(gtx, 12)-x)
+				th.startTruncate(g, path, f.Path, base)
+			}()
+			if c.Opens {
+				func() {
+					defer op.Offset(image.Pt(x, dp(gtx, 4))).Push(gtx.Ops).Pop()
+					th.hit(gtx, fmt.Sprintf("commit.open:%d", i), image.Pt(max(0, end-x), dp(gtx, 20)))
+				}()
+			}
+			th.hoverArea(gtx, row, image.Pt(rw, rh))
+			if i < len(c.Files)-1 {
+				rh += dp(gtx, 4)
+			}
+			return D{Size: image.Pt(rw, rh)}
+		})
+	})
+	return D{Size: r.Max}
+}
+
+// diffMono is the Commit dialog's paths and counts: 14/20 mono.
+func diffMono() Txt { return Txt{Size: 14, LineH: 20.0 / 14, Font: font.Font{Typeface: mono}} }
+
+// diffCounts is "+N / -N" on a 20dp line: the insertions in
+// --diff-addition and the deletions in --diff-deletion with a muted slash
+// between, as the Commit dialog writes its counts.
+func (th *Theme) diffCounts(gtx C, ins, del int) D {
+	th.diffCountsAt(gtx, ins, del, th.lineBase(gtx, diffMono()))
+	return D{Size: image.Pt(th.diffCountsW(gtx, ins, del), dp(gtx, 20))}
+}
+
+// diffCountsW is the width diffCounts takes.
+func (th *Theme) diffCountsW(gtx C, ins, del int) int {
+	return th.textW(gtx, diffMono(), "+"+groupDigits(ins)+" / -"+groupDigits(del))
+}
+
+// diffCountsAt draws diffCounts with its baseline on y.
+func (th *Theme) diffCountsAt(gtx C, ins, del, y int) {
+	t := diffMono()
+	x := 0
+	for _, part := range []struct {
+		s   string
+		col color.NRGBA
+	}{{"+" + groupDigits(ins), P.DiffAddition}, {" / ", P.MutedForeground}, {"-" + groupDigits(del), P.DiffDeletion}} {
+		t.Color = part.col
+		func() {
+			defer op.Offset(image.Pt(x, 0)).Push(gtx.Ops).Pop()
+			x += th.baseText(gtx, t, part.s, y)
+		}()
+	}
 }

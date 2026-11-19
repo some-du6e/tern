@@ -252,6 +252,100 @@ func (th *Theme) lip(gtx C, r image.Rectangle, rad int, on color.NRGBA) {
 	hline(gtx, over(alpha(rgb(0), 0x0a), on), r.Max.Y-2*px, r.Min.X+rad, r.Max.X-rad)
 }
 
+// fieldFill is a field's surface (Input, Textarea, Checkbox): --background,
+// input at 32% in dark mode.
+func fieldFill() color.NRGBA {
+	if dark {
+		return faded(P.Input, 0.32)
+	}
+	return P.Background
+}
+
+// T3Checkbox is T3's Checkbox (checkbox.tsx) as click target id over on: a
+// 16dp box with radius 4 in the field's border and fill, its small shadow
+// and lip; checked, --primary edge to edge under a 12dp check stroked at 3
+// in its foreground; mixed, the bare box with a dash in the foreground.
+func (th *Theme) T3Checkbox(id string, checked, mixed bool, on color.NRGBA) W {
+	return func(gtx C) D {
+		if on.A == 0 {
+			on = P.Background
+		}
+		s, rad, px := dp(gtx, 16), dp(gtx, 4), max(1, dp(gtx, 1))
+		r := image.Rect(0, 0, s, s)
+		mark, col := "menu-check", P.PrimaryForeground
+		switch {
+		case checked:
+			fill(gtx, over(P.Primary, on), r, rad)
+		default:
+			shadow(gtx, r, rad, []boxShadow{{0, 1, 2, 0, alpha(rgb(0), 0x0d)}})
+			fill(gtx, over(fieldFill(), on), r, rad)
+			strokeRect(gtx, over(P.Input, on), r, rad, float32(px))
+			th.lip(gtx, r, rad, on)
+			mark, col = "mixed", P.Foreground
+		}
+		if checked || mixed {
+			off := (s - dp(gtx, 12)) / 2
+			defer op.Offset(image.Pt(off, off)).Push(gtx.Ops).Pop()
+			strokeIcon("checkbox:"+mark, drawnIcons[mark], col, 12, 3)(gtx)
+		}
+		if id != "" {
+			th.hit(gtx, id, r.Max)
+		}
+		return D{Size: r.Max}
+	}
+}
+
+// T3Textarea is T3's Textarea at its sm size (textarea.tsx, docs/ui/
+// 02-primitives.md §3.10) as editor id, gtx's width: 14/20 text padded 3 by
+// 9 inside its 1dp border, three lines tall (68dp) at least and growing
+// with its text to 256, then scrolling. At rest it has the field's fill,
+// border, small shadow and lip; with the focus its border is --ring, with
+// a 3dp ring of it at 24% inside. Its placeholder is the text at half
+// strength (preflight's color-mix), not an Input's muted one.
+func (th *Theme) T3Textarea(id, placeholder string, on color.NRGBA) W {
+	return func(gtx C) D {
+		if on.A == 0 {
+			on = P.Background
+		}
+		ed := th.Editor(id)
+		ed.SingleLine, ed.Submit = false, false
+		w, px, rad := gtx.Constraints.Max.X, max(1, dp(gtx, 1)), dp(gtx, 8)
+		inset := image.Pt(px+dp(gtx, 9), px+dp(gtx, 3))
+		t := Txt{Size: 14, LineH: 20.0 / 14, Color: P.Foreground}
+		g := gtx
+		inner := max(0, w-2*inset.X)
+		g.Constraints = layout.Constraints{Min: image.Pt(inner, 0), Max: image.Pt(inner, dp(gtx, 256)-2*inset.Y)}
+		m := op.Record(gtx.Ops)
+		if ed.Len() == 0 && placeholder != "" {
+			ph := t
+			ph.Color, ph.MaxLines = alpha(P.Foreground, 0x80), 1
+			th.Text(g, ph, placeholder)
+		}
+		d := th.editor(g, id, t, "")
+		call := m.Stop()
+		r := image.Rect(0, 0, w, max(dp(gtx, 68), d.Size.Y+2*inset.Y))
+		focused := gtx.Focused(ed)
+		if !focused {
+			shadow(gtx, r, rad, []boxShadow{{0, 1, 2, 0, alpha(rgb(0), 0x0d)}})
+		}
+		fill(gtx, over(fieldFill(), on), r, rad)
+		border := over(P.Input, on)
+		if focused {
+			border = P.Ring
+			strokeRect(gtx, over(alpha(P.Ring, 0x3d), fieldFill()), r.Inset(px), rad-px, float32(dp(gtx, 3)))
+		}
+		strokeRect(gtx, border, r, rad, float32(px))
+		if !focused {
+			th.lip(gtx, r, rad, on)
+		}
+		func() {
+			defer op.Offset(inset).Push(gtx.Ops).Pop()
+			call.Add(gtx.Ops)
+		}()
+		return D{Size: r.Max}
+	}
+}
+
 // T3Kbd is T3's Kbd: 20 tall, at least 20 wide, padded 4, radius 4, 12/16
 // medium in muted foreground on foreground at 7% (§3.3).
 func (th *Theme) T3Kbd(label string, on color.NRGBA) W {
