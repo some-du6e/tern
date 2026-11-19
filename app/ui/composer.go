@@ -64,12 +64,14 @@ func runtimeMode(id string) RuntimeMode {
 // 80% glass opacity over what it blurs, #ffffff / #0e0e0e. Gio has no
 // backdrop blur, so it's solid; the blur only shows where the timeline
 // scrolls under the card.
-func glass() color.NRGBA {
-	g := P.Card
+func glass() color.NRGBA { return over(alpha(glassSurface(), 0xcc), composerBackdrop()) }
+
+// glassSurface is --chat-composer-glass-surface itself, opaque.
+func glassSurface() color.NRGBA {
 	if dark {
-		g = P.SurfaceRaised
+		return P.SurfaceRaised
 	}
-	return over(alpha(g, 0xcc), composerBackdrop())
+	return P.Card
 }
 
 // composerBackdrop is what the composer's glass blurs as Chrome samples it
@@ -648,10 +650,11 @@ func (th *Theme) attachButton(gtx C, s *Scene) {
 // composerControl is T3's ComposerControl at sm (h-7 px-2 gap-1.5,
 // 14/20 medium at foreground 80%) or xs (h-6 px-1.75 gap-1.5, 12/16 at
 // foreground 70%, muted in dark): hovered or open, it's filled with
-// --accent and its text turns foreground.
+// --accent and its text turns foreground; disabled, it's at 64%.
 type composerControl struct {
 	xs        bool
 	hot       bool // hovered, or its menu is open
+	off       bool // disabled
 	padStart  float32
 	on        color.NRGBA // the surface under it
 	icon      string
@@ -690,7 +693,15 @@ func (th *Theme) composerControlW(gtx C, c composerControl) D {
 		ps = c.padStart
 	}
 	gtx.Constraints.Min = image.Point{}
-	txt := over(c.text(), c.on)
+	// opacity-64 as Chrome composites it, in sRGB over the surface; Gio's
+	// layer opacity would blend in linear light and come out paler.
+	fade := func(col color.NRGBA) color.NRGBA {
+		if c.off {
+			return over(alpha(col, 0xa3), c.on)
+		}
+		return col
+	}
+	txt := fade(over(c.text(), c.on))
 	cd := record(gtx, func(gtx C) D {
 		return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 			rigid(func(gtx C) D {
@@ -699,7 +710,7 @@ func (th *Theme) composerControlW(gtx C, c composerControl) D {
 				}
 				col := txt
 				if !c.iconLabel && !c.xs {
-					col = P.MutedForeground
+					col = fade(P.MutedForeground)
 				}
 				return LucideW(c.icon, col, iconSize)(gtx)
 			}),
@@ -865,8 +876,13 @@ func (th *Theme) permissionSegments(gtx C, s *Scene, w int) D {
 // modelTrigger is the model and effort trigger (ProviderModelPicker.tsx):
 // one button, the provider's mark, the model's short name and the effort
 // suffix, which opens T3's one picker for both, the model list beside the
-// effort column. It has no tooltip; the composer names it.
+// effort column. It has no tooltip; the composer names it. With no
+// provider to send to it's T3's unavailable control instead, off: tern
+// has no provider settings for it to open.
 func (th *Theme) modelTrigger(gtx C, s *Scene) D {
+	if s.NoProvider {
+		return th.composerControlW(gtx, composerControl{off: true, on: glass(), icon: "circle-alert", label: "No provider available"})
+	}
 	id := liveID(s, "model")
 	hot := s.Picker != nil
 	if id != "" {
@@ -886,7 +902,8 @@ func (th *Theme) modelTrigger(gtx C, s *Scene) D {
 	t := Txt{Size: 14, LineH: 20.0 / 14, Font: UI(font.Medium), MaxLines: 1}
 	px, padX, gap := max(1, dp(gtx, 1)), dp(gtx, 8), dp(gtx, 6)
 
-	// The suffix: the effort word, the bolt, the context window.
+	// The suffix: the effort word, the bolt, Ultracode's icon, the context
+	// window.
 	sg := gtx
 	sg.Constraints.Min = image.Point{}
 	var parts []layout.FlexChild
@@ -904,8 +921,14 @@ func (th *Theme) modelTrigger(gtx C, s *Scene) D {
 			return th.Text(gtx, wt, s.Effort)
 		})
 	}
-	if s.Fast {
+	switch s.Speed {
+	case "Fast":
 		add(LucideFill("zap", muted, 12))
+	case "Ultrafast":
+		add(ultrafastBolt(muted))
+	}
+	if s.Ultracode {
+		add(LucideW("workflow", muted, 12))
 	}
 	if s.Window != "" {
 		add(func(gtx C) D {
@@ -1390,33 +1413,55 @@ func (th *Theme) composerTile(t Thumb, i int, live bool) W {
 	}
 }
 
+// lucidePath is lucide icon name's shape sizeDp big, to fill or stroke.
+func lucidePath(gtx C, name string, sizeDp float32) clip.PathSpec {
+	k := float32(dp(gtx, sizeDp)) / 24
+	v, ok := lucideSegs.Load(name)
+	if !ok {
+		v, _ = lucideSegs.LoadOrStore(name, parseSVGPath(lucide[name]))
+	}
+	var p clip.Path
+	p.Begin(gtx.Ops)
+	for _, sg := range v.([]seg) {
+		pt := func(i int) f32.Point { return sg.p[i].Mul(k) }
+		switch sg.op {
+		case 'M':
+			p.MoveTo(pt(0))
+		case 'L':
+			p.LineTo(pt(0))
+		case 'Q':
+			p.QuadTo(pt(0), pt(1))
+		case 'C':
+			p.CubeTo(pt(0), pt(1), pt(2))
+		case 'Z':
+			p.Close()
+		}
+	}
+	return p.End()
+}
+
 // LucideFill is a lucide icon filled in col as well as stroked, as T3
 // draws its bolt and play icons (fill-current).
 func LucideFill(name string, col color.NRGBA, sizeDp float32) W {
 	return func(gtx C) D {
-		k := float32(dp(gtx, sizeDp)) / 24
-		v, ok := lucideSegs.Load(name)
-		if !ok {
-			v, _ = lucideSegs.LoadOrStore(name, parseSVGPath(lucide[name]))
-		}
-		var p clip.Path
-		p.Begin(gtx.Ops)
-		for _, sg := range v.([]seg) {
-			pt := func(i int) f32.Point { return sg.p[i].Mul(k) }
-			switch sg.op {
-			case 'M':
-				p.MoveTo(pt(0))
-			case 'L':
-				p.LineTo(pt(0))
-			case 'Q':
-				p.QuadTo(pt(0), pt(1))
-			case 'C':
-				p.CubeTo(pt(0), pt(1), pt(2))
-			case 'Z':
-				p.Close()
-			}
-		}
-		paint.FillShape(gtx.Ops, col, clip.Outline{Path: p.End()}.Op())
+		paint.FillShape(gtx.Ops, col, clip.Outline{Path: lucidePath(gtx, name, sizeDp)}.Op())
 		return LucideW(name, col, sizeDp)(gtx)
+	}
+}
+
+// ultrafastBolt is FastBolt's Ultrafast (EffortGlyph.tsx): 15 wide by 12,
+// the bolt outlined 3dp along, and over it at the start a filled one whose
+// 4-unit stroke, under its fill, is the glass surface's colour, so the
+// outline behind it is cut away round its edge.
+func ultrafastBolt(col color.NRGBA) W {
+	return func(gtx C) D {
+		func() {
+			defer op.Offset(image.Pt(dp(gtx, 3), 0)).Push(gtx.Ops).Pop()
+			LucideW("zap", col, 12)(gtx)
+		}()
+		bolt := lucidePath(gtx, "zap", 12)
+		paint.FillShape(gtx.Ops, glassSurface(), clip.Stroke{Path: bolt, Width: 4 * float32(dp(gtx, 12)) / 24}.Op())
+		paint.FillShape(gtx.Ops, col, clip.Outline{Path: bolt}.Op())
+		return D{Size: image.Pt(dp(gtx, 15), dp(gtx, 12))}
 	}
 }

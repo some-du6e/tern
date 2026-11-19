@@ -185,6 +185,71 @@ func TestComposerTriggers(t *testing.T) {
 	}
 }
 
+// The trigger's bolt follows the model's speed (FastBolt): 12dp for Fast,
+// the echoed 15 for Ultrafast, and Ultracode adds its 12dp workflow icon
+// 6 after. The trigger ends 8 before send, so its provider's mark moves
+// left by as much.
+func TestTriggerSpeed(t *testing.T) {
+	th := NewTheme()
+	mark := func(s *Scene) int {
+		t.Helper()
+		img := drawComposer(t, th, s, 200, 0)
+		for x := 45; x < 690; x++ {
+			for y := 75; y < 100; y++ {
+				if near(img.RGBAAt(x, y), rgb(0xd97757)) {
+					return x
+				}
+			}
+		}
+		t.Fatal("no provider's mark on the trigger")
+		return 0
+	}
+	s := &Scene{Composer: "hi", Provider: "Claude", Model: "Opus 5.5", Effort: "High", Speed: "Fast"}
+	fast := mark(s)
+	s.Speed = "Ultrafast"
+	if d := fast - mark(s); d < 2 || d > 4 {
+		t.Errorf("Ultrafast's bolt widened the trigger %d, want 3", d)
+	}
+	s.Ultracode = true
+	if d := fast - mark(s); d < 20 || d > 22 {
+		t.Errorf("with Ultracode the trigger is %d wider, want 21", d)
+	}
+}
+
+// With no provider to send to, the trigger is T3's unavailable control,
+// off at 64% (ComposerControlsBar.tsx): no provider's mark, and its words
+// faded, foreground 80% (#464646) at 64% over the glass, #898989.
+func TestNoProviderTrigger(t *testing.T) {
+	th := NewTheme()
+	img := drawComposer(t, th, &Scene{Composer: "hi", Provider: "Claude", Model: "Opus 5.5", NoProvider: true}, 200, 0)
+	darkest := 0xff
+	for y := 75; y < 100; y++ {
+		for x := 400; x < 690; x++ {
+			c := img.RGBAAt(x, y)
+			if near(c, rgb(0xd97757)) {
+				t.Fatalf("the provider's mark at (%d, %d)", x, y)
+			}
+			darkest = min(darkest, int(c.R))
+		}
+	}
+	if darkest < 0x80 || darkest > 0xb4 {
+		t.Errorf("the trigger's darkest ink is %#x, want its words at 64%%", darkest)
+	}
+}
+
+// The card's light shadow, 0 1px 2px black 5%, at its full strength over
+// the page (§3.2: T3's two rows under the card read about #f4 and #f8 at
+// 1x), not the half Gio's linear blending would make of it.
+func TestComposerShadow(t *testing.T) {
+	th := NewTheme()
+	img := drawComposer(t, th, &Scene{Model: "Opus 5.5"}, 200, 0)
+	for _, c := range []struct{ y, lo, hi int }{{112, 0xec, 0xf6}, {113, 0xf2, 0xfa}, {114, 0xfb, 0xfc}} {
+		if r := int(img.RGBAAt(300, c.y).R); r < c.lo || r > c.hi {
+			t.Errorf("row %d under the card is %#x, want %#x..%#x", c.y, r, c.lo, c.hi)
+		}
+	}
+}
+
 // ink is the leftmost and rightmost x in [x0, x1) of rows [y0, y1) that
 // text darkened (light theme), or -1, -1.
 func ink(img *image.RGBA, y0, y1, x0, x1 int) (left, right int) {

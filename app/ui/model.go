@@ -329,7 +329,9 @@ type Scene struct {
 	Provider     string          // "Claude", "Codex", "Gemini": picks the logo
 	Model        string          // the model's short name, on the trigger
 	Effort       string          // the trigger's effort word, "" for none
-	Fast         bool            // the trigger's bolt, for Fast mode
+	Speed        string          // the trigger's bolt: "Fast", or "Ultrafast" for its echoed one
+	Ultracode    bool            // the trigger's workflow icon, for Ultracode
+	NoProvider   bool            // no provider can take the message: the trigger says so instead
 	Window       string          // the trigger's context window, like "1M"
 	Runtime      string          // the runtime mode: "full-access", "approval-required", …
 	RuntimeChip  bool            // the footer shows the permissions chip: the mode isn't the default

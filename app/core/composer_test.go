@@ -130,8 +130,9 @@ func TestModelShortName(t *testing.T) {
 	}
 }
 
-// After the name, the trigger shows the reasoning level's word, Fast's
-// bolt and the context window (describeComposerEffort).
+// After the name, the trigger shows the reasoning level's word, the
+// speed's bolt, Ultracode's icon and the context window
+// (describeComposerEffort, buildTraitsTriggerDisplay).
 func TestEffortSuffix(t *testing.T) {
 	m := &t3.Model{}
 	sel := func(id, cur string, opts ...string) t3.OptionDescriptor {
@@ -151,13 +152,21 @@ func TestEffortSuffix(t *testing.T) {
 		{ID: "fastMode", Type: "boolean", CurrentValue: true},
 		sel("contextWindow", "1m", "200k", "1M"),
 	}
-	word, fast, window := effortSuffix(t3.ModelSelection{}, m)
-	if word != "High" || !fast || window != "1M" {
-		t.Fatalf("suffix = %q %v %q", word, fast, window)
+	word, speed, ultracode, window := effortSuffix(t3.ModelSelection{}, m)
+	if word != "High" || speed != "Fast" || ultracode || window != "1M" {
+		t.Fatalf("suffix = %q %q %v %q", word, speed, ultracode, window)
 	}
-	word, _, _ = effortSuffix(t3.ModelSelection{Options: []t3.OptionChoice{{ID: "effort", Value: "low"}}}, m)
+	word, _, _, _ = effortSuffix(t3.ModelSelection{Options: []t3.OptionChoice{{ID: "effort", Value: "low"}}}, m)
 	if word != "Low" {
 		t.Fatalf("picked effort = %q", word)
+	}
+	// A Codex service tier names its speed; Ultracode is an on/off option.
+	m.Capabilities.OptionDescriptors = []t3.OptionDescriptor{
+		sel("serviceTier", "ultrafast", "Standard", "Fast", "Ultrafast"),
+		{ID: "ultracode", Type: "boolean", CurrentValue: true},
+	}
+	if _, speed, ultracode, _ := effortSuffix(t3.ModelSelection{}, m); speed != "Ultrafast" || !ultracode {
+		t.Fatalf("tier: speed %q, ultracode %v", speed, ultracode)
 	}
 }
 

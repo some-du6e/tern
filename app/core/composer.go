@@ -688,9 +688,11 @@ var reasoningIDs = map[string]bool{"reasoningEffort": true, "effort": true, "rea
 	"reasoning_effort": true, "thinking_level": true, "thinking": true}
 
 // effortSuffix is what the trigger shows after the model's name
-// (describeComposerEffort): the reasoning level's label, Fast's bolt and
-// the context window's label.
-func effortSuffix(sel t3.ModelSelection, m *t3.Model) (word string, fast bool, window string) {
+// (describeComposerEffort, buildTraitsTriggerDisplay): the reasoning
+// level's label, the speed its bolt shows ("Fast" or "Ultrafast"),
+// whether Ultracode is on, for its workflow icon, and the context window's
+// label.
+func effortSuffix(sel t3.ModelSelection, m *t3.Model) (word, speed string, ultracode bool, window string) {
 	label := func(d t3.OptionDescriptor) string {
 		v, _ := optionValue(sel, d).(string)
 		for _, o := range d.Options {
@@ -703,11 +705,16 @@ func effortSuffix(sel t3.ModelSelection, m *t3.Model) (word string, fast bool, w
 	for _, d := range m.Capabilities.OptionDescriptors {
 		switch {
 		case d.Type == "boolean" && d.ID == "fastMode":
+			if on, _ := optionValue(sel, d).(bool); on {
+				speed = "Fast"
+			}
+		case d.Type == "boolean" && d.ID == "ultracode":
 			on, _ := optionValue(sel, d).(bool)
-			fast = fast || on
+			ultracode = ultracode || on
 		case d.Type == "select" && d.ID == "serviceTier":
-			l := label(d)
-			fast = fast || l == "Fast" || l == "Ultrafast"
+			if l := label(d); l == "Fast" || l == "Ultrafast" {
+				speed = l
+			}
 		case d.Type == "select" && d.ID == "contextWindow":
 			window = label(d)
 		case word == "" && reasoningIDs[d.ID] && d.Type == "select":
@@ -717,7 +724,7 @@ func effortSuffix(sel t3.ModelSelection, m *t3.Model) (word string, fast bool, w
 			word = d.Label + map[bool]string{true: " On", false: " Off"}[on]
 		}
 	}
-	return word, fast, window
+	return word, speed, ultracode, window
 }
 
 // ---------- the placeholder ----------

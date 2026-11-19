@@ -93,7 +93,7 @@ func base(selected string) *ui.Scene {
 		Provider:    "Claude",
 		Model:       "Opus 5.5",
 		Effort:      "High",
-		Fast:        true,
+		Speed:       "Fast",
 		Runtime:     "full-access",
 		Placeholder: "Ask anything. @ files, $ skills, / commands",
 		Phase:       -1.1,

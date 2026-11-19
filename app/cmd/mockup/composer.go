@@ -11,7 +11,8 @@ import (
 
 // The composer's states (docs/ui/07-composer.md): a prompt with a picture
 // chip and a tile, the @ menu, a run with its queue and banners, the
-// questions, and a new thread's hero, with and without a project.
+// questions, the trigger's speeds and no provider, and a new thread's
+// hero, with and without a project.
 
 // pictures is n made-up screenshots, as the composer's tiles.
 func pictures(n int) []ui.Thumb {
@@ -113,6 +114,27 @@ func suggestionScene() *ui.Scene {
 	s.Thumbs, s.Composer, s.RuntimeChip = nil, "", false
 	s.Suggestion = "go ahead and set it up"
 	s.Placeholder = s.Suggestion
+	return s
+}
+
+// ultrafastScene is a Codex model on its Ultrafast tier with Ultracode
+// on: the trigger's echoed bolt and workflow icon.
+func ultrafastScene() *ui.Scene {
+	s := composerScene()
+	s.Thumbs, s.Composer, s.RuntimeChip = nil, "", false
+	s.Provider, s.Model, s.Effort = "Codex", "GPT-5.5", "Extra high"
+	s.Speed, s.Ultracode = "Ultrafast", true
+	return s
+}
+
+// noProviderScene has no provider to send to: the trigger says so, off,
+// and the placeholder says where to enable one.
+func noProviderScene() *ui.Scene {
+	s := composerScene()
+	s.Thumbs, s.Composer, s.RuntimeChip = nil, "", false
+	s.Provider, s.Model, s.Effort, s.Speed = "", "", "", ""
+	s.NoProvider = true
+	s.Placeholder = "Enable a provider in Settings to send a message"
 	return s
 }
 

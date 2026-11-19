@@ -1038,7 +1038,7 @@ func (a *App) composerScene(s *ui.Scene, key string) {
 	switch {
 	case m != nil:
 		s.Model = modelShortName(*m, p.Driver)
-		s.Effort, s.Fast, s.Window = effortSuffix(c.sel, m)
+		s.Effort, s.Speed, s.Ultracode, s.Window = effortSuffix(c.sel, m)
 	case c.sel.Model != "":
 		s.Model = c.sel.Model
 	}
@@ -1081,7 +1081,10 @@ func (a *App) composerScene(s *ui.Scene, key string) {
 	if aps := a.shownApprovals(); len(aps) > 0 {
 		shown = &aps[0]
 	}
+	// Once the config says which providers are ready, none at all is the
+	// trigger's to say (ComposerControlsBar.tsx).
 	noProvider := a.cfg() != nil && len(a.pickerTabs()) == 0
+	s.NoProvider = noProvider
 	if a.draft == "" {
 		s.Suggestion = a.offeredSuggestion(a.curThread(), a.view, shown != nil || q != nil || noProvider)
 	}
