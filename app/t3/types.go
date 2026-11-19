@@ -61,22 +61,35 @@ type BackgroundTask struct {
 }
 
 // PullRequestLink is a pull request linked to a thread, with the server's
-// last snapshot of it.
+// last snapshot of it, and the host's stack it's part of, if any.
 type PullRequestLink struct {
+	Host       string               `json:"host"`
 	Number     int                  `json:"number"`
 	Repository string               `json:"repository"` // "owner/repo"
 	URL        string               `json:"url"`
 	Source     string               `json:"source"` // "stack-dismissed" hides it
 	LinkedAt   string               `json:"linkedAt"`
 	Snapshot   *PullRequestSnapshot `json:"snapshot"`
+	Stack      *PullRequestStack    `json:"stack"`
 }
 
 // PullRequestSnapshot is what the server last read of a pull request.
 type PullRequestSnapshot struct {
-	State     string `json:"state"` // "open", "closed", "merged"
-	IsDraft   bool   `json:"isDraft"`
-	Title     string `json:"title"`
-	UpdatedAt string `json:"updatedAt"`
+	State      string `json:"state"` // "open", "closed", "merged"
+	IsDraft    bool   `json:"isDraft"`
+	Title      string `json:"title"`
+	HeadBranch string `json:"headBranch"`
+	BaseBranch string `json:"baseBranch"`
+	UpdatedAt  string `json:"updatedAt"`
+}
+
+// PullRequestStack is a host's own stack of pull requests: its id, and its
+// layers bottom to top.
+type PullRequestStack struct {
+	ID     string `json:"id"`
+	Layers []struct {
+		Number int `json:"number"`
+	} `json:"layers"`
 }
 
 // LinkedPullRequest is the pull request a thread names, by number.
@@ -356,17 +369,21 @@ type SnoozePreset struct {
 }
 
 type Provider struct {
-	InstanceID  string  `json:"instanceId"`
-	Driver      string  `json:"driver"`
-	DisplayName string  `json:"displayName"`
-	Enabled     bool    `json:"enabled"`
-	Status      string  `json:"status"`
-	Models      []Model `json:"models"`
+	InstanceID         string  `json:"instanceId"`
+	Driver             string  `json:"driver"`
+	DisplayName        string  `json:"displayName"`
+	AccentColor        string  `json:"accentColor"`        // "#rrggbb", the account's own colour
+	AcpRegistryAgentID string  `json:"acpRegistryAgentId"` // which agent an "acpRegistry" driver runs
+	Enabled            bool    `json:"enabled"`
+	Status             string  `json:"status"`
+	Models             []Model `json:"models"`
 }
 
 type Model struct {
 	Slug         string `json:"slug"`
 	Name         string `json:"name"`
+	ShortName    string `json:"shortName"`
+	SubProvider  string `json:"subProvider"` // the vendor a name can start with: "OpenRouter"
 	IsCustom     bool   `json:"isCustom"`
 	IsLegacy     bool   `json:"isLegacy"`
 	Capabilities struct {

@@ -1660,8 +1660,9 @@ func prLook(state string) (icon string, tone color.NRGBA) {
 	return "git-pull-request-arrow", SP.MutedForeground
 }
 
-// prBadge is the meta line's pull request: its state's glyph at 12dp in
-// its tone, then the number in the secondary label, 2dp on. It's T3's
+// prBadge is the meta line's pull request: its state's glyph (a stack's
+// layers) at 12dp in its tone, then the number, "+N" or the stack's layer
+// count in the secondary label, 2dp on. It's T3's
 // InlineButton: a click opens the pull request, and hovered the number
 // underlines 2dp under its baseline.
 func (th *Theme) prBadge(gtx C, s *Scene, r *ThreadRow, in rowInk) D {
@@ -1673,6 +1674,9 @@ func (th *Theme) prBadge(gtx C, s *Scene, r *ThreadRow, in rowInk) D {
 		hovered = c.Hovered()
 	}
 	icon, tone := prLook(pr.State)
+	if pr.Stack {
+		icon = "layers"
+	}
 	col := in.of(SP.SecondaryLabel)
 	d := RowGap(gtx, 2,
 		rigid(LucideW(icon, in.of(tone), 12)),
@@ -2068,6 +2072,9 @@ func (th *Theme) resultRow(gtx C, s *Scene, r *ThreadRow, i, top int) D {
 // shows.
 func (th *Theme) resultPR(gtx C, pr *PRBadge, settled, hovered bool, bg color.NRGBA) D {
 	icon, tone := prLook(pr.State)
+	if pr.Stack {
+		icon = "layers"
+	}
 	if settled && (!hovered || pr.State == "") {
 		tone = SP.SecondaryLabel
 	}
@@ -2537,6 +2544,9 @@ func (th *Theme) cardBody(gtx C, r *ThreadRow) D {
 	for _, l := range lines {
 		w = max(w, dp(gtx, 2+12+8)+th.textWidth(gtx, l.t, l.text))
 	}
+	for _, l := range r.PRs {
+		w = max(w, th.prLineWidth(gtx, l))
+	}
 	w = max(0, min(w, gtx.Constraints.Max.X-2*edge))
 	at := func(y, h int, draw func(gtx C) D) {
 		defer op.Offset(image.Pt(edge, y)).Push(gtx.Ops).Pop()
@@ -2547,11 +2557,13 @@ func (th *Theme) cardBody(gtx C, r *ThreadRow) D {
 	m := op.Record(gtx.Ops)
 	y := edge
 	at(y, dp(gtx, 15), func(gtx C) D { return Row(gtx, flexed(func(gtx C) D { return th.Text(gtx, title, r.Title) })) })
-	y += dp(gtx, 15+8)
+	y += dp(gtx, 15)
 	for i, l := range lines {
-		if i > 0 {
-			y += dp(gtx, 6)
+		gap := float32(6)
+		if i == 0 {
+			gap = 8
 		}
+		y += dp(gtx, gap)
 		at(y, dp(gtx, 16), func(gtx C) D {
 			return pad(0, 0, 0, 2).Layout(gtx, func(gtx C) D {
 				return RowGap(gtx, 8, rigid(l.icon), flexed(func(gtx C) D {
@@ -2564,8 +2576,20 @@ func (th *Theme) cardBody(gtx C, r *ThreadRow) D {
 		})
 		y += dp(gtx, 16)
 	}
-	if len(lines) == 0 {
-		y -= dp(gtx, 8)
+	if len(r.PRs) > 0 {
+		// The footer, where the server can link several: a rule at the
+		// border's 60%, then 8dp on the pull requests, plain rows here (the
+		// card takes no clicks), 16dp each and 4 apart.
+		y += dp(gtx, 8)
+		hline(gtx, over(faded(P.Border, 0.6), bg), y, edge, edge+w)
+		y += max(1, dp(gtx, 1)) + dp(gtx, 8)
+		for i, l := range r.PRs {
+			if i > 0 {
+				y += dp(gtx, 4)
+			}
+			at(y, dp(gtx, 16), func(gtx C) D { return th.prLine(gtx, l, bg) })
+			y += dp(gtx, 16)
+		}
 	}
 	d := D{Size: image.Pt(w+2*edge, y+edge)}
 	call := m.Stop()
@@ -2576,6 +2600,49 @@ func (th *Theme) cardBody(gtx C, r *ThreadRow) D {
 	strokeRect(gtx, over(alpha(P.Foreground, 0x1a), bg), rr, rad, float32(max(1, dp(gtx, 1))))
 	call.Add(gtx.Ops)
 	return d
+}
+
+// prLine is a pull request in a list of them
+// (ThreadPullRequestMiniListItem), on bg, 2dp in and 12dp more a level of
+// its chain, at most three: its state's 12dp glyph, "#N" in mono, its
+// title in the foreground at 75%, and at a chain's head what the chain
+// is, in 10dp text 4dp on; 8dp apart, 12/16 in the muted foreground.
+func (th *Theme) prLine(gtx C, l PRLine, bg color.NRGBA) D {
+	muted := over(P.MutedForeground, bg)
+	icon, tone := prLook(l.State)
+	if l.State == "" {
+		tone = P.MutedForeground
+	}
+	t := Txt{Size: 12, LineH: 16.0 / 12, Color: muted, MaxLines: 1}
+	num, title := t, t
+	num.Font, title.Color = Mono(), over(alpha(P.Foreground, 0xbf), bg)
+	kids := []layout.FlexChild{
+		rigid(LucideW(icon, over(tone, bg), 12)),
+		rigid(func(gtx C) D { return th.Text(gtx, num, "#"+strconv.Itoa(l.Number)) }),
+		flexed(func(gtx C) D { return th.Text(gtx, title, l.Title) }),
+	}
+	if l.Chain != "" {
+		chain := t
+		chain.Size = 10
+		kids = append(kids, rigid(func(gtx C) D {
+			return pad(0, 0, 0, 4).Layout(gtx, func(gtx C) D { return th.Text(gtx, chain, l.Chain) })
+		}))
+	}
+	return pad(0, 0, 0, 2+12*float32(min(l.Depth, 3))).Layout(gtx, func(gtx C) D { return RowGap(gtx, 8, kids...) })
+}
+
+// prLineWidth is how wide prLine sets l on one line, its title whole.
+func (th *Theme) prLineWidth(gtx C, l PRLine) int {
+	t := Txt{Size: 12, LineH: 16.0 / 12, MaxLines: 1}
+	num := t
+	num.Font = Mono()
+	w := dp(gtx, 2+12*float32(min(l.Depth, 3))+12+8) + th.textWidth(gtx, num, "#"+strconv.Itoa(l.Number)) + dp(gtx, 8) + th.textWidth(gtx, t, l.Title)
+	if l.Chain != "" {
+		chain := t
+		chain.Size = 10
+		w += dp(gtx, 8+4) + th.textWidth(gtx, chain, l.Chain)
+	}
+	return w
 }
 
 // listTip is a tooltip inside the list: T3's, on top, after the list's

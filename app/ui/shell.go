@@ -120,29 +120,42 @@ var modifierKeys = map[key.Name]key.Modifiers{
 // shellFilters are the keys shellKeys takes, made once, so a frame that
 // only animates asks for them without allocating. mod+Shift+[ and ] come
 // as "{" and "}" on a Mac and on Linux, where Gio names a key by what
-// Shift makes of it, and as "[" and "]" on Windows.
-var shellFilters = func() []event.Filter {
-	fs := []event.Filter{
-		key.Filter{Name: "B", Required: key.ModShortcut, Optional: key.ModShift | key.ModAlt},
-		key.Filter{Name: "J", Required: key.ModShortcut},
-		key.Filter{Name: "N", Required: key.ModShortcut},
-		key.Filter{Name: "[", Required: key.ModShortcut | key.ModShift},
-		key.Filter{Name: "]", Required: key.ModShortcut | key.ModShift},
-		key.Filter{Name: "{", Required: key.ModShortcut | key.ModShift},
-		key.Filter{Name: "}", Required: key.ModShortcut | key.ModShift},
-		key.Filter{Name: "S", Required: key.ModShortcut | key.ModShift},
-		key.Filter{Name: "P", Required: key.ModShortcut | key.ModShift},
-		key.Filter{Name: "Z", Required: key.ModShortcut},
-	}
-	for n := 1; n <= 9; n++ {
-		fs = append(fs, key.Filter{Name: key.Name(strconv.Itoa(n)), Required: key.ModShortcut})
+// Shift makes of it, and as "[" and "]" on Windows. Gio hands a key to the
+// first to ask for it, focused or not, and shellKeys asks first: with a
+// text field focused it leaves mod+Z out (fieldFilters), for the field's
+// own undo, and with the terminal focused the keys that leave it alone
+// (termFilters).
+var shellFilters, fieldFilters, termFilters = func() (all, field, term []event.Filter) {
+	for _, f := range []key.Filter{
+		{Name: "B", Required: key.ModShortcut, Optional: key.ModShift | key.ModAlt},
+		{Name: "J", Required: key.ModShortcut},
+		{Name: "N", Required: key.ModShortcut},
+		{Name: "[", Required: key.ModShortcut | key.ModShift},
+		{Name: "]", Required: key.ModShortcut | key.ModShift},
+		{Name: "{", Required: key.ModShortcut | key.ModShift},
+		{Name: "}", Required: key.ModShortcut | key.ModShift},
+		{Name: "S", Required: key.ModShortcut | key.ModShift},
+		{Name: "P", Required: key.ModShortcut | key.ModShift},
+		{Name: "Z", Required: key.ModShortcut},
+		{Name: "1", Required: key.ModShortcut}, {Name: "2", Required: key.ModShortcut}, {Name: "3", Required: key.ModShortcut},
+		{Name: "4", Required: key.ModShortcut}, {Name: "5", Required: key.ModShortcut}, {Name: "6", Required: key.ModShortcut},
+		{Name: "7", Required: key.ModShortcut}, {Name: "8", Required: key.ModShortcut}, {Name: "9", Required: key.ModShortcut},
+	} {
+		all = append(all, f)
+		if f.Name != "Z" {
+			field = append(field, f)
+		}
+		if !strings.Contains("SPZ123456789", string(f.Name)) {
+			term = append(term, f)
+		}
 	}
 	// The modifier keys themselves, for the jump keys' hints.
 	mods := key.ModCtrl | key.ModShift | key.ModAlt | key.ModSuper | key.ModCommand
 	for name := range modifierKeys {
-		fs = append(fs, key.Filter{Name: name, Optional: mods})
+		f := key.Filter{Name: name, Optional: mods}
+		all, field, term = append(all, f), append(field, f), append(term, f)
 	}
-	return fs
+	return all, field, term
 }()
 
 // shellKeys handles T3's shell shortcuts (keybindings.ts): mod+B the
@@ -155,8 +168,15 @@ var shellFilters = func() []event.Filter {
 // AppSidebarLayout.tsx). It also keeps which modifier keys are held, and
 // since when they've been held as they are, for the rows' jump hints.
 func (th *Theme) shellKeys(gtx C, s *Scene) {
+	filters := shellFilters
+	switch {
+	case gtx.Focused(&th.in.term):
+		filters = termFilters
+	case th.fieldFocused(gtx):
+		filters = fieldFilters
+	}
 	for {
-		ev, ok := gtx.Event(shellFilters...)
+		ev, ok := gtx.Event(filters...)
 		if !ok {
 			return
 		}
@@ -185,7 +205,6 @@ func (th *Theme) shellKeys(gtx C, s *Scene) {
 		if ke.State != key.Press {
 			continue
 		}
-		term := gtx.Focused(&th.in.term)
 		switch {
 		case again && onceHeld(ke.Name):
 		case ke.Name == "N":
@@ -194,13 +213,13 @@ func (th *Theme) shellKeys(gtx C, s *Scene) {
 			th.push(Action{ID: "thread.prev", Kind: "click"})
 		case ke.Name == "]" || ke.Name == "}":
 			th.push(Action{ID: "thread.next", Kind: "click"})
-		case ke.Name == "S" && !term:
+		case ke.Name == "S":
 			th.push(Action{ID: "thread.settle", Kind: "click"})
-		case ke.Name == "P" && !term:
+		case ke.Name == "P":
 			th.push(Action{ID: "thread.pin", Kind: "click"})
-		case ke.Name == "Z" && !term:
+		case ke.Name == "Z":
 			th.push(Action{ID: "thread.undo", Kind: "click"})
-		case len(ke.Name) == 1 && ke.Name >= "1" && ke.Name <= "9" && !term:
+		case len(ke.Name) == 1 && ke.Name >= "1" && ke.Name <= "9":
 			th.push(Action{ID: "thread.jump:" + string(ke.Name), Kind: "click"})
 		case ke.Name == "J" && s.Run != nil:
 			th.push(Action{ID: "terminal.toggle", Kind: "click"})
@@ -212,6 +231,16 @@ func (th *Theme) shellKeys(gtx C, s *Scene) {
 			th.push(Action{ID: "sidebar.toggle", Kind: "click"})
 		}
 	}
+}
+
+// fieldFocused reports a text field with the keyboard's focus.
+func (th *Theme) fieldFocused(gtx C) bool {
+	for _, ed := range th.in.editors {
+		if gtx.Focused(ed) {
+			return true
+		}
+	}
+	return false
 }
 
 // onceHeld reports the shortcuts a held key runs once, which T3 runs only

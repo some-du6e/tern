@@ -4,6 +4,8 @@ import (
 	"cmp"
 	"fmt"
 	"math"
+	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -935,12 +937,16 @@ func (a *App) row(st sideThread, shelf string, now time.Time) ui.ThreadRow {
 		}
 	}
 	a.providers(e, t, &r)
-	r.PR = prBadge(t)
 	// Settle, Un-settle and Wake need only the server's config, as T3's
 	// settlementSupported and snoozeSupported do; without write access a
 	// click says why it can't. The snooze clock and Unpin need write access
-	// too (SidebarThreadRow.tsx: canOperateThread).
+	// too (SidebarThreadRow.tsx: canOperateThread). With the config come
+	// the linked pull requests, in the badge and the hover card's footer.
 	loaded := e.config != nil
+	r.PR = prBadge(t, loaded)
+	if vis := visiblePRs(t.PullRequests); loaded && len(vis) > 0 {
+		r.PRs = prLines(vis)
+	}
 	write := loaded && e.operate
 	r.CanSettle, r.CanUnpin = loaded, write
 	r.CanSnooze = write && canSnooze(t, st.child, now)
@@ -1104,43 +1110,140 @@ func (a *App) providers(e *envState, t *t3.Thread, r *ui.ThreadRow) {
 	r.Model = sel.Model
 	for _, m := range p.Models {
 		if m.Slug == sel.Model && m.Name != "" {
-			r.Model = m.Name
+			r.Model = modelLabel(m, p.Driver)
 		}
+	}
+	// With several accounts of one driver, or an accent colour, the line
+	// says which account.
+	if instanceBadge(p, e.config.Providers) {
+		r.Model += " · " + cmp.Or(p.DisplayName, providerName(p))
 	}
 }
 
-// prBadge is the meta line's pull request: the current link's state and
-// number, or "+N" across several.
-func prBadge(t *t3.Thread) *ui.PRBadge {
-	var links []t3.PullRequestLink
-	for _, l := range t.PullRequests {
-		if l.Source != "stack-dismissed" {
-			links = append(links, l)
+// modelFamilies are the model name families each driver's own models are
+// of (providerClients.ts): on its own driver a family's name drops to its
+// variant, "Claude Opus 5.5" to "Opus 5.5".
+var modelFamilies = map[string][]string{
+	"codex": {"GPT-", "GPT "}, "claudeAgent": {"Claude "}, "antigravity": {"Gemini "},
+	"cursor": {"Grok "}, "grok": {"Grok "}, "muse": {"Muse "},
+}
+
+var (
+	familyPrefixes = []string{"Claude ", "GPT-", "GPT ", "Gemini ", "Muse ", "Grok "}
+	// Words that say which variant of a family, rather than name a model.
+	variantWords = map[string]bool{"pro": true, "flash": true, "mini": true, "max": true, "lite": true, "nano": true,
+		"ultra": true, "plus": true, "fast": true, "turbo": true, "preview": true, "latest": true, "thinking": true,
+		"reasoning": true, "build": true, "code": true, "image": true, "vision": true, "audio": true, "live": true,
+		"custom": true, "tools": true, "exp": true, "experimental": true, "chat": true, "tts": true, "stt": true,
+		"non": true, "transcribe": true}
+	versionWord  = regexp.MustCompile(`(?i)^v?\d+(?:\.\d+)*[a-z]?$`)
+	vendorPrefix = regexp.MustCompile(`^[A-Z][\w.&\- ]{0,24}: `)
+	inParens     = regexp.MustCompile(`\(.*?\)`)
+	wordBreaks   = regexp.MustCompile(`[\s-]+`)
+)
+
+// modelLabel is the model as the hover card names it
+// (getTriggerDisplayModelName): its short name, or one made from its name
+// in its driver's families, without the sub-provider before it.
+func modelLabel(m t3.Model, driver string) string {
+	name := cmp.Or(m.ShortName, modelShortName(m.Name, modelFamilies[driver]), m.Name)
+	q := strings.TrimSpace(m.SubProvider)
+	if q == "" {
+		return name
+	}
+	re := regexp.MustCompile(`(?i)^` + regexp.QuoteMeta(q) + `(?:\s*[.:/-]\s*|\s+)`)
+	if s := strings.TrimSpace(re.ReplaceAllString(name, "")); s != "" {
+		return s
+	}
+	return name
+}
+
+// modelShortName is a model's name without its vendor and family where
+// what's left still names it (modelShortName.ts): "Opus 5.5", "5.5 Pro"
+// on its own driver; "" when that's the name as it is.
+func modelShortName(name string, native []string) string {
+	rest := name
+	if m := vendorPrefix.FindStringIndex(name); m != nil && m[1] < len(name) && !unicode.IsSpace(rune(name[m[1]])) {
+		rest = name[m[1]:]
+	}
+	short, ok := withoutFamily(rest, native)
+	switch {
+	case ok:
+	case namesModel(rest):
+		short = rest
+	default:
+		short = name
+	}
+	if short == name {
+		return ""
+	}
+	return short
+}
+
+// withoutFamily is name without its family's prefix, if what's left still
+// names the model: any word but a version on the family's own driver,
+// else a word that's no variant's.
+func withoutFamily(name string, native []string) (string, bool) {
+	prefix := ""
+	for _, p := range familyPrefixes {
+		if strings.HasPrefix(name, p) {
+			prefix = p
+			break
 		}
 	}
-	state := func(l t3.PullRequestLink) string {
-		switch {
-		case l.Snapshot == nil:
-			return ""
-		case l.Snapshot.State == "open" && l.Snapshot.IsDraft:
-			return "draft"
-		}
-		return l.Snapshot.State
+	if prefix == "" {
+		return "", false
 	}
-	if len(links) > 0 {
-		cur := links[len(links)-1]
-		b := &ui.PRBadge{State: state(cur), Text: fmt.Sprint(cur.Number), URL: cur.URL}
-		if len(links) > 1 {
-			b.Text = fmt.Sprintf("+%d", len(links))
-		}
-		return b
+	rest := strings.TrimSpace(name[len(prefix):])
+	keep := namesModel(rest)
+	if slices.Contains(native, prefix) {
+		keep = len(nonVersionWords(rest)) > 0
 	}
-	for _, l := range []*t3.LinkedPullRequest{t.LinkedPullRequest, t.BranchPullRequest} {
-		if l != nil {
-			return &ui.PRBadge{Text: fmt.Sprint(l.Number), URL: l.URL}
+	if !keep {
+		return "", false
+	}
+	if strings.ContainsFunc(rest, unicode.IsSpace) {
+		return rest, true
+	}
+	return strings.ReplaceAll(rest, "-", " "), true
+}
+
+func nonVersionWords(text string) []string {
+	var out []string
+	for _, w := range wordBreaks.Split(inParens.ReplaceAllString(text, " "), -1) {
+		if w != "" && !versionWord.MatchString(w) {
+			out = append(out, w)
 		}
 	}
-	return nil
+	return out
+}
+
+func namesModel(text string) bool {
+	for _, w := range nonVersionWords(text) {
+		if !variantWords[strings.ToLower(w)] {
+			return true
+		}
+	}
+	return false
+}
+
+// instanceBadge reports a provider its rows tell from others
+// (shouldShowInstanceBadge): it has an accent colour, or its driver has
+// more than one account, counting only enabled ones when it is.
+func instanceBadge(p *t3.Provider, all []t3.Provider) bool {
+	if c := strings.TrimSpace(p.AccentColor); len(c) == 7 && c[0] == '#' && strings.Trim(c[1:], "0123456789abcdefABCDEF") == "" {
+		return true
+	}
+	n := 0
+	for _, q := range all {
+		if q.Driver != p.Driver || p.Enabled && !q.Enabled || p.Driver == "acpRegistry" && q.AcpRegistryAgentID != p.AcpRegistryAgentID {
+			continue
+		}
+		if n++; n > 1 {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------- project icons ----------

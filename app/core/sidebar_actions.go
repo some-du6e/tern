@@ -723,18 +723,18 @@ func (a *App) filterKey(act ui.Action) {
 
 // setScope narrows the list to keys. A new scope starts the list afresh:
 // the selection clears and the Settled shelf folds back to its first page.
-// It's saved off the lock, as the store encrypts and writes a file. Call
-// with the lock held.
+// Call with the lock held, and saveScope once it's let go of: the store
+// encrypts and writes a file.
 func (a *App) setScope(keys []string) {
 	a.scope = keys
 	a.selected, a.anchor = map[string]bool{}, ""
 	a.settledMore = 0
 	a.scopeDirty = true
-	go a.saveScope()
 }
 
-// saveScope saves the scope as it is by then, one save at a time, so an
-// older scope never lands after a newer one.
+// saveScope saves the scope if it changed, as it is by then, one save at a
+// time, so an older scope never lands after a newer one. Call without the
+// lock.
 func (a *App) saveScope() {
 	a.scopeSave.Lock()
 	defer a.scopeSave.Unlock()
@@ -750,6 +750,7 @@ func (a *App) saveScope() {
 // pickProject is a click on one of the filter's projects: it scopes the
 // list to it, or with Shift adds or drops it and keeps the popup open.
 func (a *App) pickProject(k string, shift bool) {
+	defer a.saveScope()
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	switch {
@@ -1198,6 +1199,7 @@ func (a *App) menuPick(th *ui.Theme, id string) {
 			a.setScope([]string{k})
 		}
 		a.mu.Unlock()
+		a.saveScope()
 	case "copy-path":
 		path := t.WorktreePath
 		if path == "" {
@@ -1240,8 +1242,8 @@ func hostedThreadLink(envID, threadID string) string {
 func (a *App) openPullRequest(r string) {
 	a.mu.Lock()
 	url := ""
-	if _, t := a.thread(r); t != nil {
-		if b := prBadge(t); b != nil {
+	if e, t := a.thread(r); t != nil {
+		if b := prBadge(t, e.config != nil); b != nil {
 			url = b.URL
 		}
 	}
@@ -1983,6 +1985,7 @@ func (a *App) sidebarAction(th *ui.Theme, act ui.Action) bool {
 		a.mu.Lock()
 		a.setScope(nil)
 		a.mu.Unlock()
+		a.saveScope()
 	case "search.clear":
 		th.SetEditorText("search", "")
 		th.Focus("search")

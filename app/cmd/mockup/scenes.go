@@ -360,12 +360,18 @@ func row(s *ui.Scene, title string) *ui.ThreadRow {
 }
 
 // sidebarHoverScene has a card hovered, its controls in place of its
-// status (Settle, and no clock while it waits for approval), and its
-// hover card out beside it.
+// status (Settle, and no clock while it waits for approval), its stack of
+// two pull requests on the meta line, and its hover card out beside it,
+// the stack in its footer.
 func sidebarHoverScene() *ui.Scene {
 	s := runningScene()
 	r := row(s, "Review the stop capability")
 	r.Hover, r.Provider, r.Model, r.Handoff, r.Terminals = true, "Claude", "Opus 5.5", "Handed off from Codex", 1
+	r.PR = &ui.PRBadge{State: "open", Text: "2", Stack: true}
+	r.PRs = []ui.PRLine{
+		{State: "open", Number: 44, Title: "Stop a running thread", Chain: "stack · 2"},
+		{State: "draft", Number: 45, Title: "Stop from the sidebar", Depth: 1},
+	}
 	return s
 }
 

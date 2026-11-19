@@ -867,6 +867,7 @@ func (a *App) openThread(id string) {
 		conn, gen = e.conn, e.gen
 	}
 	a.mu.Unlock()
+	a.saveScope()
 	a.changed()
 	if conn != nil {
 		a.subscribeThread(e, conn, gen, id)

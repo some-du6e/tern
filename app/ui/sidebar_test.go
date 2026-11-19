@@ -1294,7 +1294,7 @@ func TestClearButtonHover(t *testing.T) {
 	frame()
 	img := frame()
 	bg := over(SP.Accent, over(SP.SidebarRowHover, SP.Sidebar))
-	wantPixel(t, img, image.Pt(161*k, 15*k), bg, "the button's hover fill")
+	wantPixel(t, img, image.Pt(170*k, 16*k), bg, "the button's hover fill, above the x")
 	var best color.RGBA
 	for y := 18 * k; y < 30*k; y++ {
 		for x := 164 * k; x < 176*k; x++ {
@@ -1719,6 +1719,7 @@ func TestRowIconTooltips(t *testing.T) {
 	gtx := layout.Context{Ops: new(op.Ops), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Constraints{Max: image.Pt(320, 200)}}
 	// The card is 102..180, its meta line 156..172: the worktree icon is
 	// 14dp at 18, 157, the terminal 14dp at 217.
+	at(0)
 	for i, c := range []struct {
 		x   int
 		tip string
@@ -1734,4 +1735,72 @@ func TestRowIconTooltips(t *testing.T) {
 		// Where the card's left border would be, above the tooltips.
 		wantPixel(t, img, image.Pt(251, 110), SP.Sidebar, c.tip+": the row's card, stood aside")
 	}
+}
+
+// The hover card ends in the thread's linked pull requests: a rule at the
+// border's 60% 8dp under the rest, then 8dp on the rows, 16dp each and 4
+// apart, the card as wide as the widest (§2.12, §3.15).
+func TestHoverCardPullRequests(t *testing.T) {
+	defer SetDark(false)
+	SetDark(true)
+	th := NewTheme()
+	prs := []PRLine{{State: "open", Number: 42, Title: "Faster startup"}, {State: "merged", Number: 7, Title: "Docs", Depth: 1}}
+	s := &Scene{Sidebar: Sidebar{Items: []SidebarItem{{Row: &ThreadRow{ID: "e/1", Title: "Card", Age: "1h", PR: &PRBadge{State: "open", Text: "+2"}, PRs: prs, Hover: true}}}}}
+	img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, s) })
+	gtx := layout.Context{Ops: new(op.Ops), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}}
+	w := th.textWidth(gtx, Txt{Size: 12, LineH: 15.0 / 12, Font: UI(font.Medium), MaxLines: 1}, "Card")
+	for _, l := range prs {
+		w = max(w, th.prLineWidth(gtx, l))
+	}
+	glass := over(alpha(P.Popover, 0xd5), P.Background)
+	border := over(alpha(P.Foreground, 0x1a), glass)
+	// The card is at 251, 102: its title's 15dp line at 115, then the rule
+	// 8dp under it at 138 and the rows from 147 and 167; it ends 13dp
+	// under the last, at 196.
+	wantPixel(t, img, image.Pt(270, 137), glass, "above the rule")
+	wantPixel(t, img, image.Pt(270, 138), over(faded(P.Border, 0.6), glass), "the footer's rule")
+	wantPixel(t, img, image.Pt(270, 139), glass, "under the rule")
+	wantPixel(t, img, image.Pt(259, 195), border, "the card's bottom border")
+	wantPixel(t, img, image.Pt(259, 194), glass, "just above it")
+	wantPixel(t, img, image.Pt(251+w+26-1, 140), border, "the card's right border")
+	// Each row's glyph is its state's tone, 2dp in (and 12 more for the
+	// one a level down), centred with the row's text on its 16dp line.
+	gtx.Constraints = layout.Constraints{Max: image.Pt(400, 100)}
+	textH := max(th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, MaxLines: 1}, "Docs").Size.Y,
+		th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Font: Mono(), MaxLines: 1}, "#42").Size.Y)
+	dy := (16-textH)/2 + (textH-12)/2
+	for _, c := range []struct {
+		at   image.Point
+		icon string
+		tone color.NRGBA
+	}{{image.Pt(266, 147+dy), "git-pull-request-arrow", alpha(Tailwind["emerald-300"], 0xe6)}, {image.Pt(278, 167+dy), "git-merge", alpha(Tailwind["violet-300"], 0xe6)}} {
+		ref := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D {
+			fill(gtx, glass, image.Rect(0, 0, 1440, 900), 0)
+			defer op.Offset(c.at).Push(gtx.Ops).Pop()
+			return LucideW(c.icon, over(c.tone, glass), 12)(gtx)
+		})
+		sameInk(t, img, ref, image.Rectangle{Min: c.at, Max: c.at.Add(image.Pt(12, 12))}, c.icon)
+	}
+}
+
+// Several linked pull requests that make one stack show the layers glyph
+// in their overall tone, and the stack's count (ThreadStatusIndicators.tsx).
+func TestStackBadge(t *testing.T) {
+	th := NewTheme()
+	s := &Scene{Sidebar: Sidebar{Items: []SidebarItem{{Row: &ThreadRow{ID: "e/1", Title: "One", Age: "1h", PR: &PRBadge{State: "open", Text: "3", Stack: true}}}}}}
+	img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Desktop(gtx, s) })
+	gtx := layout.Context{Ops: new(op.Ops), Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Constraints{Max: image.Pt(400, 100)}}
+	// The meta line is 156..172; the badge ends 6dp short of its end at
+	// 237, the glyph 2dp before the count and centred with it on the line.
+	count := Txt{Size: 12, LineH: 16.0 / 12, MaxLines: 1}
+	x := 231 - th.textWidth(gtx, count, "3") - 2 - 12
+	textH := th.Text(gtx, count, "3").Size.Y
+	at := image.Pt(x, 156+(16-textH)/2+(textH-12)/2)
+	tone := over(Tailwind["emerald-600"], SP.Sidebar)
+	ref := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D {
+		fill(gtx, SP.Sidebar, image.Rect(0, 0, 1440, 900), 0)
+		defer op.Offset(at).Push(gtx.Ops).Pop()
+		return LucideW("layers", tone, 12)(gtx)
+	})
+	sameInk(t, img, ref, image.Rectangle{Min: at, Max: at.Add(image.Pt(12, 12))}, "the stack's glyph")
 }

@@ -143,6 +143,7 @@ type ThreadRow struct {
 	Error       string   // "Error occurred", "Usage limit reached"
 	Limited     bool     // the error is a usage limit
 	PR          *PRBadge
+	PRs         []PRLine // the linked pull requests, for the hover card's footer
 	Excerpt     *Excerpt // a search result's matching message
 
 	CanSettle bool // Settle (or Un-settle, Wake) is offered
@@ -171,11 +172,25 @@ type Excerpt struct {
 }
 
 // PRBadge is the meta line's pull request: its state's glyph and its number,
-// or "+N" for several linked.
+// or for several linked their overall state's glyph and "+N", or for a
+// stack the layers glyph and its count.
 type PRBadge struct {
 	State string // "open", "draft", "merged", "closed", "" while unknown
 	Text  string
 	URL   string
+	Stack bool // the links make one stack: Text is its layer count
+}
+
+// PRLine is one of a thread's linked pull requests in a list of them
+// (ThreadPullRequestsMiniList): its state, number and title, how deep it
+// sits in its chain, and on a chain's first line what the chain is.
+type PRLine struct {
+	State  string // as PRBadge's
+	Number int
+	Title  string
+	URL    string
+	Depth  int
+	Chain  string // "stack · 3", "chain · 2"
 }
 
 // SidebarEmpty is the empty list's message and its one button.

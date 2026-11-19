@@ -84,7 +84,7 @@ func ago(now time.Time, d time.Duration) string { return now.Add(-d).UTC().Forma
 // approval, input, a guest's request, waiting, setting up, working, then a
 // failure; a finished thread says Done until it's seen.
 func TestStatusLabels(t *testing.T) {
-	now := time.Now()
+	now := time.Now().Truncate(time.Second) // on the second, as the timers' clock is
 	run := func(status string) t3.Thread {
 		return t3.Thread{LatestRunID: "r", Status: status, ActivityRunStatus: status, LatestRunStartedAt: ago(now, 3*time.Minute), ActivityRunStartedAt: ago(now, 3*time.Minute)}
 	}
@@ -1310,4 +1310,131 @@ func TestVisits(t *testing.T) {
 	// Marked unread while it's open: the marker stays where the user put it.
 	th.LastVisitedAt = at(-time.Hour)
 	step(20*time.Second, "", false, 0)
+}
+
+// prLink is a fixture pull request link: number n in acme/app, on branch
+// head over base, in state (draft for "draft"), "" for one not read yet;
+// linked at the minute given.
+func prLink(n int, state, head, base string, minute int) t3.PullRequestLink {
+	l := t3.PullRequestLink{Host: "example.test", Repository: "acme/app", Number: n, URL: fmt.Sprint("https://example.test/acme/app/pull/", n),
+		LinkedAt: fmt.Sprintf("2026-11-17T10:%02d:00Z", minute)}
+	if state != "" {
+		l.Snapshot = &t3.PullRequestSnapshot{State: state, Title: fmt.Sprint("Change ", n), HeadBranch: head, BaseBranch: base}
+		if state == "draft" {
+			l.Snapshot.State, l.Snapshot.IsDraft = "open", true
+		}
+	}
+	return l
+}
+
+// The badge stands for a thread's linked pull requests as T3's does
+// (resolveThreadPullRequestBadge): one, its own state and number; several,
+// their overall state (all drafts draft, any open open, all merged
+// merged, else closed) and "+N", and the link it opens is the one open;
+// several that make one chain, or one host stack, are a stack of N. A
+// link not read yet counts as open.
+func TestPullRequestBadge(t *testing.T) {
+	url := func(n int) string { return fmt.Sprint("https://example.test/acme/app/pull/", n) }
+	native := func(l t3.PullRequestLink, layers ...int) t3.PullRequestLink {
+		l.Stack = &t3.PullRequestStack{ID: "s"}
+		for _, n := range layers {
+			l.Stack.Layers = append(l.Stack.Layers, struct {
+				Number int `json:"number"`
+			}{n})
+		}
+		return l
+	}
+	for _, c := range []struct {
+		what  string
+		links []t3.PullRequestLink
+		want  ui.PRBadge
+	}{
+		{"one open", []t3.PullRequestLink{prLink(1, "open", "a", "main", 0)}, ui.PRBadge{State: "open", Text: "1", URL: url(1)}},
+		{"one not read yet", []t3.PullRequestLink{prLink(1, "", "", "", 0)}, ui.PRBadge{Text: "1", URL: url(1)}},
+		{"open and merged", []t3.PullRequestLink{prLink(1, "open", "a", "main", 0), prLink(2, "merged", "b", "main", 1)},
+			ui.PRBadge{State: "open", Text: "+2", URL: url(1)}},
+		{"all merged", []t3.PullRequestLink{prLink(1, "merged", "a", "main", 0), prLink(2, "merged", "b", "main", 1)},
+			ui.PRBadge{State: "merged", Text: "+2", URL: url(2)}},
+		{"all drafts", []t3.PullRequestLink{prLink(1, "draft", "a", "main", 0), prLink(2, "draft", "b", "main", 1)},
+			ui.PRBadge{State: "draft", Text: "+2", URL: url(2)}},
+		{"merged and closed", []t3.PullRequestLink{prLink(1, "merged", "a", "main", 0), prLink(2, "closed", "b", "main", 1)},
+			ui.PRBadge{State: "closed", Text: "+2", URL: url(2)}},
+		{"merged and not read yet", []t3.PullRequestLink{prLink(1, "merged", "a", "main", 0), prLink(2, "", "", "", 1)},
+			ui.PRBadge{Text: "+2", State: "open", URL: url(2)}},
+		{"a chain of branches", []t3.PullRequestLink{prLink(1, "open", "a", "main", 0), prLink(2, "open", "b", "a", 1), prLink(3, "merged", "c", "b", 2)},
+			ui.PRBadge{State: "open", Text: "3", URL: url(2), Stack: true}},
+		{"a host's stack", []t3.PullRequestLink{native(prLink(5, "merged", "x", "main", 0), 5, 6), native(prLink(6, "draft", "y", "z", 1), 5, 6)},
+			ui.PRBadge{State: "open", Text: "2", URL: url(6), Stack: true}},
+	} {
+		got := prBadge(&t3.Thread{PullRequests: c.links}, true)
+		if got == nil || *got != c.want {
+			t.Errorf("%s: badge %+v, want %+v", c.what, got, c.want)
+		}
+	}
+	// A link the user dismissed from a stack doesn't count; without the
+	// server's config the badge is the pull request the thread names.
+	dismissed := prLink(2, "open", "b", "main", 1)
+	dismissed.Source = "stack-dismissed"
+	if got := prBadge(&t3.Thread{PullRequests: []t3.PullRequestLink{prLink(1, "merged", "a", "main", 0), dismissed}}, true); got == nil || got.Text != "1" || got.State != "merged" {
+		t.Errorf("with one dismissed: badge %+v, want #1 merged", got)
+	}
+	named := &t3.Thread{PullRequests: []t3.PullRequestLink{prLink(1, "open", "a", "main", 0)}, LinkedPullRequest: &t3.LinkedPullRequest{Number: 7, URL: url(7)}}
+	if got := prBadge(named, false); got == nil || *got != (ui.PRBadge{Text: "7", URL: url(7)}) {
+		t.Errorf("without the config: badge %+v, want #7", got)
+	}
+}
+
+// The hover card names the model as T3's model trigger does
+// (getTriggerDisplayModelName): its short name, else its name less a
+// vendor and its driver's own family where what's left still names it,
+// and less a sub-provider before it.
+func TestModelLabel(t *testing.T) {
+	for _, c := range []struct {
+		m      t3.Model
+		driver string
+		want   string
+	}{
+		{t3.Model{Name: "Claude Opus 5.5"}, "claudeAgent", "Opus 5.5"},
+		{t3.Model{Name: "Claude Opus 5.5", ShortName: "Opus"}, "claudeAgent", "Opus"},
+		{t3.Model{Name: "GPT-5.5"}, "codex", "GPT-5.5"},
+		{t3.Model{Name: "GPT-5.5 Pro"}, "codex", "5.5 Pro"},
+		{t3.Model{Name: "Claude Pro"}, "opencode", "Claude Pro"},
+		{t3.Model{Name: "Router: Claude Opus 5.5"}, "opencode", "Opus 5.5"},
+		{t3.Model{Name: "Moonshot / Kimi K2", SubProvider: "Moonshot"}, "opencode", "Kimi K2"},
+	} {
+		if got := modelLabel(c.m, c.driver); got != c.want {
+			t.Errorf("%q on %s: %q, want %q", c.m.Name, c.driver, got, c.want)
+		}
+	}
+}
+
+// With two accounts of one driver, the hover card's model line says which
+// account the thread is on (shouldShowInstanceBadge).
+func TestHoverCardAccount(t *testing.T) {
+	now := time.Now()
+	a := sideApp(t, t3.Thread{ID: "1", Title: "one", CreatedAt: ago(now, time.Minute), ModelSelection: &t3.ModelSelection{InstanceID: "work", Model: "opus"}})
+	models := []t3.Model{{Slug: "opus", Name: "Claude Opus 5.5"}}
+	a.envs[0].config.Providers = []t3.Provider{{InstanceID: "work", Driver: "claudeAgent", DisplayName: "Work", Enabled: true, Models: models}}
+	if got := rows(a.build(now))[0].Model; got != "Opus 5.5" {
+		t.Fatalf("one account: %q, want Opus 5.5", got)
+	}
+	a.envs[0].config.Providers = append(a.envs[0].config.Providers, t3.Provider{InstanceID: "home", Driver: "claudeAgent", DisplayName: "Home", Enabled: true, Models: models})
+	if got := rows(a.build(now))[0].Model; got != "Opus 5.5 · Work" {
+		t.Fatalf("two accounts: %q, want Opus 5.5 · Work", got)
+	}
+}
+
+// The hover card lists the linked pull requests chain by chain, the
+// latest to change first, each indented by its depth, a chain's head
+// saying what it is and how long (pullRequestListLines).
+func TestPullRequestLines(t *testing.T) {
+	links := []t3.PullRequestLink{prLink(1, "open", "a", "main", 0), prLink(2, "draft", "b", "a", 1), prLink(9, "merged", "z", "main", 5)}
+	var got []string
+	for _, l := range prLines(links) {
+		got = append(got, fmt.Sprintf("%s#%d %s %d %q", l.State, l.Number, l.Title, l.Depth, l.Chain))
+	}
+	want := `merged#9 Change 9 0 ""; open#1 Change 1 0 "chain · 2"; draft#2 Change 2 1 ""`
+	if strings.Join(got, "; ") != want {
+		t.Fatalf("lines\n got %s\nwant %s", strings.Join(got, "; "), want)
+	}
 }
