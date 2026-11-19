@@ -107,14 +107,16 @@ func (s revealState) at(now time.Time) float32 {
 	return s.from * (1 - t)
 }
 
-// easeStandard is cubic-bezier(0.4, 0, 0.2, 1), T3's default easing,
-// solved for x by bisection.
-func easeStandard(x float32) float32 {
+// easeStandard is cubic-bezier(0.4, 0, 0.2, 1), T3's default easing.
+func easeStandard(x float32) float32 { return cubicEase(x, 0.4, 0.2) }
+
+// cubicEase is cubic-bezier(x1, 0, x2, 1) at x, solved for x by bisection.
+func cubicEase(x, x1, x2 float32) float32 {
 	bez := func(t, a, b float32) float32 { return 3*a*t*(1-t)*(1-t) + 3*b*t*t*(1-t) + t*t*t }
 	lo, hi := float32(0), float32(1)
 	for range 20 {
 		mid := (lo + hi) / 2
-		if bez(mid, 0.4, 0.2) < x {
+		if bez(mid, x1, x2) < x {
 			lo = mid
 		} else {
 			hi = mid
@@ -184,20 +186,27 @@ func (th *Theme) userRow(gtx C, r *TimelineRow, hot bool) int {
 	if m.Status != "" {
 		place(th.recorded(gtx, func(gtx C) D { return th.statusPill(gtx, m.Status) }), dp(gtx, 4))
 	}
-	// The actions: the time, then copy; they fade in with the row's hover.
-	// A message another of yours follows floats them 8dp left of the
-	// bubble, so the two sit 4dp apart; a lane under 37rem keeps them on
-	// their own line (TimelineUserMessageRow.tsx:788-790, 1038-1056).
+	// The actions: the time, then copy and the prompt's link, 2dp apart;
+	// they fade in with the row's hover. A message another of yours
+	// follows floats them 8dp left of the bubble, so the two sit 4dp
+	// apart; a lane under 37rem keeps them on their own line
+	// (TimelineUserMessageRow.tsx:788-840, 1038-1056).
 	float := m.GroupedNext && w >= dp(gtx, 592)
 	a := th.reveal(gtx, r.ID+":actions", hot)
 	actions := th.recorded(gtx, func(gtx C) D {
 		cid := "copy:" + r.ID
 		th.copyTarget(cid, StripChips(m.Text))
-		return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+		kids := []layout.FlexChild{
 			layout.Rigid(th.stampText(r.ID, m.At, 16)),
 			layout.Rigid(Spacer(8, 0)),
-			layout.Rigid(th.messageCopy(cid, P.Background)),
-		)
+			layout.Rigid(th.messageCopy(cid, "Copy message", "copy", P.Background)),
+		}
+		if m.PromptLink != "" {
+			lid := "copy.link:" + r.ID
+			th.copyTarget(lid, m.PromptLink)
+			kids = append(kids, layout.Rigid(Spacer(2, 0)), layout.Rigid(th.messageCopy(lid, "Copy prompt link", "link", P.Background)))
+		}
+		return layout.Flex{Alignment: layout.Middle}.Layout(gtx, kids...)
 	})
 	at := image.Pt(w-dp(gtx, 4)-actions.Size.X, y)
 	if float {
@@ -216,16 +225,16 @@ func (th *Theme) userRow(gtx C, r *TimelineRow, hot bool) int {
 	return y + dp(gtx, 24)
 }
 
-// messageCopy is MessageCopyButton: a 24dp ghost button with a 12dp copy
-// icon; once clicked, a check in --primary for a second, the button
-// dimmed, and "Copied!" above it.
-func (th *Theme) messageCopy(id string, on color.NRGBA) W {
+// messageCopy is MessageCopyButton: a 24dp ghost button with a 12dp icon,
+// label in its tooltip; once clicked, a check in --primary for a second,
+// the button dimmed, and "Copied!" above it.
+func (th *Theme) messageCopy(id, label, icon string, on color.NRGBA) W {
 	return func(gtx C) D {
-		b := Button{Variant: BtnGhostMuted, Size: BtnSizeXs, Icon: "copy", IconSize: 12, On: on}
+		b := Button{Variant: BtnGhostMuted, Size: BtnSizeXs, Icon: icon, IconSize: 12, On: on}
 		copied := th.copiedFor(gtx, id, 1000)
 		if !copied {
 			d := th.T3Button(id, b)(gtx)
-			th.tipAt(gtx, id, "Copy message", d.Size, true, 0)
+			th.tipAt(gtx, id, label, d.Size, true, 0)
 			return d
 		}
 		size := image.Pt(dp(gtx, 24), dp(gtx, 24))
@@ -613,8 +622,9 @@ func (th *Theme) assistantRow(gtx C, r *TimelineRow, hot, run bool) int {
 	return y + dp(gtx, 2)
 }
 
-// assistantMeta is the response's meta row: its status, copy, and the
-// time of its last update, 8dp apart, at opacity a.
+// assistantMeta is the response's meta row: its status, copy, fork, and
+// the time of its last update, 8dp apart, at opacity a
+// (TimelineAssistantRows.tsx:166-218).
 func (th *Theme) assistantMeta(gtx C, r *TimelineRow, a float32) {
 	if a <= 0 {
 		return
@@ -630,13 +640,46 @@ func (th *Theme) assistantMeta(gtx C, r *TimelineRow, a float32) {
 	if m.Copy {
 		cid := "copy:" + r.ID
 		th.copyTarget(cid, m.Text)
-		kids = append(kids, layout.Rigid(th.messageCopy(cid, P.Background)))
+		kids = append(kids, layout.Rigid(th.messageCopy(cid, "Copy message", "copy", P.Background)))
+		gap()
+	}
+	if m.Fork {
+		kids = append(kids, layout.Rigid(th.forkButton(m)))
 		gap()
 	}
 	if !m.Streaming {
 		kids = append(kids, layout.Rigid(th.stampText(r.ID, m.At, 24)))
 	}
 	layout.Flex{Alignment: layout.Middle}.Layout(gtx, kids...)
+}
+
+// forkButton is AssistantForkButton: a 24dp ghost button with a 12dp
+// git-fork, "Fork from this response" in its tooltip, click target
+// "fork:<message>". While the fork is on its way it's disabled and its
+// icon pulses (animate-pulse).
+func (th *Theme) forkButton(m *Message) W {
+	return func(gtx C) D {
+		id := "fork:" + m.ID
+		b := Button{Variant: BtnGhost, Size: BtnSizeXs, Icon: "git-fork", IconSize: 12, Disabled: m.Forking}
+		if !m.Forking {
+			d := th.T3Button(id, b)(gtx)
+			th.tipAt(gtx, id, "Fork from this response", d.Size, true, 0)
+			return d
+		}
+		defer paint.PushOpacity(gtx.Ops, pulse(gtx.Now)).Pop()
+		gtx.Execute(op.InvalidateCmd{})
+		return th.T3Button("", b)(gtx)
+	}
+}
+
+// pulse is animate-pulse's opacity: down to 50% and back every 2s, eased
+// with cubic-bezier(0.4, 0, 0.6, 1).
+func pulse(now time.Time) float32 {
+	t := float32(now.UnixMilli()%2000) / 1000 // 0 to 2, the curve symmetric
+	if t > 1 {
+		t = 2 - t
+	}
+	return 1 - 0.5*cubicEase(t, 0.4, 0.6)
 }
 
 // statusBadge is AssistantStatusBadge: a mono 10/14 muted pill in a 1dp

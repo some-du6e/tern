@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf16"
 
 	"github.com/some-du6e/tern/app/t3"
 	"github.com/some-du6e/tern/app/ui"
@@ -203,10 +204,10 @@ func (a *App) uiRow(r *row, v *threadView, root, pending string) (ui.TimelineRow
 			return out, out.Message != nil
 		}
 		out.Kind = ui.RowAssistant
-		out.Message = assistantMessage(r)
+		out.Message = a.assistantMessage(r, v)
 	case "assistant-meta":
 		out.Kind = ui.RowAssistantMeta
-		out.Message = assistantMessage(r)
+		out.Message = a.assistantMessage(r, v)
 		out.Message.Meta = true
 	case "turn-fold":
 		out.Kind, out.Label, out.Group = ui.RowTurnFold, r.label, r.runID
@@ -311,7 +312,7 @@ func (a *App) userMessage(r *row, v *threadView) *ui.Message {
 		return nil
 	}
 	out := &ui.Message{ID: m.id, Text: text, At: m.at, Chips: chips, Pictures: pics, Files: files,
-		GroupedNext: r.next, GroupedPrev: r.prev, SentByT3: m.createdBy == "agent" && m.source == "server"}
+		GroupedNext: r.next, GroupedPrev: r.prev, SentByT3: m.createdBy == "agent" && m.source == "server", PromptLink: promptLink(m.text)}
 	if !r.steerCont {
 		switch m.intent {
 		case "steer":
@@ -329,11 +330,43 @@ func (a *App) userMessage(r *row, v *threadView) *ui.Message {
 	return out
 }
 
+// promptLink is T3's promptLinkFor: the prompt, its context references as
+// their labels, as a link that starts a thread with it on T3's hosted
+// app, or "" when it's empty or over 8000 characters (copyPromptLink.ts,
+// promptLinks.ts buildNewThreadLink).
+func promptLink(text string) string {
+	if attachmentOnly(text) {
+		return ""
+	}
+	p := strings.TrimSpace(t3.ReplaceImages(text, func(label string) string { return label }))
+	if n := len(utf16.Encode([]rune(p))); n == 0 || n > 8000 {
+		return ""
+	}
+	return "https://app.t3.codes/new?prompt=" + formEncode(p)
+}
+
+// formEncode is application/x-www-form-urlencoded as URLSearchParams
+// writes it: spaces as "+", every byte but alphanumerics and *-._ escaped.
+func formEncode(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case c == ' ':
+			b.WriteByte('+')
+		case c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.IndexByte("*-._", c) >= 0:
+			b.WriteByte(c)
+		default:
+			fmt.Fprintf(&b, "%%%02X", c)
+		}
+	}
+	return b.String()
+}
+
 // assistantMessage is an assistant's reply, with its meta row's state.
-func assistantMessage(r *row) *ui.Message {
+func (a *App) assistantMessage(r *row, v *threadView) *ui.Message {
 	m := r.entry.msg
 	out := &ui.Message{ID: m.id, Text: m.text, At: m.updated, Streaming: m.streaming, Meta: r.meta,
-		Copy: r.copy && strings.TrimSpace(m.text) != "" && !r.streaming}
+		Copy: r.copy && strings.TrimSpace(m.text) != "" && !r.streaming, Fork: v.canFork(m.item), Forking: a.forking == m.id}
 	if out.Text == "" && !m.streaming {
 		out.Text = "(empty response)"
 	}
@@ -342,6 +375,61 @@ func assistantMessage(r *row) *ui.Message {
 	}
 	return out
 }
+
+// canFork is T3's canForkProjectedAssistantItem: a finished reply of a run
+// can be forked from, unless its provider's session is known to fork
+// neither natively nor by handing the whole thread over.
+func (v *threadView) canFork(it *t3.TurnItem) bool {
+	if it.Type != "assistant_message" || it.RunID == "" || it.Status != "completed" {
+		return false
+	}
+	s, ok := v.sessions[v.pthreads[it.ProviderThreadID].ProviderSessionID]
+	if !ok {
+		// Older rows can outlive their session's record.
+		return true
+	}
+	c := s.Capabilities
+	return c.Threads.CanForkThread && c.Threads.CanForkFromTurn && c.Identity.NativeThreadIDs == "strong" || c.Context.SupportsFullThreadHandoff
+}
+
+// forkFrom forks the open thread from the run that wrote reply message,
+// into "<title> fork", and opens the fork (useTimelineRewind.ts:174-212).
+func (a *App) forkFrom(message string) {
+	a.mu.Lock()
+	v, t := a.view, a.curThread()
+	run := ""
+	if v != nil {
+		for _, it := range v.items {
+			if it.Type == "assistant_message" && it.MessageID == message {
+				run = it.RunID
+			}
+		}
+	}
+	if v == nil || t == nil || v.env.conn == nil || run == "" || a.forking != "" {
+		a.mu.Unlock()
+		return
+	}
+	a.forking = message
+	conn, env, source, title := v.env.conn, v.env.id(), t.ID, t.Title+" fork"
+	a.mu.Unlock()
+	a.changed()
+	go func() {
+		target := t3.NewID()
+		err := forkThread(conn, map[string]any{"type": "thread.fork", "createdBy": "user", "creationSource": "web",
+			"sourceThreadId": source, "targetThreadId": target, "sourcePoint": map[string]any{"type": "run", "runId": run}, "title": title})
+		a.mu.Lock()
+		a.forking = ""
+		a.fail(err)
+		a.mu.Unlock()
+		a.changed()
+		if err == nil {
+			a.onUI(func(th *ui.Theme) { a.switchTo(th, func() { a.openThread(ref(env, target)) }) })
+		}
+	}()
+}
+
+// forkThread dispatches a fork. Tests replace it.
+var forkThread = func(conn *t3.Conn, cmd map[string]any) error { return conn.Dispatch(cmd) }
 
 // uiEntry is a work entry as its row draws it (TimelineWorkEntryRow.tsx).
 func (a *App) uiEntry(e *workEntry, v *threadView, root, pending string) ui.WorkEntry {

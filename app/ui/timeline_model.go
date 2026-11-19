@@ -129,11 +129,17 @@ type Message struct {
 	SteerUnread              bool   // a steer the agent hasn't read yet
 	Status                   string // "failed" and the like, as a pill under the bubble
 	SentByT3                 bool   // "Sent by T3 Code" over it
+	// PromptLink opens the prompt in a new thread on T3's hosted app, for
+	// "Copy prompt link"; empty for a prompt too long for one.
+	PromptLink string
 
 	// An assistant's message.
 	Meta  bool   // the copy and time row under it
 	Copy  bool   // the copy button on that row
 	Badge string // its status, when not completed: "interrupted"
+	// Fork offers "Fork from this response" on that row, as click target
+	// "fork:<ID>"; Forking while the fork is on its way.
+	Fork, Forking bool
 }
 
 // File is a file sent with a message (ChatFileAttachment): its download

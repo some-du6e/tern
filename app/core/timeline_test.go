@@ -584,6 +584,89 @@ func TestFileOnlyMessage(t *testing.T) {
 	}
 }
 
+// "Copy prompt link" copies a new-thread link on T3's hosted app, the
+// prompt form-encoded as URLSearchParams does, its pictures as their
+// labels; empty prompts, the attachment-only prompt and prompts over 8000
+// characters have none (copyPromptLink.ts, promptLinks.ts).
+func TestPromptLink(t *testing.T) {
+	for _, c := range []struct{ text, want string }{
+		{"Fix the *bug* ~now~ & ship it", "https://app.t3.codes/new?prompt=Fix+the+*bug*+%7Enow%7E+%26+ship+it"},
+		{"  café\n", "https://app.t3.codes/new?prompt=caf%C3%A9"},
+		{"Like ![Image 1](t3-context://v1/image/image_1)", "https://app.t3.codes/new?prompt=Like+Image+1"},
+		{"   ", ""},
+		{attachmentOnlyPrompt, ""},
+		{strings.Repeat("a", 8001), ""},
+	} {
+		if got := promptLink(c.text); got != c.want {
+			t.Errorf("promptLink(%.30q) = %q, want %q", c.text, got, c.want)
+		}
+	}
+	if got := promptLink(strings.Repeat("a", 8000)); got == "" {
+		t.Error("an 8000-character prompt has no link")
+	}
+}
+
+// "Fork from this response" is on a finished reply of a run unless its
+// provider's session can't fork; clicking it forks the thread from that
+// run into "<title> fork", the button pulsing until it's done, then opens
+// the fork (useTimelineRewind.ts:174-212).
+func TestForkFromReply(t *testing.T) {
+	sent := make(chan map[string]any, 1)
+	done := make(chan error)
+	defer func(f func(*t3.Conn, map[string]any) error) { forkThread = f }(forkThread)
+	forkThread = func(_ *t3.Conn, cmd map[string]any) error {
+		sent <- cmd
+		return <-done
+	}
+	tt := newTimelineTest(t, []t3.Run{{ID: "run-1", Status: "completed", StartedAt: at(0), CompletedAt: at(30), Ordinal: 1}},
+		turnItem("u1", "user_message", 1, 0, "runId", "run-1", "text", "Write a poem", "inputIntent", "turn_start"),
+		turnItem("a1", "assistant_message", 2, 20, "runId", "run-1", "text", "Here is the poem.", "providerThreadId", "pt"),
+	)
+	reply := func() *ui.Message {
+		tt.a.mu.Lock()
+		defer tt.a.mu.Unlock()
+		return tt.a.build(t0.Add(time.Hour)).Timeline.Rows[1].Message
+	}
+	if m := reply(); !m.Fork || m.Forking {
+		t.Fatalf("the reply: fork %v, forking %v", m.Fork, m.Forking)
+	}
+	v := tt.a.view
+	v.pthreads["pt"] = t3.ProviderThread{ID: "pt", ProviderSessionID: "ps"}
+	v.sessions["ps"] = t3.ProviderSession{ID: "ps"}
+	if reply().Fork {
+		t.Error("a session that can't fork offers fork")
+	}
+	s := v.sessions["ps"]
+	s.Capabilities.Context.SupportsFullThreadHandoff = true
+	v.sessions["ps"] = s
+	if !reply().Fork {
+		t.Error("a session that hands threads over offers no fork")
+	}
+	e, th := tt.a.thread("swiss/t1")
+	e.conn, th.Title = new(t3.Conn), "Poems"
+	tt.click("fork:a1")
+	cmd := <-sent
+	point, _ := cmd["sourcePoint"].(map[string]any)
+	if cmd["type"] != "thread.fork" || cmd["sourceThreadId"] != "t1" || point["runId"] != "run-1" || cmd["title"] != "Poems fork" {
+		t.Fatalf("fork command %+v", cmd)
+	}
+	if !reply().Forking {
+		t.Error("the button doesn't say the fork is on its way")
+	}
+	// The fork opens without a connection to stream it from.
+	tt.a.mu.Lock()
+	e.conn = nil
+	tt.a.mu.Unlock()
+	done <- nil
+	for i := 0; i < 200 && reply().Forking; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	tt.a.RunUI(ui.NewTheme())
+	if want := "swiss/" + cmd["targetThreadId"].(string); tt.a.openID != want {
+		t.Errorf("open thread %q, want the fork %q", tt.a.openID, want)
+	}
+}
+
 // A quoted response's card goes to its reply: the fold hiding it opens,
 // and the timeline brings its row into view once (MessagesTimeline.tsx:
 // 664-705). A reply the thread doesn't hold reveals nothing.

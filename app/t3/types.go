@@ -130,8 +130,9 @@ type TurnItem struct {
 	Attachments []json.RawMessage `json:"attachments"`
 
 	// What the timeline's rows read (orchestrationV2.ts:1559-1912).
-	ParentItemID   string `json:"parentItemId"`
-	ProviderTurnID string `json:"providerTurnId"`
+	ParentItemID     string `json:"parentItemId"`
+	ProviderTurnID   string `json:"providerTurnId"`
+	ProviderThreadID string `json:"providerThreadId"`
 	// A user message: turn_start, queued_turn, steer or
 	// promoted_queued_to_steer; who sent it.
 	InputIntent    string `json:"inputIntent"`
@@ -242,6 +243,30 @@ type ProviderTurn struct {
 	Status       string `json:"status"` // pending, running, completed, interrupted, failed, cancelled
 }
 
+// ProviderThread is one of the provider's threads, and the session it
+// runs in.
+type ProviderThread struct {
+	ID                string `json:"id"`
+	ProviderSessionID string `json:"providerSessionId"`
+}
+
+// ProviderSession is a provider's session: what it can do with threads.
+type ProviderSession struct {
+	ID           string `json:"id"`
+	Capabilities struct {
+		Threads struct {
+			CanForkThread   bool `json:"canForkThread"`
+			CanForkFromTurn bool `json:"canForkFromTurn"`
+		} `json:"threads"`
+		Identity struct {
+			NativeThreadIDs string `json:"nativeThreadIds"` // none, weak, strong
+		} `json:"identity"`
+		Context struct {
+			SupportsFullThreadHandoff bool `json:"supportsFullThreadHandoff"`
+		} `json:"context"`
+	} `json:"capabilities"`
+}
+
 // RuntimeRequestRecord is a runtime request in the thread's projection:
 // how it stands, and whether the provider can still take its answer.
 type RuntimeRequestRecord struct {
@@ -266,10 +291,12 @@ type ThreadItem struct {
 		VisibleTurnItems []struct {
 			Item json.RawMessage `json:"item"`
 		} `json:"visibleTurnItems"`
-		Runs            []Run                  `json:"runs"`
-		Messages        []Message              `json:"messages"`
-		ProviderTurns   []ProviderTurn         `json:"providerTurns"`
-		RuntimeRequests []RuntimeRequestRecord `json:"runtimeRequests"`
+		Runs             []Run                  `json:"runs"`
+		Messages         []Message              `json:"messages"`
+		ProviderTurns    []ProviderTurn         `json:"providerTurns"`
+		ProviderThreads  []ProviderThread       `json:"providerThreads"`
+		ProviderSessions []ProviderSession      `json:"providerSessions"`
+		RuntimeRequests  []RuntimeRequestRecord `json:"runtimeRequests"`
 	} `json:"projection"`
 	HistoryCursor  string `json:"historyCursor"`
 	HasMoreHistory bool   `json:"hasMoreHistory"`

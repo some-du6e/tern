@@ -58,9 +58,10 @@ const retryReply = "Done. `upload.Send` now retries with **exponential backoff**
 func threadRows() []ui.TimelineRow {
 	now := time.Now()
 	return []ui.TimelineRow{
-		{ID: "u1", Kind: ui.RowUser, Message: &ui.Message{ID: "u1", Text: "Add retries to the uploader: back off exponentially, give up after five attempts, and keep the existing timeout."}},
+		{ID: "u1", Kind: ui.RowUser, Message: &ui.Message{ID: "u1", Text: "Add retries to the uploader: back off exponentially, give up after five attempts, and keep the existing timeout.",
+			PromptLink: "https://app.t3.codes/new?prompt=Add+retries+to+the+uploader"}},
 		{ID: "turn-fold:run-1", Kind: ui.RowTurnFold, Group: "run-1", Label: "Worked for 4m 12s"},
-		{ID: "a1", Kind: ui.RowAssistant, Message: &ui.Message{ID: "a1", Text: retryReply, Meta: true, Copy: true}},
+		{ID: "a1", Kind: ui.RowAssistant, Message: &ui.Message{ID: "a1", Text: retryReply, Meta: true, Copy: true, Fork: true}},
 		{ID: "u2", Kind: ui.RowUser, Message: &ui.Message{ID: "u2", Text: "Looks right. Log each retry, like in " + ui.ChipText(1), Chips: []string{"Image 1"},
 			Pictures: []ui.Picture{screenshot(480, 300)}}},
 		{ID: "working-indicator-row", Kind: ui.RowWorking, Since: now.Add(-68 * time.Second)},

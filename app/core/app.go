@@ -76,8 +76,10 @@ type App struct {
 	disclosures     map[string]*disclosure
 	disclosureOrder []string
 	// cited is the reply a quoted response's card goes to, by its thread's
-	// ref and its message id, until the timeline has shown it.
-	cited citedReply
+	// ref and its message id, until the timeline has shown it; forking the
+	// reply whose fork is on its way.
+	cited   citedReply
+	forking string
 
 	choices map[string]*choice       // per thread ref, or "draft"
 	images  map[string][]pastedImage // pasted and not sent yet, same keys
@@ -709,8 +711,11 @@ type threadView struct {
 	// What the user opened in the timeline: folds by run, work groups and
 	// entries by id, kept per thread (disclosureFor).
 	unfolded, groups, open map[string]bool
-	// The provider's turns and the runtime requests, by id.
+	// The provider's turns, threads and sessions, and the runtime requests,
+	// by id.
 	turns    map[string]t3.ProviderTurn
+	pthreads map[string]t3.ProviderThread
+	sessions map[string]t3.ProviderSession
 	requests map[string]t3.RuntimeRequestRecord
 	// The latest run and its status as the timeline last saw them.
 	seenRun, seenStatus string
@@ -728,6 +733,7 @@ func newView(e *envState, id string, d *disclosure) *threadView {
 	return &threadView{
 		id: id, env: e, raw: map[string]map[string]json.RawMessage{}, items: map[string]*t3.TurnItem{},
 		runs: map[string]t3.Run{}, messages: map[string]t3.Message{}, turns: map[string]t3.ProviderTurn{},
+		pthreads: map[string]t3.ProviderThread{}, sessions: map[string]t3.ProviderSession{},
 		requests: map[string]t3.RuntimeRequestRecord{}, unfolded: d.unfolded, groups: d.groups, open: d.open, full: map[string]*t3.TurnItem{},
 		fullRev: map[string]string{}, fetching: map[string]string{}, fetchErr: map[string]string{},
 	}
@@ -887,6 +893,13 @@ func (a *App) subscribeThread(e *envState, conn *t3.Conn, gen int, r string) {
 			for _, pt := range it.Projection.ProviderTurns {
 				v.turns[pt.ID] = pt
 			}
+			v.pthreads, v.sessions = map[string]t3.ProviderThread{}, map[string]t3.ProviderSession{}
+			for _, pt := range it.Projection.ProviderThreads {
+				v.pthreads[pt.ID] = pt
+			}
+			for _, ps := range it.Projection.ProviderSessions {
+				v.sessions[ps.ID] = ps
+			}
 			v.requests = map[string]t3.RuntimeRequestRecord{}
 			for _, rr := range it.Projection.RuntimeRequests {
 				v.requests[rr.ID] = rr
@@ -912,6 +925,16 @@ func (a *App) subscribeThread(e *envState, conn *t3.Conn, gen int, r string) {
 				var pt t3.ProviderTurn
 				if json.Unmarshal(it.Event.Payload, &pt) == nil && pt.ID != "" {
 					v.turns[pt.ID] = pt
+				}
+			case t == "provider-thread.updated":
+				var pt t3.ProviderThread
+				if json.Unmarshal(it.Event.Payload, &pt) == nil && pt.ID != "" {
+					v.pthreads[pt.ID] = pt
+				}
+			case t == "provider-session.attached" || t == "provider-session.updated":
+				var ps t3.ProviderSession
+				if json.Unmarshal(it.Event.Payload, &ps) == nil && ps.ID != "" {
+					v.sessions[ps.ID] = ps
 				}
 			case t == "runtime-request.updated":
 				var rr t3.RuntimeRequestRecord
