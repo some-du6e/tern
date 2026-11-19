@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"gioui.org/font"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/text"
@@ -38,8 +39,8 @@ func CompactCount(n int) string {
 // mono, in --diff-addition-foreground and --diff-deletion-foreground,
 // both always shown. Inline sets them 4dp apart; aligned right-aligns
 // each in a 4ch column, the columns 8dp apart.
-func (th *Theme) diffStat(gtx C, add, del int, aligned bool, size unit.Sp, lineH float32) D {
-	a := Txt{Size: size, LineH: lineH / float32(size), Font: Mono(), MaxLines: 1, Color: P.DiffAdditionForeground}
+func (th *Theme) diffStat(gtx C, add, del int, aligned bool, size unit.Sp, lineH float32, weight font.Weight) D {
+	a := Txt{Size: size, LineH: lineH / float32(size), Font: font.Font{Typeface: mono, Weight: weight}, MaxLines: 1, Color: P.DiffAdditionForeground}
 	d := a
 	d.Color = P.DiffDeletionForeground
 	as, ds := "+"+CompactCount(add), "-"+CompactCount(del)

@@ -166,7 +166,7 @@ func (th *Theme) cardHeader(gtx C, f *ChangedFiles, w int, bg color.NRGBA, folde
 	}()
 	if f.Additions > 0 || f.Deletions > 0 {
 		defer op.Offset(image.Pt(x, (h-dp(gtx, 16))/2)).Push(gtx.Ops).Pop()
-		th.diffStat(gtx, f.Additions, f.Deletions, false, 12, 16)
+		th.diffStat(gtx, f.Additions, f.Deletions, false, 12, 16, font.Medium)
 	}
 	return h
 }
@@ -243,11 +243,13 @@ func (th *Theme) cardFileRow(gtx C, f *ChangedFiles, r cardRow, w int, bg color.
 	x := dp(gtx, 8+14*float32(r.depth))
 	right := w - dp(gtx, 8)
 	if !n.Dir || n.Additions > 0 || n.Deletions > 0 {
-		sw := th.measure(gtx, func(gtx C) image.Point { return th.diffStat(gtx, n.Additions, n.Deletions, true, 10, 14).Size })
+		sw := th.measure(gtx, func(gtx C) image.Point {
+			return th.diffStat(gtx, n.Additions, n.Deletions, true, 10, 14, font.Normal).Size
+		})
 		right -= sw.X
 		func() {
 			defer op.Offset(image.Pt(right, (h-sw.Y)/2)).Push(gtx.Ops).Pop()
-			th.diffStat(gtx, n.Additions, n.Deletions, true, 10, 14)
+			th.diffStat(gtx, n.Additions, n.Deletions, true, 10, 14, font.Normal)
 		}()
 		right -= dp(gtx, 8)
 	}

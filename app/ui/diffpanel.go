@@ -393,7 +393,7 @@ func (th *Theme) diffToolbar(gtx C, d *DiffPanel) D {
 	}
 	if st := d.Stat; st != nil {
 		add(func(gtx C) D {
-			return pad(0, 4, 0, 0).Layout(gtx, func(gtx C) D { return th.diffStat(gtx, st.Additions, st.Deletions, false, 11, 16) })
+			return pad(0, 4, 0, 0).Layout(gtx, func(gtx C) D { return th.diffStat(gtx, st.Additions, st.Deletions, false, 11, 16, font.Normal) })
 		})
 	}
 	if d.Refresh {

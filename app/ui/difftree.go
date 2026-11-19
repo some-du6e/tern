@@ -151,6 +151,27 @@ func (th *Theme) treeRows(gtx C, d *DiffPanel) D {
 	if !th.dv.treeHot {
 		guides = 0.75 - guides
 	}
+	// Each row's folders, outermost first; the revealed file's folder keeps
+	// its guides at full strength, and a new reveal scrolls the file in.
+	ancestors := make([][]string, len(d.Tree))
+	var open []string
+	focus := ""
+	for i, e := range d.Tree {
+		open = append(open[:min(e.Depth, len(open))], "")
+		ancestors[i] = append([]string(nil), open[:e.Depth]...)
+		if e.Dir {
+			open[e.Depth] = e.Path
+		}
+		if !e.Dir && e.Path == d.Revealed {
+			if e.Depth > 0 {
+				focus = open[e.Depth-1]
+			}
+			if th.dv.treeReveal != d.RevealID && (i < l.Position.First || i >= l.Position.First+l.Position.Count) {
+				l.Position.First, l.Position.Offset = i, 0
+			}
+		}
+	}
+	th.dv.treeReveal = d.RevealID
 	c := dc()
 	return l.Layout(gtx, len(d.Tree), func(gtx C, i int) D {
 		e := d.Tree[i]
@@ -170,9 +191,13 @@ func (th *Theme) treeRows(gtx C, d *DiffPanel) D {
 			fill(gtx, over(c.treeHover, P.Background), r, rad)
 		}
 		// A guide down each level it's in, at its folder's chevron.
-		if guides > 0 {
-			for k := 0; k < e.Depth; k++ {
-				vline(gtx, over(alpha(rgb(0x84848a), uint8(0x40*guides)), P.Background), r.Min.X+dp(gtx, 6.4+float32(k)*treeIndent+8), 0, h)
+		for k, dir := range ancestors[i] {
+			a := guides
+			if dir == focus && focus != "" {
+				a = 1
+			}
+			if a > 0 {
+				vline(gtx, over(alpha(rgb(0x84848a), uint8(0x40*a+0.5)), P.Background), r.Min.X+dp(gtx, 6.4+float32(k)*treeIndent+8), 0, h)
 			}
 		}
 		x := r.Min.X + dp(gtx, 6.4+float32(e.Depth)*treeIndent)

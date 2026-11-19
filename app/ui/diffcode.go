@@ -54,13 +54,14 @@ type diffView struct {
 	panelW, menuX int
 	// The file tree pane's dragged width in dp, and its edge; and the
 	// pointer over the tree, which shows its indent guides.
-	treeW    float32
-	treeEdge handle
-	treeTag  int
-	treeHot  bool
-	layouts  map[layoutKey]*fileLayout
-	rev      string // the files the layouts are for
-	flips    map[string]flipState
+	treeW      float32
+	treeEdge   handle
+	treeTag    int
+	treeHot    bool
+	treeReveal int // the last RevealID the tree scrolled to
+	layouts    map[layoutKey]*fileLayout
+	rev        string // the files the layouts are for
+	flips      map[string]flipState
 }
 
 // flipState is a two-way state and when it last changed, for its

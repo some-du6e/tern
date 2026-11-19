@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"gioui.org/font"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/unit"
@@ -35,7 +36,7 @@ func measureCtx() layout.Context {
 // wide in a card row's mono 10 (§3.11).
 func TestDiffStatAligned(t *testing.T) {
 	th := NewTheme()
-	if w := th.diffStat(measureCtx(), 12, 3, true, 10, 14).Size.X; w != 56 {
+	if w := th.diffStat(measureCtx(), 12, 3, true, 10, 14, font.Normal).Size.X; w != 56 {
 		t.Fatalf("aligned label is %d wide, want 56", w)
 	}
 }

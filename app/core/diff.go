@@ -629,14 +629,25 @@ func (a *App) selectLocked(ds *diffState, sel diffSel) {
 // or its first file.
 func (a *App) selectTurnLocked(ds *diffState, run, file string) {
 	a.selectLocked(ds, diffSel{Kind: "turn", Run: run, File: file})
-	ds.reveal++
-	ds.revealed = file
 	if file != "" {
 		sec := "turn:" + run
 		if ds.folds[sec] == nil {
 			ds.folds[sec] = map[string]bool{}
 		}
 		ds.folds[sec][file] = false
+	}
+	revealLocked(ds, file)
+}
+
+// revealLocked scrolls the code view to file and selects it in the tree,
+// opening the folders it's in (§5.9).
+func revealLocked(ds *diffState, file string) {
+	ds.reveal++
+	ds.revealed = file
+	for i := range file {
+		if file[i] == '/' {
+			delete(ds.treeClosed, file[:i+1])
+		}
 	}
 }
 
@@ -797,8 +808,7 @@ func (a *App) diffAction(id string) bool {
 		}
 	case "diff.treefile":
 		fold(arg, false)
-		ds.revealed = arg
-		ds.reveal++
+		revealLocked(ds, arg)
 	case "files.open", "files.file":
 		run, path, _ := strings.Cut(arg, ":")
 		if verb == "files.open" {
