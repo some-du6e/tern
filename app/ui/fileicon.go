@@ -59,7 +59,7 @@ func fileIcon(path string) (name, token string) {
 	case ok:
 		return own, ""
 	}
-	token, ok := pierreNames[lower]
+	token, ok = pierreNames[lower]
 	for i := 0; !ok && i < len(exts); i++ {
 		if token, ok = pierreComplete[exts[i]]; !ok {
 			token, ok = pierreExtensions[exts[i]]

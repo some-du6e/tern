@@ -34,9 +34,11 @@ type timelineState struct {
 	metrics map[metricKey]fontMetrics
 	scrolls map[string]*hscroll
 	// unwrapped are code blocks whose wrapping was turned off; full the
-	// long user messages shown whole; menu the open row menu.
+	// long user messages shown whole; opened the <details> blocks opened or
+	// closed against how they were written; menu the open row menu.
 	unwrapped map[string]bool
 	full      map[string]bool
+	opened    map[string]bool
 	menu      string
 	reveals   map[string]revealState
 	plain     map[plainKey]*inlineText
@@ -450,9 +452,9 @@ func (th *Theme) timelineRow(gtx C, s *Scene, r *TimelineRow, laneX, laneW int) 
 	var h int
 	switch r.Kind {
 	case RowUser:
-		h = th.userRow(g, r, hot)
+		h = th.userRow(g, r, hot, s.Timeline.Root)
 	case RowAssistant, RowAssistantMeta:
-		h = th.assistantRow(g, r, hot, s.Timeline.CanRun)
+		h = th.assistantRow(g, r, hot, s.Timeline.CanRun, s.Timeline.Root)
 	case RowTurnFold:
 		h = th.turnFold(g, r, hot)
 	case RowWork, RowWorkToggle, RowWorkLive, RowThinking:

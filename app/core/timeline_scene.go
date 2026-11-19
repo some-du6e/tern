@@ -24,6 +24,7 @@ func (a *App) timeline(s *ui.Scene, t *t3.Thread, v *threadView, root string) {
 	tl := &s.Timeline
 	tl.ID = a.openID
 	_, tl.CanRun = v.env.projects[t.ProjectID]
+	tl.Root = root
 	tl.MoreHistory, tl.LoadingHistory, tl.HistoryError = v.more, v.loading, v.historyErr
 	in := timelineInput{working: working(t), latest: latestRun(v), running: t.ActiveRunID,
 		openRuns: v.unfolded, openGroups: v.groups}

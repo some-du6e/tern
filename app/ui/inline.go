@@ -39,7 +39,10 @@ type inlineRun struct {
 	italic    bool // Inter has no italic, so Chrome slants the roman: so does this
 	link      int  // 1 + the index of its link in the paragraph, or 0
 	chip      int  // a picture chip's number, or 0
-	brk       bool // a hard line break
+	// file is a file chip: its file's icon, then its label, in the run's
+	// font and colour, on one line, cut with "…" when it can't fit one.
+	file *fileChip
+	brk  bool // a hard line break
 	// gap is a fixed space of gap dp, a margin between inline boxes; icon
 	// a lucide icon size dp square, centred on the line.
 	gap  float32
@@ -48,6 +51,9 @@ type inlineRun struct {
 	// icon (see iconW) in margins of 0.25em and 0.2em, kept on one line
 	// with the text's protocol or first character (MarkdownExternalLink.tsx).
 	favicon string
+	// box is a width in dp the text is centred in when narrower, as an
+	// inline-flex min-width does; raise lifts its baseline by raise dp.
+	box, raise float32
 }
 
 // inlineText is one paragraph: its runs, and the block's own font and line
@@ -82,10 +88,12 @@ const (
 	textEnd
 )
 
-// linkBox is where a link's text landed, for the pointer.
+// linkBox is where a link's text or a file chip landed, for the pointer.
 type linkBox struct {
 	link int
+	file *fileChip
 	r    image.Rectangle
+	base int // the baseline's y
 }
 
 // inlineLayout is a laid-out paragraph, recorded once per width.
@@ -209,19 +217,29 @@ func (th *Theme) layoutInline(gtx C, t *inlineText, maxW int) *inlineLayout {
 			line = append(line, piece{run: r, x: x, w: w, icon: r.icon})
 			x += w
 			continue
-		case r.chip > 0:
+		case r.chip > 0 || r.file != nil:
 			label := ImageLabel(r.chip)
-			if r.chip <= len(t.chips) {
+			switch {
+			case r.file != nil:
+				label = r.file.label
+			case r.chip <= len(t.chips):
 				label = t.chips[r.chip-1]
 			}
 			_, _, lw := th.shapeLine(r.font, px(r.size), label, 1<<20, false)
-			w := px(r.size) + px(0.2*r.size) + lw
-			if x > start && x+w > maxW {
+			lead := px(r.size) + px(0.2*r.size)
+			if x > start && x+lead+lw > maxW {
 				newLine()
 			}
+			if r.file != nil && x+lead+lw > maxW {
+				// Wider than a line: max-width 100%, its label cut short.
+				_, _, ew := th.shapeLine(r.font, px(r.size), "…", 1<<20, false)
+				_, n, _ := th.shapeLine(r.font, px(r.size), label, max(1, maxW-x-lead-ew), true)
+				label = label[:n] + "…"
+				_, _, lw = th.shapeLine(r.font, px(r.size), label, 1<<20, false)
+			}
 			m := th.metrics(r.font, px(r.size))
-			line = append(line, piece{run: r, x: x, w: w, chip: label, ascent: int(m.ascent + 0.5), descent: int(m.descent + 0.5)})
-			x += w
+			line = append(line, piece{run: r, x: x, w: lead + lw, chip: label, ascent: int(m.ascent + 0.5), descent: int(m.descent + 0.5)})
+			x += lead + lw
 			continue
 		}
 		// Code pads each line's piece; a mark only its first and last.
@@ -274,6 +292,9 @@ func (th *Theme) layoutInline(gtx C, t *inlineText, maxW int) *inlineLayout {
 			rpad := pad
 			if ends && n < len(rest) {
 				rpad = 0
+			}
+			if extra := px(r.box) - w - lpad - rpad; extra > 0 {
+				lpad, rpad = lpad+extra/2, rpad+extra-extra/2
 			}
 			m := th.metrics(r.font, px(r.size))
 			line = append(line, piece{run: r, glyphs: gs, text: rest[:n], x: x, w: lpad + w + rpad, lpad: lpad, rpad: rpad,
@@ -368,8 +389,12 @@ func (th *Theme) paintInline(gtx C, t *inlineText, lines [][]piece, maxW int) (o
 		for _, p := range ln {
 			r := p.run
 			col := r.color
-			if r.link > 0 && r.gap == 0 {
-				links = append(links, linkBox{r.link - 1, image.Rect(dx+p.x, base-p.ascent, dx+p.x+p.w, base+p.descent)})
+			box := image.Rect(dx+p.x, base-p.ascent, dx+p.x+p.w, base+p.descent)
+			switch {
+			case r.file != nil:
+				links = append(links, linkBox{link: -1, file: r.file, r: box, base: base})
+			case r.link > 0 && r.gap == 0:
+				links = append(links, linkBox{link: r.link - 1, r: box, base: base})
 			}
 			if p.icon != "" {
 				size := r.size
@@ -397,14 +422,18 @@ func (th *Theme) paintInline(gtx C, t *inlineText, lines [][]piece, maxW int) (o
 			if p.chip != "" {
 				em := int(r.size*gtx.Metric.PxPerDp + 0.5)
 				off := op.Offset(image.Pt(p.x, base-p.ascent+(p.ascent+p.descent-em)/2)).Push(ops)
-				LucideW("image", col, r.size)(g)
+				if r.file != nil {
+					fileIconW(r.file.icon, r.size, r.file.on)(g)
+				} else {
+					LucideW("image", col, r.size)(g)
+				}
 				off.Pop()
 				lx := p.x + em + int(0.2*float32(em)+0.5)
 				gs, _, _ := th.shapeLine(r.font, em, p.chip, 1<<20, false)
 				th.paintGlyphs(g, gs, image.Pt(lx, base), col, false)
 				continue
 			}
-			th.paintGlyphs(g, p.glyphs, image.Pt(p.x+p.lpad, base), col, r.italic)
+			th.paintGlyphs(g, p.glyphs, image.Pt(p.x+p.lpad, base-int(r.raise*gtx.Metric.PxPerDp+0.5)), col, r.italic)
 			if r.strike {
 				em := r.size * gtx.Metric.PxPerDp
 				y := base - int(0.27*em+0.5)
@@ -446,11 +475,15 @@ func (th *Theme) paintGlyphs(gtx C, gs []text.Glyph, dot image.Point, col color.
 
 // inline draws a laid-out paragraph, then its links: a dotted underline
 // while hovered, the address in a tooltip, and click target
-// "link:<href>".
+// "link:<href>"; and its file chips.
 func (th *Theme) inline(gtx C, t *inlineText, links []string) D {
 	l := th.layoutInline(gtx, t, gtx.Constraints.Max.X)
 	l.call.Add(gtx.Ops)
 	for i, lb := range l.links {
+		if lb.file != nil {
+			th.fileChipArea(gtx, lb)
+			continue
+		}
 		if lb.link >= len(links) {
 			continue
 		}

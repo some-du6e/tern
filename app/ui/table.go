@@ -176,6 +176,12 @@ func (th *Theme) longestWord(gtx C, t *inlineText) int {
 			w = max(w, dp(gtx, 4*r.size))
 			continue
 		}
+		if r.file != nil {
+			// A file chip stays on one line: its icon, its gap, its label.
+			_, _, lw := th.shapeLine(r.font, dp(gtx, r.size), r.file.label, 1<<20, false)
+			w = max(w, dp(gtx, r.size)+dp(gtx, 0.2*r.size)+lw)
+			continue
+		}
 		pad := 0
 		if r.code {
 			pad = 2 * (dp(gtx, 0.35*r.size) + max(1, dp(gtx, 1)))
@@ -197,6 +203,8 @@ func cellText(t *inlineText) string {
 			sb.WriteByte(' ')
 		case r.chip > 0 && r.chip <= len(t.chips):
 			sb.WriteString(t.chips[r.chip-1])
+		case r.file != nil:
+			sb.WriteString(r.file.label)
 		default:
 			sb.WriteString(r.text)
 		}

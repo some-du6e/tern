@@ -126,8 +126,9 @@ func cubicEase(x, x1, x2 float32) float32 {
 }
 
 // userRow is a user's message: what goes over the bubble, the bubble, its
-// status pill and its actions, right-aligned 4dp apart.
-func (th *Theme) userRow(gtx C, r *TimelineRow, hot bool) int {
+// status pill and its actions, right-aligned 4dp apart. cwd is the
+// thread's workspace, for its file links.
+func (th *Theme) userRow(gtx C, r *TimelineRow, hot bool, cwd string) int {
 	m := r.Message
 	w := gtx.Constraints.Max.X
 	maxW := w * 80 / 100
@@ -181,7 +182,7 @@ func (th *Theme) userRow(gtx C, r *TimelineRow, hot bool) int {
 		})
 		body = place(cards, 0)
 	case words || len(m.Files) > 0:
-		body = place(th.recorded(within(gtx, maxW), func(gtx C) D { return th.bubble(gtx, r, len(m.Pictures) > 0) }), 0)
+		body = place(th.recorded(within(gtx, maxW), func(gtx C) D { return th.bubble(gtx, r, len(m.Pictures) > 0, cwd) }), 0)
 	}
 	if m.Status != "" {
 		place(th.recorded(gtx, func(gtx C) D { return th.statusPill(gtx, m.Status) }), dp(gtx, 4))
@@ -406,12 +407,12 @@ const collapseAt, collapsedH, collapseFade = 352, 176, 28
 // bubble is the message's text in --message-surface, radius 16, padded
 // 12, as wide as its text up to 80% of the lane; the corners next to a
 // picture above or another of your messages tighten to 6.
-func (th *Theme) bubble(gtx C, r *TimelineRow, mediaAbove bool) D {
+func (th *Theme) bubble(gtx C, r *TimelineRow, mediaAbove bool, cwd string) D {
 	m := r.Message
 	maxW := gtx.Constraints.Max.X
 	surface := P.MessageSurface
 	p := dp(gtx, 12)
-	st := mdStyle{color: P.Foreground, on: surface, user: true, owner: r.ID}
+	st := mdStyle{color: P.Foreground, on: surface, user: true, owner: r.ID, cwd: cwd}
 	doc := th.parsed(m.Text, st, m.Chips)
 	textW := min(maxW-2*p, th.mdNatural(gtx, doc, doc.blocks, st, maxW-2*p))
 	// Its files over its words, 8dp above them (mb-2).
@@ -589,8 +590,9 @@ func (th *Theme) media(gtx C, m *Message, words bool) D {
 
 // assistantRow is an assistant's message, padded 4 by 2: its markdown at
 // foreground 90%, then its status or its meta row; or the meta row alone,
-// moved below the response's tool groups. run lets its shell blocks run.
-func (th *Theme) assistantRow(gtx C, r *TimelineRow, hot, run bool) int {
+// moved below the response's tool groups. run lets its shell blocks run;
+// cwd is the thread's workspace, for its file links.
+func (th *Theme) assistantRow(gtx C, r *TimelineRow, hot, run bool, cwd string) int {
 	m := r.Message
 	w := gtx.Constraints.Max.X
 	px := dp(gtx, 4)
@@ -602,7 +604,7 @@ func (th *Theme) assistantRow(gtx C, r *TimelineRow, hot, run bool) int {
 	}
 	y := dp(gtx, 2)
 	st := mdBody()
-	st.streaming, st.run, st.owner = m.Streaming, run, r.ID
+	st.streaming, st.run, st.owner, st.cwd = m.Streaming, run, r.ID, cwd
 	off := op.Offset(image.Pt(px, y)).Push(gtx.Ops)
 	y += th.markdown(within(gtx, w-2*px), m.Text, st, nil).Size.Y
 	off.Pop()

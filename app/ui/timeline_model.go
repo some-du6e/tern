@@ -24,6 +24,9 @@ type Timeline struct {
 	// CanRun: the thread has a project, so a reply's shell blocks can run
 	// in its terminal.
 	CanRun bool
+	// Root is the thread's workspace: its worktree or its project's root.
+	// Messages' relative file links name files in it.
+	Root string
 	// Working: the thread is working, so opening a row while the live end
 	// is followed keeps following it.
 	Working bool

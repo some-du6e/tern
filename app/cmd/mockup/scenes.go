@@ -51,7 +51,11 @@ const retryReply = "Done. `upload.Send` now retries with **exponential backoff**
 	"- the first retry waits 250 ms, doubling up to a 4 s cap;\n" +
 	"- it gives up after five attempts and returns the last error;\n" +
 	"- `ErrPermanent` stops it at once.\n\n" +
+	"The loop is in `upload/send.go:42`; [the tests](upload/send_test.go) cover each case.\n\n" +
 	"Run the tests with:\n\n```bash\ngo test ./upload/...\n```\n"
+
+// workspace is the made-up project's root, which its file links name files in.
+const workspace = "/home/dev/acme"
 
 // threadRows is a running turn: a settled one folded above it, its open
 // tool group, and the running command with the newest thought.
@@ -125,7 +129,9 @@ const markdownReply = "## Two ways in\n\n" +
 	"★ Insight ─────────────────────────────────────\nA callback runs on the uploader's goroutine,\nso it must not block.\n" +
 	"─────────────────────────────────────────────────\n\n" +
 	"```go\ntype Progress struct {\n\tSent, Total int64 // bytes\n}\n```\n\n" +
-	"- [x] chunked writes\n- [ ] resumable uploads\n"
+	"- [x] chunked writes\n- [ ] resumable uploads\n\n" +
+	"<details open>\n<summary>Why not a ticker</summary>\n\nA ticker fires whether bytes moved or not.\n\n</details>\n\n" +
+	"An unset callback costs nothing.[^1]\n\n[^1]: Measured with `go test -bench=Send`.\n"
 
 // planText is a proposed plan long enough to collapse.
 const planText = "# Retry the uploader\n\n## Summary\n\nRetry failed chunks with exponential backoff, and report each retry.\n\n" +
@@ -184,7 +190,7 @@ func base(selected string) *ui.Scene {
 	}
 	sidebar(s, selected)
 	s.Browser = &ui.Browser{Title: "tern", URL: "localhost:8787", Control: "You have control"}
-	s.Timeline = ui.Timeline{ID: "running", MoreHistory: true, Rows: threadRows()}
+	s.Timeline = ui.Timeline{ID: "running", MoreHistory: true, Root: workspace, Rows: threadRows()}
 	s.Run = &ui.RunInfo{Status: "Running · 1m 08s", Model: "Opus 5.5 · High", Elapsed: "5m 20s total", Mode: "Full access", Branch: "t3/go-client", Worktree: "~/.t3/worktrees/tern"}
 	s.Changes = []ui.FileChange{
 		{Path: "app/t3/rpc.go", Add: 48, Del: 6, Kind: 'M', Selected: true},
@@ -376,7 +382,7 @@ func settledScene() *ui.Scene {
 	s.Title = "Gio sidebar: virtualize 1k rows"
 	s.State, s.StateLabel = ui.ThreadIdle, "Idle"
 	s.Run.Status = "Idle"
-	s.Timeline = ui.Timeline{ID: "settled", MoreHistory: true, Rows: settledRows()}
+	s.Timeline = ui.Timeline{ID: "settled", MoreHistory: true, Root: workspace, Rows: settledRows()}
 	s.Changes = nil
 	return s
 }

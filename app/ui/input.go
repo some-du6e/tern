@@ -248,6 +248,17 @@ func (th *Theme) Tip(id, tip string, up bool, align int, w W) W {
 // offset) once the pointer has rested on it for 600ms, fading and scaling
 // in over 150ms (docs/ui/02-primitives.md §3.7, port note 10).
 func (th *Theme) tipAt(gtx C, id, tip string, size image.Point, up bool, align int) {
+	th.tipWith(gtx, id, tip, size, up, align, th.tooltip)
+}
+
+// codeTipAt is tipAt in the tooltip's code variant, above its target: a
+// path in mono 11/17.875, up to 480dp wide.
+func (th *Theme) codeTipAt(gtx C, id, tip string, size image.Point) {
+	th.tipWith(gtx, id, tip, size, true, 0, th.codeTooltip)
+}
+
+// tipWith is tipAt drawing its popup with draw.
+func (th *Theme) tipWith(gtx C, id, tip string, size image.Point, up bool, align int, draw func(C, string) D) {
 	c := th.in.clicks[id]
 	if c == nil || !c.Hovered() || tip == "" {
 		delete(th.in.tipSince, id)
@@ -272,8 +283,8 @@ func (th *Theme) tipAt(gtx C, id, tip string, size image.Point, up bool, align i
 	}
 	m := op.Record(gtx.Ops)
 	g := gtx
-	g.Constraints = layout.Constraints{Max: image.Pt(dp(gtx, 320), dp(gtx, 200))}
-	td := th.tooltip(g, tip)
+	g.Constraints = layout.Constraints{Max: image.Pt(dp(gtx, 480), dp(gtx, 200))}
+	td := draw(g, tip)
 	call := m.Stop()
 	gap := dp(gtx, 4)
 	at := image.Pt((size.X-td.Size.X)/2, size.Y+gap)
@@ -304,11 +315,23 @@ func (th *Theme) tipAt(gtx C, id, tip string, size image.Point, up bool, align i
 }
 
 // tooltip is T3's tooltip popup: popover surface, 1dp border, radius 6,
-// 12/16.5 text, padded 4 by 8, and its lip and small shadow.
+// 12/16.5 text, padded 4 by 8, up to 320dp wide, and its lip and small
+// shadow.
 func (th *Theme) tooltip(gtx C, tip string) D {
+	return th.tooltipBox(gtx, 320, Txt{Size: 12, LineH: 16.5 / 12, Color: P.PopoverForeground}, tip)
+}
+
+// codeTooltip is the tooltip's code variant: mono 11/17.875, up to 480dp.
+func (th *Theme) codeTooltip(gtx C, tip string) D {
+	return th.tooltipBox(gtx, 480, Txt{Size: 11, LineH: 17.875 / 11, Font: Mono(), Color: P.PopoverForeground}, tip)
+}
+
+// tooltipBox is the tooltip popup of text t, at most maxW dp wide.
+func (th *Theme) tooltipBox(gtx C, maxW float32, t Txt, tip string) D {
+	gtx.Constraints.Max.X = min(gtx.Constraints.Max.X, dp(gtx, maxW))
 	m := op.Record(gtx.Ops)
 	d := pad(4, 8, 4, 8).Layout(gtx, func(gtx C) D {
-		return th.Text(gtx, Txt{Size: 12, LineH: 16.5 / 12, Color: P.PopoverForeground}, tip)
+		return th.Text(gtx, t, tip)
 	})
 	call := m.Stop()
 	r := image.Rectangle{Max: d.Size}

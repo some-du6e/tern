@@ -209,6 +209,75 @@ func TestStreamingBlocks(t *testing.T) {
 	}
 }
 
+// Footnotes are GFM's: the reference a raised number in the link's colour,
+// the notes under a --contrast-border rule 20dp below the text, in 12dp
+// muted text (index.css section[data-footnotes]).
+func TestFootnotes(t *testing.T) {
+	img := mdDrawn(t, "A claim[^1].\n\n[^1]: The source.", mdBody(), 400, 120, 2)
+	// The paragraph's 23dp, then 20: the rule's 2px at 2x.
+	wantPixel(t, img, image.Pt(2*200, 2*43), over(P.ContrastBorder, P.Background), "the footnotes' rule")
+	wantPixel(t, img, image.Pt(2*200, 2*42-1), P.Background, "over the rule")
+	link := rgb(0x1447e6)
+	low := -1
+	for y := 0; y < 2*23; y++ {
+		for x := 0; x < 2*400; x++ {
+			c := img.RGBAAt(x, y)
+			if near(c.R, link.R, 30) && near(c.G, link.G, 30) && near(c.B, link.B, 30) {
+				low = max(low, y)
+			}
+		}
+	}
+	// super lifts the 11dp number 5.67dp off the 16.5dp baseline.
+	if low < 0 || low >= 2*15 {
+		t.Errorf("the reference's lowest pixel is at %dpx, want one over 30 (raised)", low)
+	}
+	muted := false
+	for y := 2 * 44; y < 2*90; y++ {
+		for x := 0; x < 2*400; x++ {
+			c := img.RGBAAt(x, y)
+			muted = muted || near(c.R, 0x71, 6) && near(c.G, 0x71, 6) && near(c.B, 0x7b, 6)
+		}
+	}
+	if !muted {
+		t.Error("no pixel of the note is the muted #71717b")
+	}
+}
+
+// An assistant's <details> is closed under its 36dp summary between two
+// rules; clicking the summary opens it, its blocks 24dp in, 12dp over the
+// bottom rule (MarkdownDetails.tsx).
+func TestDetails(t *testing.T) {
+	src := "<details>\n<summary>More</summary>\n\nHidden text\n\n</details>"
+	img := mdDrawn(t, src, mdBody(), 400, 60, 2)
+	rule := over(faded(P.Border, 0x99), P.Background)
+	wantPixel(t, img, image.Pt(2*200, 0), rule, "the top rule")
+	wantPixel(t, img, image.Pt(2*200, 2*37), rule, "the bottom rule, under the 36dp summary")
+	st := mdBody()
+	st.owner = "d"
+	th := NewTheme()
+	var r gioinput.Router
+	var ops op.Ops
+	frame := func() int {
+		ops.Reset()
+		gtx := layout.Context{Ops: &ops, Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Exact(image.Pt(400, 200)), Source: r.Source(), Now: time.Now()}
+		h := th.markdown(gtx, src, st, nil).Size.Y
+		r.Frame(&ops)
+		th.Actions()
+		return h
+	}
+	closed := frame()
+	at := f32.Pt(100, 18)
+	r.Queue(pointer.Event{Kind: pointer.Move, Position: at, Source: pointer.Mouse})
+	frame()
+	r.Queue(pointer.Event{Kind: pointer.Press, Position: at, Buttons: pointer.ButtonPrimary, Source: pointer.Mouse},
+		pointer.Event{Kind: pointer.Release, Position: at, Source: pointer.Mouse})
+	frame()
+	// The paragraph's 10 above and below, its 23, and the 12.
+	if open := frame(); closed != 1+36+1 || open != closed+10+23+10+12 {
+		t.Errorf("closed %ddp, open %ddp; want 38 and %d", closed, open, 38+10+23+10+12)
+	}
+}
+
 // A code block's wrap toggle is kept by the block's place in its message,
 // so it survives the message being parsed again, here for the dark theme
 // (MarkdownCodeBlock.tsx:163).

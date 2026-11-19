@@ -16,6 +16,7 @@ import (
 	"gioui.org/op"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
+	"gioui.org/unit"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
@@ -25,12 +26,13 @@ import (
 
 // Markdown as T3's ChatMarkdown renders it (ChatMarkdown.tsx, index.css
 // .chat-markdown; docs/ui/06-timeline.md §2.5, §3.5): CommonMark with
-// GitHub's tables, strikethrough, task lists and autolinks, parsed by
-// goldmark and laid out with .chat-markdown's rules, margins collapsing
-// between blocks as CSS's do. GitHub's > [!NOTE] alerts are T3's too, and
-// so are Claude's "★ Insight" callout and quoted responses' cards.
-// Footnotes, <details>, math, Mermaid, images, file and thread chips are
-// drawn as their text.
+// GitHub's tables, strikethrough, task lists, autolinks and footnotes,
+// parsed by goldmark and laid out with .chat-markdown's rules, margins
+// collapsing between blocks as CSS's do. GitHub's > [!NOTE] alerts are
+// T3's too, and so are Claude's "★ Insight" callout, quoted responses'
+// cards, an assistant's <details>, and file links and backticked paths as
+// file chips. Math, Mermaid, images and thread chips are drawn as their
+// text.
 
 type mdKind int
 
@@ -44,7 +46,9 @@ const (
 	mdCode
 	mdTable
 	mdRule
-	mdCite // a quoted response's card
+	mdCite      // a quoted response's card
+	mdDetails   // <details>: its summary over its blocks while open
+	mdFootnotes // GFM's footnotes, a list under a rule
 )
 
 // mdNode is one block.
@@ -52,6 +56,11 @@ type mdNode struct {
 	kind  mdKind
 	tight bool // a tight list item's paragraph, without margins
 	level int  // a heading's level; a list's depth, from 1
+	// A <details>: its summary's words and whether it's written open.
+	summary string
+	open    bool
+	// notes: a footnotes' list, its markers 12/19.5.
+	notes bool
 	// own: the block's margins are mt and mb, as for the pieces of a
 	// paragraph a quoted response's card cuts.
 	own    bool
@@ -100,6 +109,9 @@ type mdStyle struct {
 	// owner names the message: its code blocks' and tables' state, such
 	// as a block's wrapping, is kept by it and their place in it.
 	owner string
+	// cwd is the thread's workspace, which relative file links name files
+	// in; without one only absolute paths are file chips.
+	cwd string
 }
 
 // mdBody is an assistant's body text: foreground at 90%, on the canvas.
@@ -107,7 +119,7 @@ func mdBody() mdStyle {
 	return mdStyle{color: over(faded(P.Foreground, 0xe6), P.Background), on: P.Background}
 }
 
-var mdParser = goldmark.New(goldmark.WithExtensions(extension.GFM))
+var mdParser = goldmark.New(goldmark.WithExtensions(extension.GFM, extension.Footnote))
 
 // alertMarker is GitHub's alert syntax (markdownGithubAlerts.ts), and
 // INSIGHT the mark an insight callout's quote starts with.
@@ -134,7 +146,9 @@ func (th *Theme) parsed(src string, st mdStyle, chips []string) *mdDoc {
 			b.src = []byte(text)
 		}
 	}
-	doc := &mdDoc{blocks: b.blocks(mdParser.Parser().Parse(gtext.NewReader(b.src)), 0)}
+	root := mdParser.Parser().Parse(gtext.NewReader(b.src))
+	b.suffixes = b.fileSuffixes(root)
+	doc := &mdDoc{blocks: b.blocks(root, 0)}
 	doc.links = b.links
 	th.tl.docs[key] = doc
 	return doc
@@ -260,11 +274,97 @@ type mdBuilder struct {
 	links []string
 	// insights: the text has insight callouts, quotes marked [!INSIGHT].
 	insights bool
+	// suffixes tell apart the files of the message's chips that share a
+	// name; files counts its chips.
+	suffixes map[string]string
+	files    int
+	// notes: the blocks being built are footnotes' (body).
+	notes bool
+}
+
+// fileSuffixes are the parent folders the labels of n's file chips need
+// (ChatMarkdown.tsx resolveFileLinkSources).
+func (b *mdBuilder) fileSuffixes(n ast.Node) map[string]string {
+	var paths []string
+	_ = ast.Walk(n, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		target := ""
+		switch n := n.(type) {
+		case *ast.Link:
+			target = string(n.Destination)
+		case *ast.CodeSpan:
+			target = inlineCodePath(b.codeText(n))
+		}
+		if p, ok := fileLinkTarget(target, b.st.cwd); target != "" && ok {
+			paths = append(paths, p.path)
+		}
+		return ast.WalkContinue, nil
+	})
+	return fileLabelSuffixes(paths)
+}
+
+// fileChip is the chip of a link to target, or nil when it names no file
+// (resolveMarkdownFileLinkMeta), in the text's size st.
+func (b *mdBuilder) fileChip(target string, st runStyle) *inlineRun {
+	p, ok := fileLinkTarget(target, b.st.cwd)
+	if !ok {
+		return nil
+	}
+	b.files++
+	f := &fileChip{id: "file:" + b.st.owner + ":" + strconv.Itoa(b.files), icon: p.path, label: fileLinkLabel(p, b.suffixes),
+		target: p.String(), ink: chipInk(p.path), on: b.st.on, size: st.size}
+	if rel, ok := workspaceRelative(p.path, b.st.cwd); ok {
+		f.rel = rel + p.String()[len(p.path):]
+	}
+	return &inlineRun{file: f, font: UI(font.Medium), size: st.size, color: over(f.ink, b.st.on)}
+}
+
+// plainOf is n's words without their markup (nodeToPlainText).
+func (b *mdBuilder) plainOf(n ast.Node) string {
+	var sb strings.Builder
+	_ = ast.Walk(n, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if entering {
+			switch n := n.(type) {
+			case *ast.Text:
+				sb.Write(n.Segment.Value(b.src))
+			case *ast.String:
+				sb.Write(n.Value)
+			}
+		}
+		return ast.WalkContinue, nil
+	})
+	return sb.String()
+}
+
+// codeText is a code span's text.
+func (b *mdBuilder) codeText(c *ast.CodeSpan) string {
+	var sb strings.Builder
+	for g := c.FirstChild(); g != nil; g = g.NextSibling() {
+		if tx, ok := g.(*ast.Text); ok {
+			sb.Write(tx.Segment.Value(b.src))
+		}
+	}
+	return sb.String()
 }
 
 func (b *mdBuilder) blocks(n ast.Node, depth int) []*mdNode {
+	return b.siblings(n.FirstChild(), nil, depth)
+}
+
+// siblings are the blocks of the nodes from first up to until.
+func (b *mdBuilder) siblings(first, until ast.Node, depth int) []*mdNode {
 	var out []*mdNode
-	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+	for c := first; c != nil && c != until; c = c.NextSibling() {
+		if h, ok := c.(*ast.HTMLBlock); ok && !b.st.user && detailsOpen.MatchString(b.lines(h)) {
+			d, end := b.details(h, until, depth)
+			out = append(out, d)
+			if c = end; c == nil {
+				break
+			}
+			continue
+		}
 		switch c := c.(type) {
 		case *ast.Paragraph:
 			out = append(out, b.paragraphBlocks(c, false)...)
@@ -354,11 +454,9 @@ func (b *mdBuilder) blocks(n ast.Node, depth int) []*mdNode {
 			if !b.st.user {
 				txt = htmlTag.ReplaceAllString(txt, "")
 			}
-			if strings.TrimSpace(txt) != "" {
-				p := &inlineText{font: UI(font.Normal), size: 14, lineH: 22.75, codeBg: b.codeBg()}
-				b.addText(p, strings.TrimSpace(txt), runStyle{font: UI(font.Normal), size: 14, color: b.st.color, pre: true})
-				out = append(out, &mdNode{kind: mdPara, text: p})
-			}
+			out = append(out, b.htmlText(txt)...)
+		case *east.FootnoteList:
+			out = append(out, b.footnotes(c, depth))
 		default:
 			out = append(out, b.blocks(c, depth)...)
 		}
@@ -366,7 +464,100 @@ func (b *mdBuilder) blocks(n ast.Node, depth int) []*mdNode {
 	return out
 }
 
-var htmlTag = regexp.MustCompile(`<[^>]*>`)
+var (
+	htmlTag      = regexp.MustCompile(`<[^>]*>`)
+	detailsOpen  = regexp.MustCompile(`(?is)^\s*<details(\s[^>]*)?>`)
+	detailsTag   = regexp.MustCompile(`(?i)<details[\s>]`)
+	detailsClose = regexp.MustCompile(`(?i)</details\s*>`)
+	summaryTag   = regexp.MustCompile(`(?is)<summary[^>]*>(.*?)</summary\s*>`)
+)
+
+// htmlText is HTML's words, as written: a paragraph, or nothing.
+func (b *mdBuilder) htmlText(txt string) []*mdNode {
+	if strings.TrimSpace(txt) == "" {
+		return nil
+	}
+	size, lineH, col := b.body()
+	p := &inlineText{font: UI(font.Normal), size: size, lineH: lineH, codeBg: b.codeBg()}
+	b.addText(p, strings.TrimSpace(txt), runStyle{font: UI(font.Normal), size: size, color: col, pre: true})
+	return []*mdNode{{kind: mdPara, text: p}}
+}
+
+// details is an assistant's <details>, which T3 parses into
+// MarkdownDetails: its <summary>'s words, open if written open, and what's
+// between its opening HTML h and its closing tag. It returns the node
+// holding that tag, or nil when it runs to until.
+func (b *mdBuilder) details(h *ast.HTMLBlock, until ast.Node, depth int) (*mdNode, ast.Node) {
+	txt := b.lines(h)
+	open := detailsOpen.FindStringSubmatchIndex(txt)
+	d := &mdNode{kind: mdDetails, open: open[2] >= 0 && strings.Contains(strings.ToLower(txt[open[2]:open[3]]), "open")}
+	rest := txt[open[1]:]
+	summary := func(s string) string {
+		m := summaryTag.FindStringSubmatchIndex(s)
+		if m == nil {
+			return s
+		}
+		d.summary = strings.TrimSpace(htmlTag.ReplaceAllString(s[m[2]:m[3]], ""))
+		return s[:m[0]] + s[m[1]:]
+	}
+	rest = summary(rest)
+	if c := detailsClose.FindStringIndex(rest); c != nil {
+		d.kids = b.htmlText(htmlTag.ReplaceAllString(rest[:c[0]], ""))
+		return d, h
+	}
+	d.kids = b.htmlText(htmlTag.ReplaceAllString(rest, ""))
+	// The closing tag is the first that closes more than opened since.
+	var end ast.Node
+	nested := 0
+	for s := h.NextSibling(); s != nil && s != until && end == nil; s = s.NextSibling() {
+		if hb, ok := s.(*ast.HTMLBlock); ok {
+			t := b.lines(hb)
+			nested += len(detailsTag.FindAllString(t, -1)) - len(detailsClose.FindAllString(t, -1))
+			if nested < 0 {
+				end = hb
+			}
+		}
+	}
+	first := h.NextSibling()
+	if hb, ok := first.(*ast.HTMLBlock); ok && d.summary == "" && summaryTag.MatchString(b.lines(hb)) {
+		d.kids = append(d.kids, b.htmlText(htmlTag.ReplaceAllString(summary(b.lines(hb)), ""))...)
+		first = first.NextSibling()
+	}
+	if end == nil {
+		d.kids = append(d.kids, b.siblings(first, until, depth)...)
+		return d, nil
+	}
+	d.kids = append(d.kids, b.siblings(first, end, depth)...)
+	if before := detailsClose.Split(b.lines(end.(*ast.HTMLBlock)), 2)[0]; strings.TrimSpace(htmlTag.ReplaceAllString(before, "")) != "" {
+		d.kids = append(d.kids, b.htmlText(htmlTag.ReplaceAllString(before, ""))...)
+	}
+	return d, end
+}
+
+// footnotes is GFM's footnote section (remark-gfm; index.css
+// section[data-footnotes]): the notes as an ordered list, each its
+// definition's blocks in a footnote's text.
+func (b *mdBuilder) footnotes(l *east.FootnoteList, depth int) *mdNode {
+	list := &mdNode{kind: mdList, level: depth + 1, ordered: true, start: 1, notes: true}
+	b.notes = true
+	for c := l.FirstChild(); c != nil; c = c.NextSibling() {
+		if fn, ok := c.(*east.Footnote); ok {
+			list.kids = append(list.kids, &mdNode{kind: mdItem, number: fn.Index, kids: b.blocks(fn, depth+1)})
+			list.digits = max(list.digits, len(strconv.Itoa(fn.Index)))
+		}
+	}
+	b.notes = false
+	return &mdNode{kind: mdFootnotes, kids: []*mdNode{list}}
+}
+
+// body is the running text's size, line height and colour: 14/22.75 in
+// the message's colour, or a footnote's 12/19.5 muted.
+func (b *mdBuilder) body() (size, lineH float32, col color.NRGBA) {
+	if b.notes {
+		return 12, 19.5, over(P.ContrastMutedForeground, b.st.on)
+	}
+	return 14, 22.75, b.st.color
+}
 
 // taskBox is a list item's task checkbox, if it has one.
 func taskBox(item ast.Node) *east.TaskCheckBox {
@@ -515,15 +706,18 @@ func (b *mdBuilder) paragraph(n ast.Node, size float32, f font.Font, col color.N
 // card has 10.4 above unless it starts the paragraph and below unless it
 // ends it, and the text between has none.
 func (b *mdBuilder) paragraphBlocks(n ast.Node, tight bool) []*mdNode {
-	st := runStyle{font: UI(font.Normal), size: 14, color: b.st.color}
+	size, lineH, col := b.body()
+	st := runStyle{font: UI(font.Normal), size: size, color: col}
 	newText := func() *inlineText {
-		return &inlineText{font: st.font, size: 14, lineH: 22.75, codeBg: b.codeBg(), chips: b.chips}
+		return &inlineText{font: st.font, size: size, lineH: lineH, codeBg: b.codeBg(), chips: b.chips}
 	}
 	var out []*mdNode
 	t := newText()
 	piece := func() {
 		// The line breaks and spaces around a card are the card's.
-		blank := func(r inlineRun) bool { return r.brk || strings.TrimSpace(r.text) == "" && r.chip == 0 && r.icon == "" }
+		blank := func(r inlineRun) bool {
+			return r.brk || strings.TrimSpace(r.text) == "" && r.chip == 0 && r.icon == "" && r.file == nil
+		}
 		for len(t.runs) > 0 && blank(t.runs[0]) {
 			t.runs = t.runs[1:]
 		}
@@ -590,17 +784,19 @@ func (b *mdBuilder) inline(t *inlineText, c ast.Node, st runStyle) {
 	case *ast.String:
 		b.addText(t, string(c.Value), st)
 	case *ast.CodeSpan:
-		var sb strings.Builder
-		for g := c.FirstChild(); g != nil; g = g.NextSibling() {
-			if tx, ok := g.(*ast.Text); ok {
-				sb.Write(tx.Segment.Value(b.src))
+		code := b.codeText(c)
+		// A path in backticks is a file chip (ChatMarkdown.tsx:1424-1434).
+		if p := inlineCodePath(code); p != "" {
+			if chip := b.fileChip(p, st); chip != nil {
+				t.runs = append(t.runs, *chip)
+				return
 			}
 		}
 		// Code is --contrast-foreground, in a link too.
 		cs := st
 		cs.code, cs.font, cs.size = true, Mono(), 0.85*st.size
 		cs.color = over(P.ContrastForeground, b.st.on)
-		b.addText(t, strings.ReplaceAll(sb.String(), "\n", " "), cs)
+		b.addText(t, strings.ReplaceAll(code, "\n", " "), cs)
 	case *ast.Emphasis:
 		es := st
 		if c.Level >= 2 {
@@ -613,7 +809,32 @@ func (b *mdBuilder) inline(t *inlineText, c ast.Node, st runStyle) {
 		ss := st
 		ss.strike = true
 		b.inlines(t, c, ss)
+	case *east.FootnoteLink:
+		// <sup><a data-footnote-ref>: the note's number raised as super
+		// does, 11/600 in a link's colour, centred in at least 16dp.
+		r := b.run(strconv.Itoa(c.Index), st)
+		r.font, r.size, r.color = UI(font.SemiBold), 11, over(P.InfoForeground, b.st.on)
+		r.box, r.raise = 16, st.size/3+1
+		t.runs = append(t.runs, r)
+	case *east.FootnoteBacklink:
+		// The note's way back to its reference: a space, then "↩" so.
+		if c.RefIndex == 0 {
+			b.addText(t, " ", st)
+		}
+		r := b.run("↩", st)
+		r.font, r.size, r.color, r.box = UI(font.SemiBold), 11, over(P.InfoForeground, b.st.on), 16
+		t.runs = append(t.runs, r)
 	case *ast.Link:
+		// A link to a file is its chip, after the link's words unless they
+		// only name the file again (ChatMarkdown.tsx:1381-1409).
+		if chip := b.fileChip(string(c.Destination), st); chip != nil {
+			if !isFileLabel(b.plainOf(c), string(c.Destination)) {
+				b.inlines(t, c, st)
+				b.addText(t, " ", st)
+			}
+			t.runs = append(t.runs, *chip)
+			return
+		}
 		b.links = append(b.links, string(c.Destination))
 		ls := st
 		ls.link, ls.color = len(b.links), over(P.InfoForeground, b.st.on)
@@ -916,6 +1137,11 @@ func (n *mdNode) margins() (top, bottom float32) {
 	switch {
 	case n.kind == mdHeading:
 		return 20, 8
+	case n.kind == mdDetails:
+		return 8, 8
+	case n.kind == mdFootnotes:
+		// It ends the message, whose last margin goes.
+		return 20, 0
 	case n.own:
 		return n.mt, n.mb
 	case n.kind == mdRule || n.tight:
@@ -1024,6 +1250,19 @@ func (th *Theme) mdBlock(gtx C, doc *mdDoc, n *mdNode, st mdStyle) int {
 		return th.mdTable(gtx, doc, n, st)
 	case mdCite:
 		return th.citeCard(gtx, n.cite, st)
+	case mdDetails:
+		return th.mdDetails(gtx, doc, n, st)
+	case mdFootnotes:
+		// A 1dp --contrast-border rule, 12dp, then the list, its first
+		// item's margin inside that padding.
+		px := max(1, dp(gtx, 1))
+		hline(gtx, over(P.ContrastBorder, st.on), 0, 0, w)
+		top, _ := n.kids[0].margins()
+		y := px + dp(gtx, 12) + dp(gtx, top)
+		off := op.Offset(image.Pt(0, y)).Push(gtx.Ops)
+		y += th.mdList(gtx, doc, n.kids[0], st)
+		off.Pop()
+		return y
 	}
 	return 0
 }
@@ -1079,6 +1318,56 @@ func (th *Theme) mdAlert(gtx C, doc *mdDoc, n *mdNode, st mdStyle) int {
 	return h
 }
 
+// mdDetails is MarkdownDetails: between rules at border/60, a 36dp
+// trigger, a 16dp muted chevron turned down while open 8dp before the
+// summary in medium foreground ("Details" without one), over the blocks,
+// 24dp in and 12dp over the bottom rule, while open. A click on the
+// trigger opens or closes it.
+func (th *Theme) mdDetails(gtx C, doc *mdDoc, n *mdNode, st mdStyle) int {
+	w := gtx.Constraints.Max.X
+	id := th.blockID(st)
+	if th.tl.opened == nil {
+		th.tl.opened = map[string]bool{}
+	}
+	th.events(gtx, id)
+	if th.clicked(id) {
+		th.tl.opened[id] = !th.tl.opened[id]
+	}
+	open := n.open != th.tl.opened[id]
+	px, trig := max(1, dp(gtx, 1)), dp(gtx, 36)
+	rule := over(faded(P.Border, 0x99), st.on)
+	hline(gtx, rule, 0, 0, w)
+	icon := "chevron-right"
+	if open {
+		icon = "chevron-down"
+	}
+	io := op.Offset(image.Pt(0, px+(trig-dp(gtx, 16))/2)).Push(gtx.Ops)
+	LucideW(icon, over(P.MutedForeground, st.on), 16)(gtx)
+	io.Pop()
+	summary := n.summary
+	if summary == "" {
+		summary = "Details"
+	}
+	so := op.Offset(image.Pt(dp(gtx, 16+8), px+(trig-dp(gtx, 20))/2)).Push(gtx.Ops)
+	th.textLine(within(gtx, w-dp(gtx, 16+8)), Txt{Size: 14, Font: UI(font.Medium), Color: over(P.Foreground, st.on)}, 20, summary)
+	so.Pop()
+	ho := op.Offset(image.Pt(0, px)).Push(gtx.Ops)
+	th.hit(gtx, id, image.Pt(w, trig))
+	ho.Pop()
+	y := px + trig
+	if open && len(n.kids) > 0 {
+		top, _ := n.kids[0].margins()
+		_, bottom := n.kids[len(n.kids)-1].margins()
+		y += dp(gtx, top)
+		ko := op.Offset(image.Pt(dp(gtx, 24), y)).Push(gtx.Ops)
+		y += th.mdStack(within(gtx, w-dp(gtx, 24)), doc, n.kids, st)
+		ko.Pop()
+		y += dp(gtx, bottom) + dp(gtx, 12)
+	}
+	hline(gtx, rule, y, 0, w)
+	return y + px
+}
+
 // mdList lays out a list's items with their markers in the 20dp gutter:
 // discs, circles and squares by depth, or numbers widened for two digits.
 func (th *Theme) mdList(gtx C, doc *mdDoc, n *mdNode, st mdStyle) int {
@@ -1090,10 +1379,14 @@ func (th *Theme) mdList(gtx C, doc *mdDoc, n *mdNode, st mdStyle) int {
 	g := within(gtx, w-gutter)
 	y := 0
 	var prev float32
+	gap := float32(4) // li + li, 5.6 in footnotes
+	if n.notes {
+		gap = 5.6
+	}
 	for i, item := range n.kids {
 		top, bottom := item.margins()
 		if i > 0 {
-			y += dp(gtx, max(prev, top, 4)) // li + li
+			y += dp(gtx, max(prev, top, gap))
 		}
 		off := op.Offset(image.Pt(gutter, y)).Push(gtx.Ops)
 		h := th.mdStack(g, doc, item.kids, st)
@@ -1110,7 +1403,11 @@ func (th *Theme) mdList(gtx C, doc *mdDoc, n *mdNode, st mdStyle) int {
 // listMarker draws an item's marker on its first line: a 13dp checkbox
 // for a task, else the bullet or number, ending before the gutter's edge.
 func (th *Theme) listMarker(gtx C, n, item *mdNode, gutter int, st mdStyle) {
-	line := dp(gtx, 22.75)
+	size, lineH, col := float32(14), float32(22.75), st.color
+	if n.notes {
+		size, lineH, col = 12, 19.5, over(P.ContrastMutedForeground, st.on)
+	}
+	line := dp(gtx, lineH)
 	switch {
 	case item.task > 0:
 		s := dp(gtx, 13)
@@ -1123,7 +1420,7 @@ func (th *Theme) listMarker(gtx C, n, item *mdNode, gutter int, st mdStyle) {
 		}
 		// The number and its ". ", tabular, ending where the text starts.
 		m := op.Record(gtx.Ops)
-		d := th.textLine(within(gtx, gutter), Txt{Size: 14, Color: st.color}, 22.75, listNumber(item.number, style)+". ")
+		d := th.textLine(within(gtx, gutter), Txt{Size: unit.Sp(size), Color: col}, lineH, listNumber(item.number, style)+". ")
 		call := m.Stop()
 		off := op.Offset(image.Pt(gutter-d.Size.X, 0)).Push(gtx.Ops)
 		call.Add(gtx.Ops)
