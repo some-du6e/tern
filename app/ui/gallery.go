@@ -43,7 +43,12 @@ func (th *Theme) gallery(gtx C, g *Gallery) {
 	size := gtx.Constraints.Max
 	th.galleryKeys(gtx)
 	fill(gtx, veil, image.Rectangle{Max: size}, 0)
-	th.hit(gtx, "gallery.close", size)
+	func() {
+		// The veil closes the dialog on a click, under the default cursor.
+		c, _ := th.events(gtx, "gallery.close")
+		defer clip.Rect{Max: size}.Push(gtx.Ops).Pop()
+		c.Add(gtx.Ops)
+	}()
 	pw, ph := size.X*92/100, size.Y*92/100
 	popup := image.Rectangle{Min: image.Pt((size.X-pw)/2, (size.Y-ph)/2)}
 	popup.Max = popup.Min.Add(image.Pt(pw, ph))

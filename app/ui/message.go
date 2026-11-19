@@ -21,9 +21,10 @@ import (
 
 // The messages (TimelineUserMessageRow.tsx, TimelineAssistantRows.tsx;
 // docs/ui/06-timeline.md §2.3, §2.4, §3.3, §3.4): the user's in a bubble
-// at the lane's right, with its pictures above it and its time and copy
-// button under it; the assistant's as markdown across the lane, with the
-// response's copy button and time under its last message.
+// at the lane's right, with its pictures above it and its time, copy and
+// prompt link under it, an agent's or an automation's folded to a line;
+// the assistant's as markdown across the lane, with the response's copy
+// and fork buttons and time under its last message.
 
 // Picture is a sent image, scaled once for the timeline: 384px tall at
 // most (the lone image's 192dp at 2x), its shape kept.
