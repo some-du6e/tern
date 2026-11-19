@@ -52,11 +52,56 @@ type diffView struct {
 	sub     string // the scope menu's open submenu
 	// Where the scope menu sits in the panel, for a submenu to flip.
 	panelW, menuX int
-	// The file tree pane's dragged width in dp, and its edge.
+	// The file tree pane's dragged width in dp, and its edge; and the
+	// pointer over the tree, which shows its indent guides.
 	treeW    float32
 	treeEdge handle
+	treeTag  int
+	treeHot  bool
 	layouts  map[layoutKey]*fileLayout
 	rev      string // the files the layouts are for
+	flips    map[string]flipState
+}
+
+// flipState is a two-way state and when it last changed, for its
+// transition; zero for a state first seen as it is.
+type flipState struct {
+	on bool
+	at time.Time
+}
+
+// flipped is how far id has eased toward on since it last changed, 0 to
+// 1 over d: T3's 120, 150 and 200ms transitions. A state seen for the
+// first time is already there.
+func (th *Theme) flipped(gtx C, id string, on bool, d time.Duration) float32 {
+	if th.dv.flips == nil {
+		th.dv.flips = map[string]flipState{}
+	}
+	f, ok := th.dv.flips[id]
+	switch {
+	case !ok:
+		f = flipState{on: on}
+	case f.on != on:
+		f = flipState{on, gtx.Now}
+	}
+	th.dv.flips[id] = f
+	if f.at.IsZero() {
+		return 1
+	}
+	t := clamp01(float32(gtx.Now.Sub(f.at)) / float32(d))
+	if t < 1 {
+		gtx.Execute(op.InvalidateCmd{})
+	}
+	return easeOut(t)
+}
+
+// toward is how far a colour has gone from off to on, p of the way into
+// the latest change.
+func toward(off, on color.NRGBA, now bool, p float32) color.NRGBA {
+	if now {
+		return lerpCol(off, on, p)
+	}
+	return lerpCol(on, off, p)
 }
 
 // lineSel is a run of selected lines in one file, from row a to row b.
@@ -133,11 +178,16 @@ func (th *Theme) codeView(gtx C, s *Scene, d *DiffPanel) {
 		if !f.Collapsed {
 			y1 += th.layoutFor(gtx, d, f, w, ch).h
 		}
+		// An unfolded body fades in over 200ms; folding cuts it at once.
+		fadeIn := th.flipped(gtx, "unfold:"+d.Key+"\x00"+f.Path(), !f.Collapsed, 200*time.Millisecond)
 		if y1 <= 0 || y0 >= size.Y {
 			continue
 		}
 		if !f.Collapsed {
-			th.fileBody(gtx, d, f, image.Pt(0, y0+dp(gtx, fileHeaderH)), w, size.Y, ch)
+			func() {
+				defer paint.PushOpacity(gtx.Ops, fadeIn).Pop()
+				th.fileBody(gtx, d, f, image.Pt(0, y0+dp(gtx, fileHeaderH)), w, size.Y, ch)
+			}()
 		}
 		hy := max(y0, min(0, y1-dp(gtx, fileHeaderH)))
 		func() {
@@ -378,7 +428,7 @@ func (th *Theme) fileHeader(gtx C, s *Scene, f *DiffFile, w int) {
 	func() {
 		defer op.Offset(image.Pt(x, (h-dp(gtx, 16))/2)).Push(gtx.Ops).Pop()
 		icon, col := changeIcon(f.Type)
-		PierreW(icon, col, c.bg, 16)(gtx)
+		spriteW(icon, col, c.bg, 16)(gtx)
 	}()
 	x += dp(gtx, 16+8)
 	// The counts, right to left from 12dp in: deletions, then additions,
@@ -399,10 +449,9 @@ func (th *Theme) fileHeader(gtx C, s *Scene, f *DiffFile, w int) {
 		}()
 	}
 	// The path, its start cut away when it doesn't fit, so its end shows.
+	// The path turns toward primary on hover, over 120ms.
 	title := Txt{Size: 12, LineH: 16.0 / 12, Color: c.title, MaxLines: 1}
-	if tc.Hovered() {
-		title.Color = c.titleHot
-	}
+	title.Color = toward(c.title, c.titleHot, tc.Hovered(), th.flipped(gtx, tid, tc.Hovered(), 120*time.Millisecond))
 	room := right - dp(gtx, 8) - x - dp(gtx, 8+20)
 	if f.PrevName != "" {
 		prev := title
@@ -415,7 +464,7 @@ func (th *Theme) fileHeader(gtx C, s *Scene, f *DiffFile, w int) {
 		x += pw
 		func() {
 			defer op.Offset(image.Pt(x, (h-dp(gtx, 16))/2)).Push(gtx.Ops).Pop()
-			PierreW("diffs-icon-arrow-right-short", title.Color, c.bg, 16)(gtx)
+			spriteW("diffs-icon-arrow-right-short", title.Color, c.bg, 16)(gtx)
 		}()
 		x += dp(gtx, 16)
 		room -= pw + dp(gtx, 16)

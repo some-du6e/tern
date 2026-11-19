@@ -14,7 +14,10 @@ LUCIDE = ["settings", "server", "laptop", "monitor", "circle-user", "git-branch"
           "terminal", "globe", "arrow-left", "arrow-right", "rotate-cw", "plus", "x",
           "panel-left", "panel-left-close", "maximize-2", "minimize-2", "check", "chevron-right",
           "chevron-down", "loader-circle", "square-pen", "search", "list-filter", "folder-plus",
-          "git-pull-request", "chart-no-axes-column", "pin", "archive", "trash-2", "clock"]
+          "git-pull-request", "chart-no-axes-column", "pin", "archive", "trash-2", "clock",
+          # the Diff surface: its toolbar, file headers, menus and the changed files card
+          "chevrons-down-up", "chevrons-up-down", "rows-3", "columns-2", "text-wrap", "pilcrow",
+          "flask-conical-off", "folder-tree", "refresh-cw", "copy", "file-diff", "folder-closed"]
 
 assets = pathlib.Path(sys.argv[1])
 bundle = "\n".join(p.read_text(errors="replace") for p in assets.glob("*.js"))

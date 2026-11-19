@@ -448,10 +448,11 @@ func (th *Theme) diffToolbar(gtx C, d *DiffPanel) D {
 func (th *Theme) diffLayoutGroup(d *DiffPanel) W {
 	return func(gtx C) D {
 		w, h := dp(gtx, 70), dp(gtx, 28)
-		bg := over(fade(P.Input, 40), P.Background)
+		bg := over(twAlpha(P.Input, 40), P.Background)
 		fill(gtx, bg, image.Rect(0, 0, w, h), dp(gtx, 8))
-		seg := func(id, tip, icon string, on bool, x float32) {
-			t := diffTool{id: id, tip: tip, icon: icon, w: 32, h: 24, radius: 6, col: P.MutedForeground, alpha: 0.8,
+		// Its segments have no tooltips, unlike the toggles after it.
+		seg := func(id, icon string, on bool, x float32) {
+			t := diffTool{id: id, icon: icon, w: 32, h: 24, radius: 6, col: P.MutedForeground, alpha: 0.8,
 				hot: alpha(P.Background, 0x8c)}
 			if dark {
 				t.hot = alpha(rgb(0xffffff), 0x09)
@@ -465,8 +466,8 @@ func (th *Theme) diffLayoutGroup(d *DiffPanel) W {
 			defer op.Offset(image.Pt(dp(gtx, x), dp(gtx, 2))).Push(gtx.Ops).Pop()
 			th.diffToolW(t, bg)(gtx)
 		}
-		seg("diff.layout:stacked", "Stacked diff view", "rows-3", !d.Split, 2)
-		seg("diff.layout:split", "Split diff view", "columns-2", d.Split, 36)
+		seg("diff.layout:stacked", "rows-3", !d.Split, 2)
+		seg("diff.layout:split", "columns-2", d.Split, 36)
 		return D{Size: image.Pt(w, h)}
 	}
 }
@@ -536,8 +537,8 @@ func (th *Theme) diffNotice(gtx C, msg string, y int) int {
 	call := m.Stop()
 	h := dd.Size.Y + dp(gtx, 12) + max(1, dp(gtx, 1))
 	defer op.Offset(image.Pt(0, y)).Push(gtx.Ops).Pop()
-	fill(gtx, over(fade(P.Muted, 40), P.Background), image.Rect(0, 0, w, h), 0)
-	hline(gtx, over(fade(P.Border, 70), P.Background), h-max(1, dp(gtx, 1)), 0, w)
+	fill(gtx, over(twAlpha(P.Muted, 40), P.Background), image.Rect(0, 0, w, h), 0)
+	hline(gtx, over(twAlpha(P.Border, 70), P.Background), h-max(1, dp(gtx, 1)), 0, w)
 	defer op.Offset(image.Pt(dp(gtx, 12), dp(gtx, 6))).Push(gtx.Ops).Pop()
 	call.Add(gtx.Ops)
 	return h
@@ -566,7 +567,7 @@ func (th *Theme) diffRaw(gtx C, d *DiffPanel) {
 	r := image.Rect(0, 0, w, td.Size.Y+dp(gtx, 24))
 	rad := dp(gtx, 6)
 	fill(gtx, over(alpha(P.Background, 0xb3), P.Background), r, rad)
-	strokeRect(gtx, over(fade(P.Border, 70), P.Background), r, rad, float32(max(1, dp(gtx, 1))))
+	strokeRect(gtx, over(twAlpha(P.Border, 70), P.Background), r, rad, float32(max(1, dp(gtx, 1))))
 	defer op.Offset(image.Pt(dp(gtx, 12), dp(gtx, 12))).Push(gtx.Ops).Pop()
 	call.Add(gtx.Ops)
 }
@@ -579,7 +580,7 @@ func (th *Theme) diffSkeleton(gtx C) {
 	defer clip.Rect{Max: size}.Push(gtx.Ops).Pop()
 	a := skeletonAlpha(gtx)
 	bar := over(alpha(P.MutedForeground, uint8(float32(0x26)*a+0.5)), P.Background)
-	line := over(fade(P.Border, 40), P.Background)
+	line := over(twAlpha(P.Border, 40), P.Background)
 	// Rows are padded 8 on the left and 12 on the right.
 	left, right := dp(gtx, 8), size.X-dp(gtx, 12)
 	y := 0
@@ -658,7 +659,7 @@ func (th *Theme) diffFiles(gtx C, s *Scene, d *DiffPanel) {
 		defer op.Offset(image.Pt(size.X-tw, 0)).Push(gtx.Ops).Pop()
 		g := gtx
 		g.Constraints = layout.Exact(image.Pt(tw, size.Y))
-		th.treePane(g, d, size.X)
+		th.treePane(g, d)
 	}
 }
 

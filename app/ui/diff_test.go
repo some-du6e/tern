@@ -160,7 +160,7 @@ func TestDiffToolbar(t *testing.T) {
 	})
 	accent := over(P.Accent, bg)
 	wantPixel(t, img, image.Pt(336, 3), bg, "collapse all, a ghost button")
-	wantPixel(t, img, image.Pt(366, 14), over(argb(0x66d4d4d8), bg), "the layout group, input at 40%")
+	wantPixel(t, img, image.Pt(404, 14), over(argb(0x66d4d4d8), bg), "the layout group, input at 40%, under the split segment")
 	wantPixel(t, img, image.Pt(371, 6), bg, "the stacked segment, raised")
 	wantPixel(t, img, image.Pt(437, 14), bg, "the gap after the group")
 	wantPixel(t, img, image.Pt(442, 3), accent, "wrapping, pressed")
@@ -204,7 +204,7 @@ func TestDiffSkeleton(t *testing.T) {
 		th.diffSkeleton(gtx)
 		return D{}
 	})
-	wantPixel(t, img, image.Pt(20, 44), over(fade(P.Border, 40), bg), "separator hairline")
+	wantPixel(t, img, image.Pt(20, 44), over(twAlpha(P.Border, 40), bg), "separator hairline")
 	if got := img.RGBAAt(18, 16); got.R >= bg.R-4 {
 		t.Errorf("the header's first bar is #%02x%02x%02x, no darker than the surface", got.R, got.G, got.B)
 	}

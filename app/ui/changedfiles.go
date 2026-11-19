@@ -4,6 +4,7 @@ import (
 	"image"
 	"image/color"
 	"math"
+	"time"
 
 	"gioui.org/f32"
 	"gioui.org/font"
@@ -64,7 +65,7 @@ func (th *Theme) changedFilesCard(gtx C, f *ChangedFiles) D {
 	w := gtx.Constraints.Max.X
 	bg := over(P.Secondary, P.Background)
 	if dark {
-		bg = over(fade(P.Input, 20), P.Background)
+		bg = over(twAlpha(P.Input, 20), P.Background)
 	}
 	listed := 0
 	folders := false
@@ -232,9 +233,12 @@ func (th *Theme) cardFileRow(gtx C, f *ChangedFiles, r cardRow, w int, bg color.
 	}
 	c, _ := th.events(gtx, id)
 	hot := c.Hovered()
+	// Its colours and background ease in and out over 150ms.
+	ease := th.flipped(gtx, "hot:"+id, hot, 150*time.Millisecond)
+	tone := func(off, on color.NRGBA) color.NRGBA { return toward(off, on, hot, ease) }
 	h := dp(gtx, 28)
-	if hot {
-		fill(gtx, over(fade(P.Accent, 60), bg), image.Rect(0, 0, w, h), dp(gtx, 6))
+	if hl := tone(bg, over(twAlpha(P.Accent, 60), bg)); hl != bg {
+		fill(gtx, hl, image.Rect(0, 0, w, h), dp(gtx, 6))
 	}
 	x := dp(gtx, 8+14*float32(r.depth))
 	right := w - dp(gtx, 8)
@@ -249,16 +253,16 @@ func (th *Theme) cardFileRow(gtx C, f *ChangedFiles, r cardRow, w int, bg color.
 	}
 	if n.Dir {
 		open := f.open(n.Path)
-		chev := over(alpha(P.MutedForeground, 0xb3), bg)
-		if hot {
-			chev = over(alpha(P.Foreground, 0xcc), bg)
-		}
+		chev := tone(over(twAlpha(P.MutedForeground, 70), bg), over(twAlpha(P.Foreground, 80), bg))
 		func() {
 			defer op.Offset(image.Pt(x, (h-dp(gtx, 14))/2)).Push(gtx.Ops).Pop()
-			if open {
-				mid := float32(dp(gtx, 14)) / 2
-				defer op.Affine(f32.Affine2D{}.Rotate(f32.Pt(mid, mid), math.Pi/2)).Push(gtx.Ops).Pop()
+			// It turns a quarter as the folder opens, over 150ms.
+			turn := th.flipped(gtx, "open:"+id, open, 150*time.Millisecond)
+			if !open {
+				turn = 1 - turn
 			}
+			mid := float32(dp(gtx, 14)) / 2
+			defer op.Affine(f32.Affine2D{}.Rotate(f32.Pt(mid, mid), turn*math.Pi/2)).Push(gtx.Ops).Pop()
 			LucideW("chevron-right", chev, 14)(gtx)
 		}()
 		x += dp(gtx, 14+8)
@@ -271,10 +275,8 @@ func (th *Theme) cardFileRow(gtx C, f *ChangedFiles, r cardRow, w int, bg color.
 			LucideW(icon, over(alpha(P.MutedForeground, 0xbf), bg), 14)(gtx)
 		}()
 		x += dp(gtx, 14+8)
-		name := Txt{Size: 11, LineH: 16.0 / 11, Font: Mono(), Color: over(alpha(P.MutedForeground, 0xe6), bg), MaxLines: 1}
-		if hot {
-			name.Color = over(alpha(P.Foreground, 0xe6), bg)
-		}
+		name := Txt{Size: 11, LineH: 16.0 / 11, Font: Mono(), MaxLines: 1,
+			Color: tone(over(twAlpha(P.MutedForeground, 90), bg), over(twAlpha(P.Foreground, 90), bg))}
 		func() {
 			defer op.Offset(image.Pt(x, (h-dp(gtx, 16))/2)).Push(gtx.Ops).Pop()
 			g := gtx
@@ -285,16 +287,12 @@ func (th *Theme) cardFileRow(gtx C, f *ChangedFiles, r cardRow, w int, bg color.
 		if folders || r.depth > 0 {
 			x += dp(gtx, 14+8)
 		}
-		icon, token := fileIcon(n.Path)
 		func() {
 			defer op.Offset(image.Pt(x, (h-dp(gtx, 14))/2)).Push(gtx.Ops).Pop()
-			PierreW(icon, fileIconColor(token), bg, 14)(gtx)
+			fileIconW(n.Path, 14, bg)(gtx)
 		}()
 		x += dp(gtx, 14+8)
-		name := Txt{Size: 12, LineH: 16.0 / 12, Font: Mono(), Color: over(alpha(P.Foreground, 0xd9), bg), MaxLines: 1}
-		if hot {
-			name.Color = P.Foreground
-		}
+		name := Txt{Size: 12, LineH: 16.0 / 12, Font: Mono(), MaxLines: 1, Color: tone(over(twAlpha(P.Foreground, 85), bg), P.Foreground)}
 		func() {
 			defer op.Offset(image.Pt(x, (h-dp(gtx, 16))/2)).Push(gtx.Ops).Pop()
 			th.cutMiddle(gtx, name, n.Name, right-x)

@@ -62,9 +62,9 @@ func dc() *diffColors {
 	return &diffLight
 }
 
-// fade is Tailwind's token/pct: the token with its own alpha times pct%,
+// twAlpha is Tailwind's token/pct: the token with its own alpha times pct%,
 // rounded as the browser's color-mix is.
-func fade(c color.NRGBA, pct int) color.NRGBA {
+func twAlpha(c color.NRGBA, pct int) color.NRGBA {
 	c.A = uint8((int(c.A)*pct + 50) / 100)
 	return c
 }

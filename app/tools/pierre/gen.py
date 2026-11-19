@@ -1,216 +1,220 @@
-"""Copies the icons T3's diff viewer and file trees draw out of its web
-client into ui/pierre.go: Pierre's sprites (@pierre/diffs, @pierre/trees,
-Apache-2.0, Pierre Computer Company), T3's own file icons
-(pierre-icons.ts), and the tables that pick a file's icon by its name.
+"""Copies T3's file icons out of its web client into ui/pierre.go.
 
-Pierre's icons are filled shapes on a 16x16 grid, some in layers at an
-opacity; T3's are 24x24 or 32x32, filled or stroked, some in fixed
-light-dark colours. Every shape becomes SVG path data.
+T3 draws file icons from one SVG sprite: @pierre/trees' built-in set and
+T3's own symbols (apps/web/src/pierre-icons.ts), picked by file name and
+extension and coloured by token (PierreEntryIcon.tsx). This takes the
+shapes, the tables that pick them and the colours from the shipped bundles.
 
-    python3 tools/pierre/gen.py <t3 client assets dir> > ui/pierre.go
+    python3 tools/pierre/gen.py <t3 client assets dir> | gofmt > ui/pierre.go
 """
 import pathlib
 import re
 import sys
-import xml.etree.ElementTree as ET
-
-# The diff viewer's icons tern draws (§2.12): change types, the rename
-# arrow, hunk expanders and the gutter's comment button.
-DIFFS = ["diffs-icon-symbol-modified", "diffs-icon-symbol-added", "diffs-icon-symbol-deleted",
-         "diffs-icon-symbol-moved", "diffs-icon-file-code", "diffs-icon-arrow-right-short",
-         "diffs-icon-expand", "diffs-icon-expand-all", "diffs-icon-plus"]
 
 assets = pathlib.Path(sys.argv[1])
 
 
-def bundle(prefix):
-    files = sorted(assets.glob(prefix + "-*.js"))
-    if not files:
-        raise SystemExit(f"no {prefix} bundle")
-    return files[0].read_text(errors="replace")
+def bundle(prefix, holding):
+    """The bundle named prefix-<hash>.js that holds the text holding."""
+    for p in sorted(assets.glob(prefix + "-*.js")):
+        js = p.read_text()
+        if holding in js:
+            return js
+    raise SystemExit(f"no {prefix} bundle with {holding}")
 
 
-def unescape(s):
-    return s.replace('\\"', '"').replace("\\n", "\n").replace("\\t", "\t")
+icons_js = bundle("pierre-icons", "file-tree-builtin-")
+entry_js = bundle("PierreEntryIcon", "astro:[")
+utils_js = bundle("utils", "video/x-msvideo")
 
 
-def symbols(text):
-    out = {}
-    for m in re.finditer(r'<symbol id="([a-z0-9-]+)"[^>]*viewBox="0 0 (\d+) (\d+)"[^>]*>(.*?)</symbol>',
-                         unescape(text), re.S):
-        out[m.group(1)] = (int(m.group(2)), m.group(4))
-    return out
+def table(js, name):
+    """A minified object literal of string values: name={k:`v`,"k":`v`}."""
+    m = re.search(r"(?:^|[,;{ ])" + re.escape(name) + r"=\{(.*?)\}[,;]", js, re.S)
+    if not m:
+        raise SystemExit(f"no table {name}")
+    return pairs(m.group(1))
 
 
-def colour(v):
-    """A fill or stroke value: None for currentColor, else (light, dark)."""
-    v = (v or "").strip()
-    m = re.fullmatch(r"var\(--[\w-]+,\s*(.*)\)", v)
-    if m:
-        return colour(m.group(1))
-    m = re.fullmatch(r"light-dark\(\s*#([0-9a-fA-F]{6})\s*,\s*#([0-9a-fA-F]{6})\s*\)", v)
-    if m:
-        return (m.group(1).lower(), m.group(2).lower())
-    m = re.fullmatch(r"#([0-9a-fA-F]{6})", v)
-    if m:
-        return (m.group(1).lower(), m.group(1).lower())
-    if v.lower() in ("", "currentcolor"):
-        return None
-    raise SystemExit(f"unknown colour {v!r}")
+def pairs(js):
+    """The key:`value` pairs of an object literal's body."""
+    return {a or b: v for a, b, v in re.findall(r'(?:"([^"]+)"|([\w$]+)):`([^`]*)`', js)}
 
 
-def style(el):
-    st = dict(el.attrib)
-    for decl in el.attrib.get("style", "").split(";"):
-        if ":" in decl:
-            k, v = decl.split(":", 1)
-            st[k.strip()] = v.strip()
-    return st
+def colour_table(js, name):
+    m = re.search(re.escape(name) + r"=\{(.*?)\}[,;]", js, re.S)
+    if not m:
+        raise SystemExit(f"no colour table {name}")
+    return {k: (a, b) for k, a, b in re.findall(r"([\w$]+):\[`(#[0-9a-f]{6})`,`(#[0-9a-f]{6})`\]", m.group(1))}
+
+
+# The colour of each token, light and dark: PierreEntryIcon's first table.
+m = re.search(r"([\w$]+)=\{astro:\[`#", entry_js)
+if not m:
+    raise SystemExit("no icon colours")
+colours = colour_table(entry_js, m.group(1))
+
+# The built-in tables: file names, extensions, and the complete set's own.
+names_var = re.search(r"([\w$]+)=\{\"\.babelrc\":`babel`", icons_js).group(1)
+exts_var = re.search(r"([\w$]+)=\{\"7z\":`zip`", icons_js).group(1)
+complete_var = re.search(r"([\w$]+)=\{jsx:`react`", icons_js).group(1)
+names, exts, complete = table(icons_js, names_var), table(icons_js, exts_var), table(icons_js, complete_var)
+
+# T3's own: byFileName, byFileExtension (videos first), the language aliases.
+t3 = re.search(r"byFileName:\{(.*?)\},byFileExtension:\{(.*?)\}\}", icons_js, re.S)
+t3_names = pairs(t3.group(1))
+videos = re.findall(r"\[`(\w+)`,`video/[^`]+`\]", re.search(r"new Map\(\[\[`avi`,`video/x-msvideo`\].*?\]\]\)", utils_js).group(0))
+t3_exts = {v: "t3-file-icon-video" for v in videos}
+t3_exts.update(pairs(t3.group(2)))
+aliases_var = re.search(r"([\w$]+)=\{bash:`sh`,csharp:`cs`", icons_js).group(1)
+aliases = table(icons_js, aliases_var)
+lang_names_var = re.search(r"([\w$]+)=\{dockerfile:`Dockerfile`\}", icons_js).group(1)
+lang_names = table(icons_js, lang_names_var)
+
+# The sprites, with T3's document colours put in.
+doc_var = re.search(r"([\w$]+)=\{\"t3-file-icon-pdf\":`light-dark", icons_js).group(1)
+doc = table(icons_js, doc_var)
+sprite = re.sub(r"\$\{" + re.escape(doc_var) + r"\[`([^`]+)`\]\}", lambda m: doc[m.group(1)], icons_js)
 
 
 def num(v):
     return float(v)
 
 
-def path_data(tag, a):
-    if tag == "path":
-        # A path's first move is absolute even when written "m".
-        m = re.match(r"\s*m\s*(-?[\d.]+)[\s,]*(-?[\d.]+)\s*(.*)", a["d"], re.S)
-        if not m:
-            return a["d"].strip()
-        rest = m.group(3)
-        if rest and (rest[0].isdigit() or rest[0] in "-."):
-            rest = "l" + rest
-        return f"M{m.group(1)} {m.group(2)}{rest}"
-    if tag == "circle":
+def attrs(s):
+    return dict(re.findall(r'([\w-]+)="([^"]*)"', s))
+
+
+def light_dark(v):
+    m = re.search(r"light-dark\((#[0-9a-f]{6}),\s*(#[0-9a-f]{6})\)", v)
+    return (m.group(1), m.group(2)) if m else None
+
+
+def style_of(a, prop):
+    m = re.search(prop + r":\s*([^;]+)", a.get("style", ""))
+    return m.group(1) if m else None
+
+
+def shape_d(kind, a):
+    if kind == "path":
+        return a["d"]
+    if kind == "circle":
         cx, cy, r = num(a["cx"]), num(a["cy"]), num(a["r"])
         return f"M{cx-r:g} {cy:g}a{r:g} {r:g} 0 1 0 {2*r:g} 0a{r:g} {r:g} 0 1 0 {-2*r:g} 0Z"
-    if tag == "rect":
+    if kind == "rect":
         x, y, w, h = num(a.get("x", 0)), num(a.get("y", 0)), num(a["width"]), num(a["height"])
-        rx = num(a.get("rx", a.get("ry", 0)))
-        ry = num(a.get("ry", rx))
+        rx = num(a.get("rx", 0))
         if rx == 0:
             return f"M{x:g} {y:g}h{w:g}v{h:g}h{-w:g}Z"
-        return (f"M{x+rx:g} {y:g}H{x+w-rx:g}A{rx:g} {ry:g} 0 0 1 {x+w:g} {y+ry:g}V{y+h-ry:g}"
-                f"A{rx:g} {ry:g} 0 0 1 {x+w-rx:g} {y+h:g}H{x+rx:g}A{rx:g} {ry:g} 0 0 1 {x:g} {y+h-ry:g}"
-                f"V{y+ry:g}A{rx:g} {ry:g} 0 0 1 {x+rx:g} {y:g}Z")
-    raise SystemExit(f"unknown shape {tag}")
+        return (f"M{x+rx:g} {y:g}H{x+w-rx:g}A{rx:g} {rx:g} 0 0 1 {x+w:g} {y+rx:g}V{y+h-rx:g}"
+                f"A{rx:g} {rx:g} 0 0 1 {x+w-rx:g} {y+h:g}H{x+rx:g}A{rx:g} {rx:g} 0 0 1 {x:g} {y+h-rx:g}"
+                f"V{y+rx:g}A{rx:g} {rx:g} 0 0 1 {x+rx:g} {y:g}Z")
+    raise SystemExit(f"unknown shape {kind}")
 
 
-def shapes(name, body):
-    root = ET.fromstring(f'<g xmlns="http://www.w3.org/2000/svg">{body}</g>')
-    out = []
+def paint(a, group, prop, default=None):
+    """A shape's fill or stroke, its own or its group's: None, "current",
+    (light, dark), or ("grad", id)."""
+    v = style_of(a, prop) or a.get(prop) or style_of(group, prop) or group.get(prop) or default
+    if v is None or v == "none":
+        return None
+    if v.lower() == "currentcolor":
+        return "current"
+    if v.startswith("url(#"):
+        return ("grad", v[5:-1])
+    ld = light_dark(v)
+    if ld:
+        return ld
+    if re.fullmatch(r"#[0-9a-f]{6}", v):
+        return (v, v)
+    raise SystemExit(f"unknown paint {v}")
 
-    def walk(el, inherited):
-        st = {**inherited, **{k: v for k, v in style(el).items() if k in ("fill", "stroke", "stroke-width", "opacity", "fill-rule")}}
-        tag = el.tag.split("}")[-1]
-        if tag == "defs":
-            return
-        if tag == "g":
-            for c in el:
-                walk(c, st)
-            return
-        if st.get("fill", "").startswith("url("):
-            # Next.js's one gradient, current colour fading out: tern paints
-            # its middle, current colour at half.
-            st["fill"], st["opacity"] = "currentColor", 0.5
-        stroked = st.get("fill") == "none"
-        col = colour(st.get("stroke") if stroked else st.get("fill"))
-        out.append({"d": path_data(tag, el.attrib), "opacity": float(st.get("opacity", 1)),
-                    "col": col, "stroke": float(st.get("stroke-width", 1)) if stroked else 0,
-                    "evenodd": st.get("fill-rule") == "evenodd"})
 
-    for c in root:
-        walk(c, {})
+def go_colour(c):
+    return "0x" + c[1:]
+
+
+def symbol(name, viewbox, body):
+    box = num(viewbox.split()[2])
+    grads = {}
+    for gid, ga, stops in re.findall(r'<linearGradient id="([^"]+)"([^>]*)>(.*?)</linearGradient>', body, re.S):
+        g = attrs(ga)
+        ops = [num(attrs(s).get("stop-opacity", "1")) for s in re.findall(r"<stop([^>]*)/?>", stops)]
+        grads[gid] = (num(g["x1"]), num(g["y1"]), num(g["x2"]), num(g["y2"]), ops[0], ops[-1])
+    body = re.sub(r"<defs>.*?</defs>", "", body, flags=re.S)
+    shapes = []
+    group = {}
+    for tag in re.finditer(r"<(/?)(\w+)([^>]*?)(/?)>", body):
+        close, kind, rest, selfclose = tag.groups()
+        if kind == "g":
+            group = {} if close else attrs(rest)
+            continue
+        if close or kind not in ("path", "circle", "rect"):
+            continue
+        a = attrs(rest)
+        d = shape_d(kind, a)
+        # Every shape names its paint; one that doesn't takes the icon's.
+        fill, stroke = paint(a, group, "fill", "currentColor"), paint(a, group, "stroke")
+        alpha = num(a.get("opacity", "1"))
+        even = a.get("fill-rule") == "evenodd"
+        for p, width in ((fill, 0), (stroke, num(a.get("stroke-width", group.get("stroke-width", "1"))))):
+            if p is None:
+                continue
+            fields = [f"d: `{d}`"]
+            if width:
+                fields.append(f"stroke: {width:g}")
+            if isinstance(p, tuple) and p[0] == "grad":
+                x1, y1, x2, y2, o1, o2 = grads[p[1]]
+                fields.append(f"fade: [4]float32{{{x1:g}, {y1:g}, {x2:g}, {y2:g}}}")
+            elif isinstance(p, tuple):
+                fields.append(f"own: true, light: {go_colour(p[0])}, dark: {go_colour(p[1])}")
+            if alpha != 1:
+                fields.append(f"alpha: {alpha:g}")
+            if even:
+                fields.append("evenOdd: true")
+            shapes.append("{" + ", ".join(fields) + "}")
+    return f'\t"{name}": {{{box:g}, []pierreShape{{{", ".join(shapes)}}}}},'
+
+
+symbols = {}
+for name, viewbox, body in re.findall(r'<symbol id="([^"]+)" viewBox="([^"]+)">(.*?)</symbol>', sprite, re.S):
+    if name.startswith("file-tree-builtin-") or name.startswith("t3-file-icon-"):
+        symbols[name] = symbol(name, viewbox, body)
+
+# Every icon a table can pick must be there.
+wanted = {"file-tree-builtin-" + t for t in list(names.values()) + list(exts.values()) + list(complete.values()) + ["default"]}
+wanted |= set(t3_names.values()) | set(t3_exts.values())
+missing = wanted - set(symbols)
+if missing:
+    raise SystemExit(f"missing icons {sorted(missing)}")
+
+
+def go_map(name, doc_lines, m, value=lambda v: f'"{v}"', typ="string"):
+    out = [f"// {line}" if line else "//" for line in doc_lines]
+    out.append(f"var {name} = map[string]{typ}{{")
+    for k in sorted(m):
+        out.append(f'\t"{k}": {value(m[k])},')
+    out.append("}")
+    out.append("")
     return out
 
 
-def go_icon(name, size, body):
-    parts = []
-    for s in shapes(name, body):
-        f = [f"d: `{s['d']}`"]
-        if s["opacity"] != 1:
-            f.append(f"opacity: {s['opacity']:g}")
-        if s["col"]:
-            f.append(f"light: 0x{s['col'][0]}, dark: 0x{s['col'][1]}, own: true")
-        if s["stroke"]:
-            f.append(f"stroke: {s['stroke']:g}")
-        if s["evenodd"]:
-            f.append("evenOdd: true")
-        parts.append("{" + ", ".join(f) + "}")
-    return f'\t"{name}": {{{size}, []pierreShape{{{", ".join(parts)}}}}},'
-
-
-PAIR = r'(?:"([^"]+)"|([\w$-]+)):`([^`]*)`'
-
-
-def pairs(text):
-    """The entries of a minified object literal of strings: k:`v`,"k.x":`v`."""
-    return {(a or b): v for a, b, v in re.findall(PAIR, text)}
-
-
-def js_object(text, var):
-    m = re.search(r"[,;\s]" + re.escape(var) + r"=\{([^}]*)\}", text)
-    if not m:
-        raise SystemExit(f"no table {var}")
-    return pairs(m.group(1))
-
-
-def go_table(name, doc, table):
-    out = doc + [f"var {name} = map[string]string{{"]
-    for k in sorted(table):
-        out.append(f'\t"{k}": "{table[k]}",')
-    return out + ["}", ""]
-
-
-diffs = symbols(bundle("getDiffFileInput"))
-icons_js = bundle("pierre-icons")
-# T3's document icons take their colour from DOCUMENT_ICON_COLORS, spliced
-# into the sprite's template as ${Y[`name`]}.
-doc_colours = re.search(r'[,;\s]Y=\{("t3-file-icon-pdf":.*?)\}', icons_js)
-if not doc_colours:
-    raise SystemExit("no document icon colours")
-doc_colours = pairs(doc_colours.group(1))
-trees = symbols(re.sub(r"\$\{Y\[`([\w-]+)`\]\}", lambda m: doc_colours[m.group(1)], icons_js))
-
-# @pierre/trees' tables: Te by file name, Ee by extension, De the
-# extensions the complete set maps first.
-tail = icons_js[icons_js.rfind("</svg>"):]
-names = js_object(icons_js, "Te")
-exts = js_object(icons_js, "Ee")
-complete = js_object(icons_js, "De")
-# T3's overrides, in its icon set Z: byFileName and byFileExtension, the
-# video extensions spread in first.
-z = re.search(r"byFileName:\{([^}]*)\},byFileExtension:\{(.*?)\}\}", tail, re.S)
-if not z:
-    raise SystemExit("no T3 icon overrides")
-t3_names, t3_exts = pairs(z.group(1)), pairs(z.group(2))
-videos = re.search(r"\[`avi`,`video/x-msvideo`\]((?:,\[`\w+`,`video/[\w.-]+`\])*)\]",
-                   "\n".join(p.read_text(errors="replace") for p in assets.glob("utils-*.js")))
-if not videos:
-    raise SystemExit("no video extensions")
-for ext in ["avi"] + re.findall(r"\[`(\w+)`,", videos.group(1)):
-    t3_exts.setdefault(ext, "t3-file-icon-video")
-
-out = ["// Code generated by tools/pierre/gen.py from T3's web client. DO NOT EDIT.", "",
-       "package ui", "",
-       "// pierreIcons are the icons T3's diff viewer and file trees draw: Pierre's",
-       "// sprites (@pierre/diffs, @pierre/trees; Apache-2.0, Pierre Computer",
-       "// Company) and T3's own file icons (pierre-icons.ts), each its viewBox",
-       "// side and its shapes as SVG path data.",
+out = ["// Code generated by tools/pierre/gen.py from T3's web client. DO NOT EDIT.", "", "package ui", "",
+       "// pierreIcons are the file icons T3 draws, @pierre/trees' and its own:",
+       "// each shape's path data in the icon's box, filled or stroked.",
        "var pierreIcons = map[string]pierreIcon{"]
-for name in DIFFS:
-    if name not in diffs:
-        raise SystemExit(f"no icon {name}")
-    out.append(go_icon(name, *diffs[name]))
-for name in sorted(trees):
-    out.append(go_icon(name, *trees[name]))
+out += [symbols[k] for k in sorted(symbols)]
 out += ["}", ""]
-out += go_table("pierreFileNames", ["// pierreFileNames is @pierre/trees' icon token by lowercase file name."], names)
-out += go_table("pierreExtensions", ["// pierreExtensions is its icon token by extension suffix."], exts)
-out += go_table("pierreCompleteExtensions", ["// pierreCompleteExtensions are the suffixes its complete set maps",
-                                             "// before pierreExtensions."], complete)
-out += go_table("t3FileNames", ["// t3FileNames and t3Extensions are T3's own icons by file name and",
-                                "// extension, which win over Pierre's tables."], t3_names)
-out += go_table("t3Extensions", [], t3_exts)
-print("\n".join(out).rstrip() + "\n")
+out += go_map("pierreNames", ["pierreNames, pierreExtensions and pierreComplete give file names and",
+                              "extensions their built-in icon's token (@pierre/trees' complete set)."], names)
+out += go_map("pierreExtensions", ["pierreExtensions: see pierreNames."], exts)
+out += go_map("pierreComplete", ["pierreComplete: see pierreNames."], complete)
+out += go_map("t3IconNames", ["t3IconNames and t3IconExtensions are T3's own picks, by icon name",
+                              "(pierre-icons.ts T3_PIERRE_ICONS)."], t3_names)
+out += go_map("t3IconExtensions", ["t3IconExtensions: see t3IconNames."], t3_exts)
+out += go_map("pierreColors", ["pierreColors are each token's colour, light and dark (PierreEntryIcon.tsx)."],
+              colours, lambda v: f"{{{go_colour(v[0])}, {go_colour(v[1])}}}", "[2]uint32")
+out += go_map("languageExtensions", ["languageExtensions and languageFileNames name a fence's language as a",
+                                     "file, for its icon (syntheticFileNameForLanguageId)."], aliases)
+out += go_map("languageFileNames", ["languageFileNames: see languageExtensions."], lang_names)
+print("\n".join(out).rstrip("\n"))

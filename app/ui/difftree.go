@@ -6,9 +6,12 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	"gioui.org/f32"
 	"gioui.org/font"
+	"gioui.org/io/event"
+	"gioui.org/io/pointer"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
@@ -47,11 +50,26 @@ func (th *Theme) treePanePx(gtx C, w int) int {
 
 // treePane is the pane: its left border and resize handle, the "Files"
 // header, then the rows.
-func (th *Theme) treePane(gtx C, d *DiffPanel, rowW int) {
+func (th *Theme) treePane(gtx C, d *DiffPanel) {
 	size := gtx.Constraints.Max
+	// The pointer over the tree shows its indent guides.
+	for {
+		ev, ok := gtx.Event(pointer.Filter{Target: &th.dv.treeTag, Kinds: pointer.Enter | pointer.Leave | pointer.Move})
+		if !ok {
+			break
+		}
+		if e, ok := ev.(pointer.Event); ok {
+			th.dv.treeHot = e.Kind != pointer.Leave
+		}
+	}
+	defer func() {
+		defer clip.Rect{Max: size}.Push(gtx.Ops).Pop()
+		defer pointer.PassOp{}.Push(gtx.Ops).Pop()
+		event.Op(gtx.Ops, &th.dv.treeTag)
+	}()
 	fill(gtx, P.Background, image.Rectangle{Max: size}, 0)
 	border := max(1, dp(gtx, 1))
-	vline(gtx, over(fade(P.Border, 60), P.Background), 0, 0, size.Y)
+	vline(gtx, over(twAlpha(P.Border, 60), P.Background), 0, 0, size.Y)
 	func() {
 		// The 4dp handle inside the border: a line on hover, dragged to
 		// resize.
@@ -129,6 +147,10 @@ func treeStatus(t diff.ChangeType) (string, color.NRGBA) {
 // letter in its colour.
 func (th *Theme) treeRows(gtx C, d *DiffPanel) D {
 	l := th.List("diff.tree", false)
+	guides := 0.75 * th.flipped(gtx, "diff.tree.hot", th.dv.treeHot, 150*time.Millisecond)
+	if !th.dv.treeHot {
+		guides = 0.75 - guides
+	}
 	c := dc()
 	return l.Layout(gtx, len(d.Tree), func(gtx C, i int) D {
 		e := d.Tree[i]
@@ -147,6 +169,12 @@ func (th *Theme) treeRows(gtx C, d *DiffPanel) D {
 		case ev.Hovered():
 			fill(gtx, over(c.treeHover, P.Background), r, rad)
 		}
+		// A guide down each level it's in, at its folder's chevron.
+		if guides > 0 {
+			for k := 0; k < e.Depth; k++ {
+				vline(gtx, over(alpha(rgb(0x84848a), uint8(0x40*guides)), P.Background), r.Min.X+dp(gtx, 6.4+float32(k)*treeIndent+8), 0, h)
+			}
+		}
 		x := r.Min.X + dp(gtx, 6.4+float32(e.Depth)*treeIndent)
 		name := Txt{Size: 12, LineH: 24.0 / 12, Color: P.Foreground, MaxLines: 1}
 		lane := r.Max.X - dp(gtx, 6.4) - dp(gtx, 12)
@@ -158,23 +186,23 @@ func (th *Theme) treeRows(gtx C, d *DiffPanel) D {
 					mid := float32(dp(gtx, 16)) / 2
 					defer op.Affine(f32.Affine2D{}.Rotate(f32.Pt(mid, mid), -math.Pi/2)).Push(gtx.Ops).Pop()
 				}
-				PierreW("file-tree-icon-chevron", c.treeFg, P.Background, 16)(gtx)
+				spriteW("file-tree-icon-chevron", c.treeFg, P.Background, 16)(gtx)
 			}()
 			// Every folder here holds a change: the lane's dot.
 			func() {
 				defer op.Offset(image.Pt(lane+dp(gtx, 3), (h-dp(gtx, 6))/2)).Push(gtx.Ops).Pop()
-				PierreW("file-tree-icon-dot", over(alpha(c.treeModified, 0x80), P.Background), P.Background, 6)(gtx)
+				spriteW("file-tree-icon-dot", over(alpha(c.treeModified, 0x80), P.Background), P.Background, 6)(gtx)
 			}()
 		} else {
 			letter, col := treeStatus(e.Type)
 			icon, token := fileIcon(e.Path)
-			ic := fileIconColor(token)
+			ic := iconTone(token)
 			if token == "" {
 				ic = col
 			}
 			func() {
 				defer op.Offset(image.Pt(x, (h-dp(gtx, 16))/2)).Push(gtx.Ops).Pop()
-				PierreW(icon, ic, P.Background, 16)(gtx)
+				spriteW(icon, ic, P.Background, 16)(gtx)
 			}()
 			name.Color = col
 			lt := Txt{Size: 12, LineH: 24.0 / 12, Font: UI(font.SemiBold), Color: col, MaxLines: 1}

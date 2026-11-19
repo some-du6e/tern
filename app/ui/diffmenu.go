@@ -234,7 +234,7 @@ func (th *Theme) diffBasePicker(gtx C, s *Scene, c *DiffCompare) D {
 	p := c.Picker
 	px := max(1, dp(gtx, 1))
 	inner := dp(gtx, 288) - 2*px - dp(gtx, 8)
-	rule := over(fade(P.Border, 70), P.Popover)
+	rule := over(twAlpha(P.Border, 70), P.Popover)
 	label := Txt{Size: 14, LineH: 20.0 / 14, Color: P.PopoverForeground, MaxLines: 1}
 	rows := []W{func(gtx C) D {
 		// The search field: a 16dp icon, the editor, a rule under them.
@@ -296,6 +296,10 @@ func (th *Theme) diffBasePicker(gtx C, s *Scene, c *DiffCompare) D {
 		rows = append(rows, item("diff.base:", "Automatic", p.Automatic, nil))
 	}
 	for i, r := range p.Refs {
+		// The list is 256dp tall; the search finds the rest.
+		if i == 9 {
+			break
+		}
 		r := r
 		ref, end := r.Local, W(nil)
 		switch {
