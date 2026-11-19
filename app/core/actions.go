@@ -26,6 +26,8 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 	case strings.HasPrefix(id, "signin."):
 		a.handleSignIn(th, act)
 		return
+	case a.sidebarAction(th, act):
+		return
 	case act.Kind == "resize" && id == "sidebar.width":
 		// The rail's drag, on release; an empty width resets it.
 		w, _ := strconv.ParseFloat(act.Text, 32)
@@ -33,11 +35,6 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		a.sidebarWidth = float32(w)
 		a.mu.Unlock()
 		_ = a.store.Put("sidebar-width", float32(w))
-		return
-	case act.Kind == "change" && id == "search":
-		a.mu.Lock()
-		a.search = act.Text
-		a.mu.Unlock()
 		return
 	case act.Kind == "change" && id == "picker.search":
 		a.mu.Lock()
@@ -73,23 +70,11 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 	case act.Kind == "key" && act.Text == "⎋":
 		a.closeMenus()
 		return
-	case act.Kind == "middle":
-		return
-	case act.Kind == "context":
-		a.mu.Lock()
-		a.closeMenusLocked()
-		if r, ok := strings.CutPrefix(id, "thread:"); ok {
-			a.ctxRef = r
-		}
-		a.mu.Unlock()
-		return
 	case act.Kind != "click":
 		return
 	}
 	verb, arg, _ := strings.Cut(id, ":")
 	switch verb {
-	case "thread":
-		a.switchTo(th, func() { a.openThread(arg) })
 	case "tab":
 		if arg == "draft" {
 			return
@@ -101,14 +86,6 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		a.closeTab(th, arg)
 	case "new":
 		a.switchTo(th, a.newDraft)
-	case "shelf":
-		a.mu.Lock()
-		if arg == "snoozed" {
-			a.showSnoozed = !a.showSnoozed
-		} else {
-			a.showSettled = !a.showSettled
-		}
-		a.mu.Unlock()
 	case "account":
 		if arg == "" {
 			a.mu.Lock()
@@ -227,9 +204,6 @@ func (a *App) handle(th *ui.Theme, act ui.Action) {
 		hidden := a.sidebarHidden
 		a.mu.Unlock()
 		_ = a.store.Put("sidebar-hidden", hidden)
-	case "ctx":
-		_, j := split2(arg)
-		a.threadMenu(th, j)
 	case "stop":
 		a.stop()
 	case "more":
@@ -353,96 +327,8 @@ func (a *App) closeMenus() {
 func (a *App) closeMenusLocked() {
 	a.picker, a.traitsOpen, a.accessOpen, a.projectsOpen, a.accountOpen = nil, false, false, false, false
 	a.detailsOpen, a.machinesOpen = false, false
-	a.ctxRef, a.ctxConfirm = "", false
-}
-
-// ctxItem is one entry in a thread's right-click menu.
-type ctxItem struct {
-	verb, label, desc string
-	danger, off       bool
-}
-
-// threadItems is the right-click menu for t, like the web sidebar's. Archive
-// and Delete wait until a run stops, as T3's do.
-func (a *App) threadItems(t *t3.Thread) []ctxItem {
-	var out []ctxItem
-	if t.PinnedAt != "" {
-		out = append(out, ctxItem{verb: "unpin", label: "Unpin"})
-	} else {
-		out = append(out, ctxItem{verb: "pin", label: "Pin"})
-	}
-	switch {
-	case later(t.SnoozedUntil):
-		out = append(out, ctxItem{verb: "unsnooze", label: "Wake up"})
-	case t.SettledAt != "":
-		out = append(out, ctxItem{verb: "unsettle", label: "Unsettle"})
-	default:
-		out = append(out, ctxItem{verb: "settle", label: "Settle", desc: "Move it to the done pile"})
-	}
-	out = append(out, ctxItem{verb: "unread", label: "Mark unread"})
-	busy := threadState(t) == ui.ThreadRunning
-	why := ""
-	if busy {
-		why = "Stop the run first"
-	}
-	out = append(out, ctxItem{verb: "archive", label: "Archive", desc: why, off: busy})
-	del := ctxItem{verb: "delete", label: "Delete", desc: why, danger: true, off: busy}
-	if a.ctxConfirm && !busy {
-		del.label, del.desc = "Click again to delete", "The thread and its history go for good"
-	}
-	return append(out, del)
-}
-
-// threadMenu runs entry j of the open right-click menu.
-func (a *App) threadMenu(th *ui.Theme, j int) {
-	a.mu.Lock()
-	e, t := a.thread(a.ctxRef)
-	if t == nil {
-		a.closeMenusLocked()
-		a.mu.Unlock()
-		return
-	}
-	items := a.threadItems(t)
-	if j < 0 || j >= len(items) || items[j].off {
-		a.mu.Unlock()
-		return
-	}
-	verb, r := items[j].verb, a.ctxRef
-	if verb == "delete" && !a.ctxConfirm {
-		a.ctxConfirm = true
-		a.mu.Unlock()
-		return
-	}
-	a.closeMenusLocked()
-	conn := e.conn
-	a.mu.Unlock()
-	if conn == nil {
-		a.mu.Lock()
-		a.fail(errors.New(e.env.Label + " isn't connected"))
-		a.mu.Unlock()
-		return
-	}
-	cmd := map[string]any{"threadId": t.ID}
-	switch verb {
-	case "pin", "unpin", "settle", "archive", "delete":
-		cmd["type"] = "thread." + verb
-	case "unsettle", "unsnooze":
-		cmd["type"], cmd["reason"] = "thread."+verb, "user"
-	case "unread":
-		cmd["type"] = "thread.mark-unread"
-	}
-	if verb == "archive" || verb == "delete" {
-		// It's leaving the inbox, so close its tab too.
-		a.closeTab(th, r)
-	}
-	go func() {
-		if err := conn.Dispatch(cmd); err != nil {
-			a.mu.Lock()
-			a.fail(err)
-			a.mu.Unlock()
-			a.changed()
-		}
-	}()
+	a.ctxRef, a.ctxBulk, a.ctxDraft, a.ctxKeyboard, a.ctxConfirm = "", false, false, false, false
+	a.filterOpen, a.snoozeRef = false, ""
 }
 
 // switchTo keeps each thread's unsent text: it saves the composer, runs the

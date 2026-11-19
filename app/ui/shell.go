@@ -12,6 +12,7 @@ import (
 	"gioui.org/f32"
 	"gioui.org/font"
 	"gioui.org/io/clipboard"
+	"gioui.org/io/event"
 	"gioui.org/io/key"
 	"gioui.org/layout"
 	"gioui.org/op"
@@ -44,6 +45,7 @@ func (th *Theme) contentLeft() float32 { return th.ControlsLeft + controlSize + 
 
 // Desktop draws the whole window.
 func (th *Theme) Desktop(gtx C, s *Scene) D {
+	th.forget()
 	if s.Live {
 		defer th.trackPointer(gtx, gtx.Constraints.Max)
 	}
@@ -58,7 +60,11 @@ func (th *Theme) Desktop(gtx C, s *Scene) D {
 	if s.Live {
 		th.shellKeys(gtx, s)
 	}
+	if s.Menu == nil && th.in.menu.open {
+		th.menuClosed(gtx)
+	}
 	size := gtx.Constraints.Max
+	th.in.winSize = size
 	fill(gtx, P.Background, image.Rectangle{Max: size}, 0)
 
 	sw := th.sidebarPx(gtx, s, size.X)
@@ -88,10 +94,12 @@ func (th *Theme) Desktop(gtx C, s *Scene) D {
 	if s.Diff != nil {
 		th.diffWindow(gtx, s.Diff)
 	}
-	if s.Context != nil {
+	if s.Menu != nil {
 		th.contextMenu(gtx, size, s)
 	}
-	if s.Live && (s.Picker != nil || s.Traits != nil || s.Access != nil || s.Account != nil || s.Machines != nil || s.Projects != nil || s.Context != nil || s.Details) {
+	sb := &s.Sidebar
+	if s.Live && (s.Picker != nil || s.Traits != nil || s.Access != nil || s.Account != nil || s.Machines != nil || s.Projects != nil ||
+		s.Menu != nil || sb.Filter != nil || sb.Snooze != nil || s.Details) {
 		// A click anywhere outside an open menu closes it. The menus are
 		// deferred, so they sit above this.
 		th.hit(gtx, "menus.close", size)
@@ -99,23 +107,82 @@ func (th *Theme) Desktop(gtx C, s *Scene) D {
 	return D{Size: size}
 }
 
+// modifierKeys are the modifier keys as keys, and the modifier each holds.
+var modifierKeys = map[key.Name]key.Modifiers{
+	key.NameCtrl: key.ModCtrl, key.NameShift: key.ModShift, key.NameAlt: key.ModAlt,
+	key.NameSuper: key.ModSuper, key.NameCommand: key.ModCommand,
+}
+
+// shellFilters are the keys shellKeys takes, made once, so a frame that
+// only animates asks for them without allocating. mod+Shift+[ and ] come
+// as "{" and "}" on a Mac and on Linux, where Gio names a key by what
+// Shift makes of it, and as "[" and "]" on Windows.
+var shellFilters = func() []event.Filter {
+	fs := []event.Filter{
+		key.Filter{Name: "B", Required: key.ModShortcut, Optional: key.ModShift | key.ModAlt},
+		key.Filter{Name: "J", Required: key.ModShortcut},
+		key.Filter{Name: "N", Required: key.ModShortcut},
+		key.Filter{Name: "[", Required: key.ModShortcut | key.ModShift},
+		key.Filter{Name: "]", Required: key.ModShortcut | key.ModShift},
+		key.Filter{Name: "{", Required: key.ModShortcut | key.ModShift},
+		key.Filter{Name: "}", Required: key.ModShortcut | key.ModShift},
+		key.Filter{Name: "S", Required: key.ModShortcut | key.ModShift},
+		key.Filter{Name: "P", Required: key.ModShortcut | key.ModShift},
+		key.Filter{Name: "Z", Required: key.ModShortcut},
+	}
+	for n := 1; n <= 9; n++ {
+		fs = append(fs, key.Filter{Name: key.Name(strconv.Itoa(n)), Required: key.ModShortcut})
+	}
+	// The modifier keys themselves, for the jump keys' hints.
+	mods := key.ModCtrl | key.ModShift | key.ModAlt | key.ModSuper | key.ModCommand
+	for name := range modifierKeys {
+		fs = append(fs, key.Filter{Name: name, Optional: mods})
+	}
+	return fs
+}()
+
 // shellKeys handles T3's shell shortcuts (keybindings.ts): mod+B the
 // sidebar, mod+J the terminal, mod+Alt+B the right panel, mod+Shift+B the
-// thread details.
+// thread details; and the sidebar's: mod+N a new thread, mod+Shift+[ and ]
+// the thread before and after, mod+1…9 the nth thread, mod+Shift+S settle,
+// mod+Shift+P pin and mod+Z undo the last park. The last four leave a
+// focused terminal alone; a focused text field keeps its own mod+Z. It
+// also keeps which modifier keys are held, for the rows' jump hints.
 func (th *Theme) shellKeys(gtx C, s *Scene) {
 	for {
-		ev, ok := gtx.Event(
-			key.Filter{Name: "B", Required: key.ModShortcut, Optional: key.ModShift | key.ModAlt},
-			key.Filter{Name: "J", Required: key.ModShortcut},
-		)
+		ev, ok := gtx.Event(shellFilters...)
 		if !ok {
 			return
 		}
 		ke, ok := ev.(key.Event)
+		if m, mod := modifierKeys[ke.Name]; ok && mod {
+			if ke.State == key.Press {
+				th.in.heldMods |= m
+			} else {
+				th.in.heldMods &^= m
+			}
+			th.in.heldSince = gtx.Now
+			continue
+		}
 		if !ok || ke.State != key.Press {
 			continue
 		}
+		term := gtx.Focused(&th.in.term)
 		switch {
+		case ke.Name == "N":
+			th.push(Action{ID: "new", Kind: "click"})
+		case ke.Name == "[" || ke.Name == "{":
+			th.push(Action{ID: "thread.prev", Kind: "click"})
+		case ke.Name == "]" || ke.Name == "}":
+			th.push(Action{ID: "thread.next", Kind: "click"})
+		case ke.Name == "S" && !term:
+			th.push(Action{ID: "thread.settle", Kind: "click"})
+		case ke.Name == "P" && !term:
+			th.push(Action{ID: "thread.pin", Kind: "click"})
+		case ke.Name == "Z" && !term:
+			th.push(Action{ID: "thread.undo", Kind: "click"})
+		case len(ke.Name) == 1 && ke.Name >= "1" && ke.Name <= "9" && !term:
+			th.push(Action{ID: "thread.jump:" + string(ke.Name), Kind: "click"})
 		case ke.Name == "J" && s.Run != nil:
 			th.push(Action{ID: "terminal.toggle", Kind: "click"})
 		case ke.Name == "B" && ke.Modifiers.Contain(key.ModShift) && s.Run != nil:
@@ -127,6 +194,11 @@ func (th *Theme) shellKeys(gtx C, s *Scene) {
 		}
 	}
 }
+
+// WindowBlurred is the window losing the keyboard to another. Modifiers let
+// go of there never reach this window, so none count as held any more, as
+// T3 resets its modifier state on blur (shortcutModifierState.ts).
+func (th *Theme) WindowBlurred() { th.in.heldMods = 0 }
 
 // detailsAction toggles the details card where it fits, else its popover.
 func (th *Theme) detailsAction() Action { return Action{ID: th.detailsID(), Kind: "click"} }

@@ -114,6 +114,14 @@ func (h *harness) wait(what string, ok func(*ui.Scene) bool) *ui.Scene {
 	return nil
 }
 
+// firstRow is the sidebar list's first row, if the list starts with one.
+func firstRow(s *ui.Scene) *ui.ThreadRow {
+	if items := s.Sidebar.Items; len(items) > 0 {
+		return items[0].Row
+	}
+	return nil
+}
+
 func main() {
 	storeDir := flag.String("store", "", "store with a paired session")
 	out := flag.String("out", "/tmp/livecheck", "screenshot directory")
@@ -135,17 +143,21 @@ func main() {
 	}
 	h.c.Start()
 	start := time.Now()
-	s := h.wait("threads", func(s *ui.Scene) bool { return s.Login == nil && len(s.Active)+len(s.Pinned) > 0 })
-	fmt.Printf("inbox: %d pinned, %d active, %d snoozed, %d settled after %s\n", len(s.Pinned), len(s.Active), len(s.Snoozed), s.Settled, time.Since(start).Round(time.Millisecond))
+	s := h.wait("threads", func(s *ui.Scene) bool { return s.Login == nil && firstRow(s) != nil })
+	shelves := map[string]int{}
+	for _, it := range s.Sidebar.Items {
+		if it.Shelf != nil {
+			shelves[it.Shelf.ID] = it.Shelf.Count
+		}
+	}
+	fmt.Printf("inbox: %d working, %d snoozed, %d settled after %s\n", shelves["working"], shelves["snoozed"], shelves["settled"], time.Since(start).Round(time.Millisecond))
 	h.wait("config", func(s *ui.Scene) bool { return true })
 	h.shot("inbox")
 
-	// A real pointer click on the first row of the first section.
-	first := s.Active[0]
-	if len(s.Pinned) > 0 {
-		first = s.Pinned[0]
-	}
-	h.click(130, 30+42+31+23)
+	// A real pointer click on the list's first card: the list starts at
+	// y 100, the card's surface 2dp below that.
+	first := firstRow(s)
+	h.click(130, 100+2+24)
 	s = h.wait("thread open", func(s *ui.Scene) bool { return len(s.Items) > 0 || s.Empty == "No messages yet." })
 	fmt.Printf("opened %q (expected %q): %d rows, more=%v, model=%q effort=%q\n", s.Title, first.Title, len(s.Items), s.MoreAbove, s.Model, s.Effort)
 	h.shot("thread")
@@ -219,8 +231,8 @@ func main() {
 	h.c.Handle(h.th, []ui.Action{{ID: "tabclose:draft", Kind: "click"}, {ID: "tabclose:" + s.TabIDs[0], Kind: "click"}})
 	s = h.frame()
 	fmt.Printf("nothing open: details panel hidden=%v\n", s.Run == nil)
-	// Right-click the third row with the pointer: the thread menu opens there.
-	at := f32.Pt(150*scale, (30+42+31+46*2+23)*scale)
+	// Right-click the first card with the pointer: the thread menu opens there.
+	at := f32.Pt(150*scale, (100+2+24)*scale)
 	h.router.Queue(
 		pointer.Event{Kind: pointer.Move, Position: at, Source: pointer.Mouse},
 		pointer.Event{Kind: pointer.Press, Position: at, Buttons: pointer.ButtonSecondary, Source: pointer.Mouse},
@@ -228,14 +240,14 @@ func main() {
 	)
 	h.frame()
 	s = h.frame()
-	if s.Context == nil {
+	if s.Menu == nil {
 		log.Fatal("right-click opened no menu")
 	}
 	h.shot("thread-menu")
-	h.c.Handle(h.th, []ui.Action{{ID: "ctx:0:4", Kind: "click"}})
+	h.c.Handle(h.th, []ui.Action{{ID: "ctx:delete", Kind: "click"}})
 	h.shot("delete-confirm")
 	// Mark unread is harmless; read-only, the server must refuse it.
-	h.c.Handle(h.th, []ui.Action{{ID: "ctx:0:2", Kind: "click"}})
+	h.c.Handle(h.th, []ui.Action{{ID: "ctx:mark-unread", Kind: "click"}})
 	s = h.wait("menu refusal", func(s *ui.Scene) bool { return s.Error != "" })
 	fmt.Printf("thread menu refused as expected: %q\n", s.Error)
 	h.c.Handle(h.th, []ui.Action{{ID: "error", Kind: "click"}})

@@ -72,16 +72,67 @@ type input struct {
 	runs        map[string][2]string          // run buttons' language and code, by click id
 	runFailed   map[string]bool               // a run that couldn't start, for its ✕
 	paste       string                        // an editor to paste text into next frame
+	fades       map[string]*fade              // transitions in flight, by name
+	winSize     image.Point                   // the window, for popups kept inside it
+	// Keyboard focus: whether it shows (Tab brought it; a pointer press
+	// hides it, as :focus-visible does).
+	keyFocus bool
+	// The sidebar's list: its keyboard tree from the last layout, each
+	// row's focus tag, the row to focus once it's laid out and the one the
+	// keyboard moved to, which scrolls into view before the next layout;
+	// the list's height and how far it's scrolled; the open thread's row it
+	// last scrolled to, the search result it last scrolled to as it lit,
+	// and the project scope it last started at the top for.
+	nav         listNav
+	rowTags     map[string]*rowTag
+	focusRow    string
+	reveal      string
+	listView    int
+	listScroll  int
+	listOpen    string
+	listHi      string
+	listScope   string
+	resultHover int    // the search result under the pointer, plus one
+	filterHover string // the project filter's row under the pointer
+	renaming    bool   // the rename field had focus last frame
+	// The footer's undo notice: its last text, kept while it fades out,
+	// its fade, and whether mod+Z is its, even in a text field.
+	undoText  string
+	undoFade  *fade
+	undoClaim bool
+	// The modifier keys held and since when, and whether the rows show
+	// their jump keys for it.
+	heldMods  key.Modifiers
+	heldSince time.Time
+	jumping   bool
+	// The hover card: the rows the list drew with one, the row it's for,
+	// when the pointer came to rest there, whether it opened at once (from
+	// an open card, or within 400ms of the last one closing) and when the
+	// last open one closed; tipBusy is a control's tooltip in the row under
+	// the pointer, which the card stands aside for.
+	cards       []listCard
+	cardRow     string
+	cardSince   time.Time
+	cardInstant bool
+	cardShut    time.Time
+	tipBusy     bool
+	snoozeShown bool      // the snooze menu was drawn this frame
+	menu        menuState // the open context menu's submenus and highlight
+	frame       uint64    // counts Desktop's frames, to forget what the last one didn't draw
 	actions     []Action
 }
 
 // Action is one thing the user did this frame: ID is the target, Kind is
 // "click", "context" (a right-click), "middle" (a middle-click), "submit",
-// "change", "key" or "paste" (Ctrl+V in the composer), Text the
-// editor text or key name.
+// "change", "key", "blur" (an editor lost focus), "hover" or "paste"
+// (Ctrl+V in the composer), Text the editor text or key name.
 type Action struct {
 	ID, Kind, Text string
 	Alt            bool
+	// A click's Shift, its shortcut key (Ctrl, or Cmd on a Mac) and how
+	// many clicks in a row it ends: 2 for a double click.
+	Shift, Short bool
+	Clicks       int
 }
 
 // Actions returns and clears what happened since the last call.
@@ -92,6 +143,24 @@ func (th *Theme) Actions() []Action {
 }
 
 func (th *Theme) push(a Action) { th.in.actions = append(th.in.actions, a) }
+
+// forget drops the transitions and the rows' focus tags the last frame
+// didn't draw, which would otherwise pile up one per row a session ever
+// showed. A row drawn again starts at rest, as a remounted one does; Gio
+// has already dropped the focus of a tag a frame didn't draw.
+func (th *Theme) forget() {
+	for k, f := range th.in.fades {
+		if f.seen != th.in.frame {
+			delete(th.in.fades, k)
+		}
+	}
+	for k, t := range th.in.rowTags {
+		if t.seen != th.in.frame {
+			delete(th.in.rowTags, k)
+		}
+	}
+	th.in.frame++
+}
 
 // Editor is the persistent editor behind a text field.
 func (th *Theme) Editor(id string) *widget.Editor {
@@ -175,7 +244,7 @@ func (th *Theme) events(gtx C, id string) (*gesture.Click, *int) {
 				th.in.focus = f
 				continue
 			}
-			th.push(Action{ID: id, Kind: "click"})
+			th.push(Action{ID: id, Kind: "click", Shift: e.Modifiers.Contain(key.ModShift), Short: e.Modifiers.Contain(key.ModShortcut), Clicks: e.NumClicks})
 		}
 	}
 	if th.in.context == nil {
@@ -194,6 +263,7 @@ func (th *Theme) events(gtx C, id string) (*gesture.Click, *int) {
 		if e, ok := ev.(pointer.Event); ok {
 			switch e.Buttons {
 			case pointer.ButtonSecondary:
+				th.in.menu.open = false // a new menu starts afresh
 				th.push(Action{ID: id, Kind: "context"})
 			case pointer.ButtonTertiary:
 				th.push(Action{ID: id, Kind: "middle"})
@@ -213,7 +283,14 @@ func (th *Theme) trackPointer(gtx C, size image.Point) {
 		if !ok {
 			break
 		}
-		if e, ok := ev.(pointer.Event); ok && e.Buttons == pointer.ButtonSecondary {
+		e, ok := ev.(pointer.Event)
+		if !ok {
+			continue
+		}
+		// A press ends keyboard navigation: focus rings show only after the
+		// keyboard moved focus, as :focus-visible does.
+		th.in.keyFocus = false
+		if e.Buttons == pointer.ButtonSecondary {
 			th.in.ctxAt = e.Position.Round()
 		}
 	}
@@ -258,6 +335,11 @@ func (th *Theme) Tip(id, tip string, up bool, align int, w W) W {
 // offset) once the pointer has rested on it for 600ms, fading and scaling
 // in over 150ms (docs/ui/02-primitives.md §3.7, port note 10).
 func (th *Theme) tipAt(gtx C, id, tip string, size image.Point, up bool, align int) {
+	th.tipDelay(gtx, id, tip, size, up, align, 600*time.Millisecond)
+}
+
+// tipDelay is tipAt after a rest of delay.
+func (th *Theme) tipDelay(gtx C, id, tip string, size image.Point, up bool, align int, delay time.Duration) {
 	c := th.in.clicks[id]
 	if c == nil || !c.Hovered() || tip == "" {
 		delete(th.in.tipSince, id)
@@ -271,9 +353,9 @@ func (th *Theme) tipAt(gtx C, id, tip string, size image.Point, up bool, align i
 		since = gtx.Now
 		th.in.tipSince[id] = since
 	}
-	shown := gtx.Now.Sub(since) - 600*time.Millisecond
+	shown := gtx.Now.Sub(since) - delay
 	if shown < 0 {
-		gtx.Execute(op.InvalidateCmd{At: since.Add(600 * time.Millisecond)})
+		gtx.Execute(op.InvalidateCmd{At: since.Add(delay)})
 		return
 	}
 	t := easeOut(clamp01(float32(shown) / float32(150*time.Millisecond)))
@@ -298,7 +380,7 @@ func (th *Theme) tipAt(gtx C, id, tip string, size image.Point, up bool, align i
 	}
 	m2 := op.Record(gtx.Ops)
 	op.Offset(at).Add(gtx.Ops)
-	paint.PushOpacity(gtx.Ops, t)
+	fd := paint.PushOpacity(gtx.Ops, t)
 	// It grows from 98% out of the side facing the trigger.
 	origin := f32.Pt(float32(td.Size.X)/2, 0)
 	if up {
@@ -307,6 +389,7 @@ func (th *Theme) tipAt(gtx C, id, tip string, size image.Point, up bool, align i
 	k := 0.98 + 0.02*t
 	op.Affine(f32.Affine2D{}.Scale(origin, f32.Pt(k, k))).Add(gtx.Ops)
 	call.Add(gtx.Ops)
+	fd.Pop()
 	op.Defer(gtx.Ops, m2.Stop())
 }
 
@@ -371,6 +454,17 @@ func (th *Theme) editor(gtx C, id string, t Txt, placeholder string) D {
 	if th.in.focus == id {
 		gtx.Execute(key.FocusCmd{Tag: ed})
 		th.in.focus = ""
+	}
+	// Just after a park, mod+Z undoes it rather than the field's last
+	// edit, until another key or an edit (threadUndoClaimsShortcut).
+	for th.in.undoClaim {
+		ev, ok := gtx.Event(key.Filter{Focus: ed, Name: "Z", Required: key.ModShortcut})
+		if !ok {
+			break
+		}
+		if ke, ok := ev.(key.Event); ok && ke.State == key.Press {
+			th.push(Action{ID: "thread.undo", Kind: "click"})
+		}
 	}
 	// Alt+Enter has its own meaning in the composer (queue), so take it
 	// before the editor turns it into a submit.

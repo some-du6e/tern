@@ -21,46 +21,144 @@ type Project struct {
 	Title                 string          `json:"title"`
 	WorkspaceRoot         string          `json:"workspaceRoot"`
 	DefaultModelSelection *ModelSelection `json:"defaultModelSelection"`
+	ProjectIcon           *ProjectIcon    `json:"projectIcon"`
+	PinnedAt              string          `json:"pinnedAt"` // pinned projects lead project pickers
+	ArchivedAt            string          `json:"archivedAt"`
+	CreatedAt             string          `json:"createdAt"`
+	UpdatedAt             string          `json:"updatedAt"`
+}
+
+// ProjectIcon is a project's chosen icon: a monogram or a lucide icon in
+// one of T3's icon colours, or an emoji. A lucide icon from older servers
+// may carry a monogram, which it then is.
+type ProjectIcon struct {
+	Kind         string `json:"kind"` // "monogram", "lucide", "emoji"
+	Text         string `json:"text"` // a monogram's glyphs
+	Name         string `json:"name"` // a lucide icon's
+	Emoji        string `json:"emoji"`
+	Color        string `json:"color"`
+	MonogramText string `json:"monogramText"`
+	Monogram     string `json:"monogram"`
 }
 
 type RuntimeRequest struct {
-	ID   string `json:"id"`
-	Kind string `json:"kind"`
+	ID        string `json:"id"`
+	Kind      string `json:"kind"`
+	CreatedAt string `json:"createdAt"`
 }
 
 type Lineage struct {
 	ParentThreadID       string `json:"parentThreadId"`
 	RelationshipToParent string `json:"relationshipToParent"`
+	SideChat             bool   `json:"sideChat"`
+}
+
+// BackgroundTask is work a run left going: a subagent, a command, a
+// monitor. Awaited ones hold the thread at idle until they end.
+type BackgroundTask struct {
+	Kind    string `json:"kind"`
+	Awaited bool   `json:"awaited"`
+}
+
+// PullRequestLink is a pull request linked to a thread, with the server's
+// last snapshot of it.
+type PullRequestLink struct {
+	Number     int                  `json:"number"`
+	Repository string               `json:"repository"` // "owner/repo"
+	URL        string               `json:"url"`
+	Source     string               `json:"source"` // "stack-dismissed" hides it
+	LinkedAt   string               `json:"linkedAt"`
+	Snapshot   *PullRequestSnapshot `json:"snapshot"`
+}
+
+// PullRequestSnapshot is what the server last read of a pull request.
+type PullRequestSnapshot struct {
+	State     string `json:"state"` // "open", "closed", "merged"
+	IsDraft   bool   `json:"isDraft"`
+	Title     string `json:"title"`
+	UpdatedAt string `json:"updatedAt"`
+}
+
+// LinkedPullRequest is the pull request a thread names, by number.
+type LinkedPullRequest struct {
+	Number     int    `json:"number"`
+	Repository string `json:"repository"`
+	URL        string `json:"url"`
 }
 
 type Thread struct {
-	ID                    string          `json:"id"`
-	ProjectID             string          `json:"projectId"`
-	Title                 string          `json:"title"`
-	CreatedAt             string          `json:"createdAt"`
-	UpdatedAt             string          `json:"updatedAt"`
-	LatestUserMessageAt   string          `json:"latestUserMessageAt"`
-	LatestRunCompletedAt  string          `json:"latestRunCompletedAt"`
-	LastVisitedAt         string          `json:"lastVisitedAt"`
-	PinnedAt              string          `json:"pinnedAt"`
-	PinOrderKey           string          `json:"pinOrderKey"`
-	ActiveOrderKey        string          `json:"activeOrderKey"`
-	SettledAt             string          `json:"settledAt"`
-	SnoozedUntil          string          `json:"snoozedUntil"`
-	ArchivedAt            string          `json:"archivedAt"`
-	DeletedAt             string          `json:"deletedAt"`
-	LastError             string          `json:"lastError"`
-	ActiveRunID           string          `json:"activeRunId"`
-	ActivityRunStatus     string          `json:"activityRunStatus"`
-	ActivityRunStartedAt  string          `json:"activityRunStartedAt"`
-	PendingRuntimeRequest *RuntimeRequest `json:"pendingRuntimeRequest"`
-	Lineage               *Lineage        `json:"lineage"`
-	ModelSelection        *ModelSelection `json:"modelSelection"`
-	RuntimeMode           string          `json:"runtimeMode"`
-	InteractionMode       string          `json:"interactionMode"`
-	Branch                string          `json:"branch"`
-	WorktreePath          string          `json:"worktreePath"`
-	EnvironmentID         string          `json:"-"`
+	ID                          string             `json:"id"`
+	ProjectID                   string             `json:"projectId"`
+	Title                       string             `json:"title"`
+	CreatedAt                   string             `json:"createdAt"`
+	UpdatedAt                   string             `json:"updatedAt"`
+	LatestUserMessageAt         string             `json:"latestUserMessageAt"`
+	LatestUserAuthoredMessageAt string             `json:"latestUserAuthoredMessageAt"`
+	LatestRunID                 string             `json:"latestRunId"`
+	LatestRunRequestedAt        string             `json:"latestRunRequestedAt"`
+	LatestRunStartedAt          string             `json:"latestRunStartedAt"`
+	LatestRunCompletedAt        string             `json:"latestRunCompletedAt"`
+	LastVisitedAt               string             `json:"lastVisitedAt"`
+	PinnedAt                    string             `json:"pinnedAt"`
+	PinOrderKey                 string             `json:"pinOrderKey"`
+	ActiveOrderKey              string             `json:"activeOrderKey"`
+	SettledOverride             string             `json:"settledOverride"` // "settled", "active" or ""
+	SettledAt                   string             `json:"settledAt"`
+	UnsettledAt                 string             `json:"unsettledAt"`
+	SnoozedUntil                string             `json:"snoozedUntil"`
+	SnoozedAt                   string             `json:"snoozedAt"`
+	AutoSettleDisabledAt        string             `json:"autoSettleDisabledAt"`
+	ArchivedAt                  string             `json:"archivedAt"`
+	DeletedAt                   string             `json:"deletedAt"`
+	Status                      string             `json:"status"` // "idle" or the latest run's status
+	LastError                   string             `json:"lastError"`
+	LastErrorClass              string             `json:"lastErrorClass"` // "usage_limit", "provider_error"…
+	ActiveRunID                 string             `json:"activeRunId"`
+	ActiveProviderThreadID      string             `json:"activeProviderThreadId"`
+	ActivityRunStatus           string             `json:"activityRunStatus"`
+	ActivityRunStartedAt        string             `json:"activityRunStartedAt"`
+	BlockedOnThreadWait         bool               `json:"blockedOnThreadWait"`
+	PendingRuntimeRequest       *RuntimeRequest    `json:"pendingRuntimeRequest"`
+	PendingGuestMessageCount    int                `json:"pendingGuestMessageCount"`
+	HasActionableProposedPlan   bool               `json:"hasActionableProposedPlan"`
+	PendingBackgroundTasks      []BackgroundTask   `json:"pendingBackgroundTasks"`
+	Goal                        *Goal              `json:"goal"`
+	TitleRegeneration           *Regeneration      `json:"titleRegeneration"`
+	Lineage                     *Lineage           `json:"lineage"`
+	CreationSource              string             `json:"creationSource"` // "provider" for a provider's own subagents
+	ModelSelection              *ModelSelection    `json:"modelSelection"`
+	ProviderInstanceID          string             `json:"providerInstanceId"`
+	ProviderInstanceHistory     []string           `json:"providerInstanceHistory"`
+	RuntimeMode                 string             `json:"runtimeMode"`
+	InteractionMode             string             `json:"interactionMode"`
+	Branch                      string             `json:"branch"`
+	WorktreePath                string             `json:"worktreePath"`
+	PullRequests                []PullRequestLink  `json:"pullRequests"`
+	LinkedPullRequest           *LinkedPullRequest `json:"linkedPullRequest"`
+	BranchPullRequest           *LinkedPullRequest `json:"branchPullRequest"`
+	EnvironmentID               string             `json:"-"`
+}
+
+// Goal is the goal a provider's run works toward.
+type Goal struct {
+	Status string `json:"status"` // "active", "paused"…
+}
+
+// Regeneration is a title regeneration in progress.
+type Regeneration struct {
+	RequestID string `json:"requestId"`
+}
+
+// ThreadSearchMatch is a message orchestration.searchThreads found: whose
+// thread, who wrote it, the snippet around the match, how well and how
+// often it matched (older servers send neither).
+type ThreadSearchMatch struct {
+	ThreadID         string   `json:"threadId"`
+	Source           string   `json:"source"` // "user", "assistant"
+	Snippet          string   `json:"snippet"`
+	MessageCreatedAt string   `json:"messageCreatedAt"`
+	Quality          *float64 `json:"quality"`
+	Hits             *int     `json:"hits"`
 }
 
 // ShellItem is one value from orchestration.subscribeShell.
@@ -191,10 +289,12 @@ type Attachment struct {
 	SizeBytes int    `json:"sizeBytes"`
 }
 
-// ServerConfig is the part of server.getConfig the composer needs.
+// ServerConfig is the part of server.getConfig the composer and the
+// sidebar need.
 type ServerConfig struct {
-	Providers []Provider `json:"providers"`
-	Settings  struct {
+	Providers            []Provider `json:"providers"`
+	ScratchWorkspaceRoot string     `json:"scratchWorkspaceRoot"` // where "No project" threads live
+	Settings             struct {
 		DefaultModelSelection *ModelSelection `json:"defaultModelSelection"`
 		DefaultRuntimeMode    string          `json:"defaultRuntimeMode"`
 		Favorites             []struct {
@@ -205,14 +305,31 @@ type ServerConfig struct {
 			HiddenModels []string `json:"hiddenModels"`
 			ModelOrder   []string `json:"modelOrder"`
 		} `json:"providerModelPreferences"`
+		SnoozePresets   []SnoozePreset `json:"snoozePresets"`
+		EnvironmentIcon string         `json:"environmentIcon"` // the machine's icon, chosen in settings
 	} `json:"settings"`
 	Environment struct {
+		Platform struct {
+			Machine string `json:"machine"` // "server", "laptop", "desktop"…
+		} `json:"platform"`
 		Capabilities struct {
 			ServerResolvedCommandContext bool `json:"serverResolvedCommandContext"`
 			InlineMessageContext         bool `json:"inlineMessageContext"`
 			ThreadStop                   bool `json:"threadStop"`
+			ThreadAutoSettleOptOut       bool `json:"threadAutoSettleOptOut"`
+			ThreadTitleRegeneration      bool `json:"threadTitleRegeneration"`
 		} `json:"capabilities"`
 	} `json:"environment"`
+}
+
+// SnoozePreset is one of the snooze menu's choices: so many minutes from
+// now ("after"), or a local time on a day ("at": "today", "tomorrow", a
+// weekday).
+type SnoozePreset struct {
+	Kind    string `json:"kind"`
+	Minutes int    `json:"minutes"`
+	Day     string `json:"day"`
+	Time    string `json:"time"` // "18:00"
 }
 
 type Provider struct {

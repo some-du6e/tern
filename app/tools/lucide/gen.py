@@ -14,7 +14,13 @@ LUCIDE = ["settings", "server", "laptop", "monitor", "circle-user", "git-branch"
           "terminal", "globe", "arrow-left", "arrow-right", "rotate-cw", "plus", "x",
           "panel-left", "panel-left-close", "maximize-2", "minimize-2", "check", "chevron-right",
           "chevron-down", "loader-circle", "square-pen", "search", "list-filter", "folder-plus",
-          "git-pull-request", "chart-no-axes-column", "pin", "archive", "trash-2", "clock"]
+          "git-pull-request", "chart-no-axes-column", "pin", "archive", "trash-2", "clock",
+          # the sidebar: its rows' status labels, controls and meta line, and its menus
+          "pin-off", "circle-dashed", "circle-dot-dashed", "shield-question-mark", "message-circle-question-mark",
+          "user-round", "circle-alert", "circle-check", "alarm-clock", "alarm-clock-off", "undo-2",
+          "folder-git-2", "folder-code", "message-square-dashed", "cloud", "arrow-right-left",
+          "git-pull-request-arrow", "git-pull-request-draft", "git-pull-request-closed", "git-merge",
+          "pencil", "refresh-cw", "mail-open", "folder-tree", "timer", "copy", "hash", "message-square", "trash"]
 
 assets = pathlib.Path(sys.argv[1])
 bundle = "\n".join(p.read_text(errors="replace") for p in assets.glob("*.js"))

@@ -253,18 +253,17 @@ func (th *Theme) lip(gtx C, r image.Rectangle, rad int, on color.NRGBA) {
 }
 
 // T3Kbd is T3's Kbd: 20 tall, at least 20 wide, padded 4, radius 4, 12/16
-// medium in muted foreground on foreground at 7% (§3.3).
-func (th *Theme) T3Kbd(label string, on color.NRGBA) W {
+// medium in muted foreground on foreground at 7% (§3.3). ink paints a
+// colour as it shows where the Kbd sits: over the surface under it, and at
+// that surface's opacity.
+func (th *Theme) T3Kbd(label string, ink func(color.NRGBA) color.NRGBA) W {
 	return func(gtx C) D {
-		if on.A == 0 {
-			on = P.Background
-		}
 		m := op.Record(gtx.Ops)
-		td := th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Font: UI(font.Medium), Color: P.MutedForeground, MaxLines: 1}, label)
+		td := th.Text(gtx, Txt{Size: 12, LineH: 16.0 / 12, Font: UI(font.Medium), Color: ink(P.MutedForeground), MaxLines: 1}, label)
 		call := m.Stop()
 		h := dp(gtx, 20)
 		w := max(h, td.Size.X+2*dp(gtx, 4))
-		fill(gtx, over(alpha(P.Foreground, 0x12), on), image.Rect(0, 0, w, h), dp(gtx, 4))
+		fill(gtx, ink(alpha(P.Foreground, 0x12)), image.Rect(0, 0, w, h), dp(gtx, 4))
 		defer op.Offset(image.Pt((w-td.Size.X)/2, (h-td.Size.Y)/2)).Push(gtx.Ops).Pop()
 		call.Add(gtx.Ops)
 		return D{Size: image.Pt(w, h)}

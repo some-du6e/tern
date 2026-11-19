@@ -420,11 +420,15 @@ func flexed(w W) layout.FlexChild { return layout.Flexed(1, w) }
 // Row lays children out left to right and centers them in the strip's
 // minimum height. Flex alone would pass that minimum down and pin text to
 // the top.
-func Row(gtx C, children ...layout.FlexChild) D {
+func Row(gtx C, children ...layout.FlexChild) D { return RowGap(gtx, 0, children...) }
+
+// RowGap is Row with gapDp between the children, as a CSS flex row with a
+// gap centres its items.
+func RowGap(gtx C, gapDp float32, children ...layout.FlexChild) D {
 	h := gtx.Constraints.Min.Y
 	gtx.Constraints.Min.Y = 0
 	m := op.Record(gtx.Ops)
-	dims := layout.Flex{Alignment: layout.Middle}.Layout(gtx, children...)
+	dims := layout.Flex{Alignment: layout.Middle, Gap: dp(gtx, gapDp)}.Layout(gtx, children...)
 	call := m.Stop()
 	if dims.Size.Y >= h {
 		call.Add(gtx.Ops)
