@@ -131,7 +131,9 @@ func (th *Theme) prTip(gtx C, i int, t *PullRequestTip, size image.Point, top in
 	id := fmt.Sprintf("card.pr:%d", i)
 	c := th.in.clicks[id]
 	focused := c != nil && gtx.Focused(c) && th.in.keyFocus
-	shown := th.popupTip(gtx, id, c != nil && c.Hovered(), focused, func(gtx C) D { return th.prTipBox(gtx, t) },
+	// Its own timer: the row's plain tooltip, empty, clears the row's.
+	key := id + ".rich"
+	shown := th.popupTip(gtx, key, c != nil && c.Hovered(), focused, 320, func(gtx C) D { return th.prTipBox(gtx, t) },
 		func(box image.Point) (image.Point, bool) {
 			gap := dp(gtx, 4)
 			if top-dp(gtx, topBarH+5) >= box.Y+gap {
@@ -144,9 +146,9 @@ func (th *Theme) prTip(gtx C, i int, t *PullRequestTip, size image.Point, top in
 	}
 	switch {
 	case !shown:
-		delete(th.in.tipAsked, id)
-	case !th.in.tipAsked[id] && len(t.Kinds) == 0 && (t.Insertions > 0 || t.Deletions > 0):
-		th.in.tipAsked[id] = true
+		delete(th.in.tipAsked, key)
+	case !th.in.tipAsked[key] && len(t.Kinds) == 0 && (t.Insertions > 0 || t.Deletions > 0):
+		th.in.tipAsked[key] = true
 		th.push(Action{ID: id, Kind: "tip"})
 	}
 }

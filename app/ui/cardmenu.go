@@ -877,6 +877,9 @@ func (th *Theme) commitFiles(gtx C, c *CommitDialog, under color.NRGBA) D {
 				g := gtx
 				g.Constraints.Max.X = max(0, end-countsW-dp(gtx, 12)-x)
 				th.startTruncate(g, path, f.Path, base)
+				// Its tooltip names the whole path.
+				defer op.Offset(image.Pt(0, dp(gtx, 4))).Push(gtx.Ops).Pop()
+				th.codeTip(gtx, fmt.Sprintf("commit.path:%d", i), f.Path, image.Pt(min(th.textW(gtx, path, f.Path), g.Constraints.Max.X), dp(gtx, 20)))
 			}()
 			if c.Opens {
 				func() {

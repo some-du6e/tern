@@ -898,7 +898,7 @@ func (th *Theme) reasonPopover(gtx C, id, reason string, size image.Point, left 
 	m := op.Record(gtx.Ops)
 	g := gtx
 	g.Constraints = layout.Constraints{Max: image.Pt(dp(gtx, 320), dp(gtx, 200))}
-	td := th.tipBox(g, reason, true)
+	td := th.tipBox(g, reason, tipGlass)
 	call := m.Stop()
 	at2 := image.Pt(size.X-td.Size.X, size.Y+dp(gtx, 4))
 	if left {

@@ -448,6 +448,16 @@ func (th *Theme) tipArea(gtx C, id, tip string, r image.Rectangle) {
 	th.tipShown(gtx, id, tip, r.Size(), true, th.hoverState(gtx, id), false, func(w int) int { return (r.Dx() - w) / 2 })
 }
 
+// codeTip shows text in T3's code tooltip, up to 480 wide, centred above
+// the size-sized area at the current offset while the pointer rests on it,
+// without taking the presses from what's under it: StartTruncatedPath's,
+// which names the whole path.
+func (th *Theme) codeTip(gtx C, id, text string, size image.Point) {
+	th.hoverArea(gtx, id, size)
+	th.popupTip(gtx, id, th.hoverState(gtx, id), false, 480, func(gtx C) D { return th.tipBox(gtx, text, tipCode) },
+		func(box image.Point) (image.Point, bool) { return image.Pt((size.X-box.X)/2, -box.Y-dp(gtx, 4)), true })
+}
+
 // tipPlaced is tipAt with the tooltip's left, given its width, from left.
 func (th *Theme) tipPlaced(gtx C, id, tip string, size image.Point, up bool, left func(w int) int) {
 	c := th.in.clicks[id]
@@ -462,7 +472,7 @@ func (th *Theme) tipShown(gtx C, id, tip string, size image.Point, up, hovered, 
 		delete(th.in.tipSince, id)
 		return
 	}
-	th.popupTip(gtx, id, hovered, focused, func(gtx C) D { return th.tooltip(gtx, tip) }, func(box image.Point) (image.Point, bool) {
+	th.popupTip(gtx, id, hovered, focused, 320, func(gtx C) D { return th.tooltip(gtx, tip) }, func(box image.Point) (image.Point, bool) {
 		gap := dp(gtx, 4)
 		if up {
 			return image.Pt(left(box.X), -box.Y-gap), true
@@ -471,12 +481,12 @@ func (th *Theme) tipShown(gtx C, id, tip string, size image.Point, up, hovered, 
 	})
 }
 
-// popupTip shows box, at most 320dp wide, as target id's tooltip once the
+// popupTip shows box, at most maxW wide, as target id's tooltip once the
 // pointer has rested on it for 600ms, or at once while it has the
 // keyboard's focus: fading in and growing from 98% over 150ms out of the
 // side facing the target, where place puts it given its size (relative to
 // the target, and whether that's above it). It reports whether it shows.
-func (th *Theme) popupTip(gtx C, id string, hovered, focused bool, box W, place func(size image.Point) (image.Point, bool)) bool {
+func (th *Theme) popupTip(gtx C, id string, hovered, focused bool, maxW float32, box W, place func(size image.Point) (image.Point, bool)) bool {
 	if !(hovered || focused) {
 		delete(th.in.tipSince, id)
 		return false
@@ -503,7 +513,7 @@ func (th *Theme) popupTip(gtx C, id string, hovered, focused bool, box W, place 
 	}
 	m := op.Record(gtx.Ops)
 	g := gtx
-	g.Constraints = layout.Constraints{Max: image.Pt(dp(gtx, 320), 1<<20)}
+	g.Constraints = layout.Constraints{Max: image.Pt(dp(gtx, maxW), 1<<20)}
 	td := box(g)
 	call := m.Stop()
 	at, up := place(td.Size)
@@ -527,19 +537,32 @@ func (th *Theme) popupTip(gtx C, id string, hovered, focused bool, box W, place 
 // tooltip is T3's tooltip popup (TooltipPopup): popover surface, 1dp
 // border, radius 6, 12/16.5 text padded 4 by 8 inside the border, and its
 // lip and small shadow: 26.5dp tall on one line (§3.2).
-func (th *Theme) tooltip(gtx C, tip string) D { return th.tipBox(gtx, tip, false) }
+func (th *Theme) tooltip(gtx C, tip string) D { return th.tipBox(gtx, tip, tipPlain) }
 
-// tipBox is a tooltip's box, or with glass a tooltip-styled popover's
-// (popover.tsx tooltipStyle): the dropdown glass as it paints over the
-// window, inside a 1dp border at the foreground's 10%, with 12/16 text.
-// Its lines are CSS line boxes, which Gio's own label doesn't make.
-func (th *Theme) tipBox(gtx C, tip string, glass bool) D {
+// tipStyle is a tooltip box's look.
+type tipStyle int
+
+const (
+	tipPlain tipStyle = iota
+	tipGlass          // a tooltip-styled popover (popover.tsx tooltipStyle)
+	tipCode           // the code variant: 11px mono on relaxed lines
+)
+
+// tipBox is a tooltip's box in style: the plain one; a tooltip-styled
+// popover's, the dropdown glass as it paints over the window inside a 1dp
+// border at the foreground's 10%, with 12/16 text; or the code variant's,
+// the plain box with 11px mono on 1.625 lines. Its lines are CSS line
+// boxes, which Gio's own label doesn't make.
+func (th *Theme) tipBox(gtx C, tip string, style tipStyle) D {
 	t := Txt{Size: 12, LineH: 16.5 / 12, Color: P.PopoverForeground}
 	bg, border := P.Popover, over(P.Border, P.Popover)
-	if glass {
+	switch style {
+	case tipGlass:
 		t.LineH = 16.0 / 12
 		bg = cardFill()
 		border = over(alpha(P.ContrastForeground, 0x1a), bg)
+	case tipCode:
+		t.Size, t.LineH, t.Font = 11, 1.625, font.Font{Typeface: mono}
 	}
 	m := op.Record(gtx.Ops)
 	d := pad(5, 9, 5, 9).Layout(gtx, func(gtx C) D { return th.boxText(gtx, t, tip) })
