@@ -85,6 +85,9 @@ func (th *Theme) bannerFade(gtx C, s *Scene) float32 {
 // Attached it's 44 narrower and rounded only on top, and 17 more of it go
 // under the card; detached it's rounded 16 all round.
 func (th *Theme) machineBanner(gtx C, b *Banner, w int, detached bool) D {
+	// Its parts take their own sizes: the composer's exact width would
+	// make the action as wide as the card.
+	gtx.Constraints.Min = image.Point{}
 	x, bw := 0, w
 	h := dp(gtx, 5+24+5)
 	if !detached {
