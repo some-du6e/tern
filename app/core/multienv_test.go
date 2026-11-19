@@ -20,6 +20,9 @@ func testApp(t *testing.T) *App {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The stash writes its file off the UI's path: let it land before the
+	// store's folder goes (cleanups run last first).
+	t.Cleanup(a.stashSaving.Wait)
 	now := time.Now().UTC()
 	at := func(d time.Duration) string { return now.Add(-d).Format(time.RFC3339Nano) }
 	mk := func(id, label string, projects map[string]string, threads ...t3.Thread) *envState {
