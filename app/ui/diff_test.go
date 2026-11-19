@@ -94,7 +94,7 @@ func TestCodeViewRows(t *testing.T) {
 		th.codeView(gtx, &Scene{}, d)
 		return D{}
 	})
-	wantPixel(t, img, image.Pt(100, 44), c.sepBg, "separator pill")
+	wantPixel(t, img, image.Pt(400, 44), c.sepBg, "separator pill")
 	wantPixel(t, img, image.Pt(4, 44), c.bg, "separator's inset")
 	wantPixel(t, img, image.Pt(300, 66), c.bg, "context row")
 	wantPixel(t, img, image.Pt(300, 86), c.delRow, "deletion row")
@@ -121,7 +121,7 @@ func TestCodeViewFolded(t *testing.T) {
 		th.codeView(gtx, &Scene{}, d)
 		return D{}
 	})
-	wantPixel(t, img, image.Pt(100, 32+44), c.sepBg, "the second file's separator, under the first's header")
+	wantPixel(t, img, image.Pt(400, 32+44), c.sepBg, "the second file's separator, under the first's header")
 }
 
 // A file's header sticks to the top while its body scrolls under it.

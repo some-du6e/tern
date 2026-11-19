@@ -168,7 +168,9 @@ func (th *Theme) diffHeaderRow(gtx C, s *Scene, d *DiffPanel) {
 	pad := dp(gtx, 8)
 	// The toolbar first: it never shrinks, the left group takes the rest.
 	m := op.Record(gtx.Ops)
-	tw := th.diffToolbar(gtx, d)
+	tg := gtx
+	tg.Constraints.Min = image.Point{}
+	tw := th.diffToolbar(tg, d)
 	bar := m.Stop()
 	func() {
 		defer op.Offset(image.Pt(size.X-pad-tw.Size.X, (size.Y-tw.Size.Y)/2)).Push(gtx.Ops).Pop()
