@@ -262,6 +262,7 @@ func (th *Theme) cardContent(gtx C, s *Scene, dn density, measuring bool) D {
 		}
 		y += dp(gtx, 8)
 		for _, r := range rows {
+			th.in.rowTop = th.in.cardTop + max(1, dp(gtx, 1)) + y - th.in.cardScroll
 			off := op.Offset(image.Pt(dp(gtx, 8), y)).Push(gtx.Ops)
 			g := gtx
 			g.Constraints = layout.Constraints{Max: image.Pt(rowW, 1<<20)}

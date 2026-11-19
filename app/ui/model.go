@@ -313,9 +313,34 @@ type PullRequests struct {
 type PullRequestRow struct {
 	State    string // open, draft, closed or merged; "" until it's read
 	Label    string
-	Tip      string // "PR #12 - Open: <title>"
-	Watching bool   // the agent watches it: an eye after the row stops that
+	Tip      string          // "PR #12 - Open: <title>"
+	Rich     *PullRequestTip // its tooltip in place of Tip once its detail has loaded
+	Watching bool            // the agent watches it: an eye after the row stops that
 	Detail   *PullRequestDetailRow
+}
+
+// PullRequestTip is a loaded pull request's tooltip (ThreadDetailsPrRow.tsx,
+// §3.8): its title and number, then its state, its branches, its checks
+// while it's open, a draft's conflicts, its files and lines, and the lines
+// by what the files are once they're read, which its first showing asks
+// for ("card.pr:<i>", kind "tip").
+type PullRequestTip struct {
+	Title, State, StateLabel string
+	Number                   int
+	Branches                 string // "<base> ← <head>"
+	Checks                   string // the checks' summary, "" for none
+	ChecksState              string // its icon: success, failure or pending
+	Conflicts                string // "Merge conflicts with <base>", on a draft
+	Files                    int
+	Insertions, Deletions    int
+	Kinds                    []LineKind
+}
+
+// LineKind is one kind of file's lines in a change: Code, Tests, Mocks,
+// Generated or Docs.
+type LineKind struct {
+	Label                 string
+	Insertions, Deletions int
 }
 
 // PullRequestDetailRow is a pull request whose detail has loaded with

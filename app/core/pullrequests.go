@@ -415,6 +415,7 @@ func (a *App) prsScene(e *envState, p t3.Project, items []prItem, terms changeTe
 			break
 		}
 		var detail *ui.PullRequestDetailRow
+		var rich *ui.PullRequestTip
 		if ref := prRefOf(e, p, it, i == 0); ref != nil {
 			key := prKeyOf(e.id(), *ref)
 			shown[key] = true
@@ -425,9 +426,11 @@ func (a *App) prsScene(e *envState, p t3.Project, items []prItem, terms changeTe
 					it.title = d.Title
 				}
 				detail = a.detailRow(key, l, it.number, it.watching)
+				rich = prTip(d, it.prState(), l.breakdown)
 			}
 		}
-		r := ui.PullRequestRow{State: it.prState(), Label: "#" + strconv.Itoa(it.number), Watching: it.watching && (it.state == "" || it.state == "open"), Detail: detail}
+		r := ui.PullRequestRow{State: it.prState(), Label: "#" + strconv.Itoa(it.number), Watching: it.watching && (it.state == "" || it.state == "open"),
+			Detail: detail, Rich: rich}
 		if title := strings.TrimSpace(it.title); title != "" {
 			r.Label += ": " + it.title
 		}

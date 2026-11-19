@@ -106,6 +106,67 @@ func TestChecksWords(t *testing.T) {
 	}
 }
 
+// A loaded pull request's tooltip is T3's rich one (ThreadDetailsPrRow.tsx,
+// 05-header.md §3.8): its state, its branches, its checks while it's open
+// (describePullRequestChecks, not the popover's summary), its files and
+// lines, and a draft's conflicts. Its first showing reads the lines by kind
+// (pullRequests.changeBreakdown), once, which then lists the kinds with
+// lines in T3's order.
+func TestPullRequestTip(t *testing.T) {
+	for _, c := range []struct {
+		checks []t3.PullRequestCheck
+		want   string
+	}{
+		{[]t3.PullRequestCheck{check("failure"), check("pending")}, "1 of 2 running · 1 failed"},
+		{[]t3.PullRequestCheck{check("failure"), check("success")}, "1 of 2 failing"},
+		{[]t3.PullRequestCheck{check("action-required"), check("success")}, "1 of 2 awaiting action"},
+		{[]t3.PullRequestCheck{check("success"), check("skipped")}, "1 of 2 passing"},
+		{[]t3.PullRequestCheck{check("success")}, "All checks passed"},
+	} {
+		if got := describeChecks(c.checks); got != c.want {
+			t.Errorf("%v: %q, want %q", c.checks, got, c.want)
+		}
+	}
+	draft := prTip(mergeable(func(d *t3.PullRequestDetail) { d.IsDraft, d.Mergeability, d.BaseBranch = true, "conflicting", "main" }), "draft", nil)
+	if draft.StateLabel != "Draft" || draft.Conflicts != "Merge conflicts with main" {
+		t.Errorf("a conflicting draft: %+v", draft)
+	}
+	if merged := prTip(mergeable(func(d *t3.PullRequestDetail) { d.State = "merged" }), "merged", nil); merged.Checks != "" || merged.Conflicts != "" {
+		t.Errorf("a merged one has no checks line: %+v", merged)
+	}
+
+	a, f := prApp(t, func() *t3.PullRequestDetail {
+		return mergeable(func(d *t3.PullRequestDetail) {
+			d.BaseBranch, d.HeadBranch = "main", "parser-tabs"
+			d.ChangedFiles, d.Additions, d.Deletions = 3, 1200, 45
+			d.Checks = []t3.PullRequestCheck{check("success"), check("pending")}
+		})
+	})
+	f.on("pullRequests.changeBreakdown", func(f *fakeEnv, r fakeReq) {
+		lines := func(add, del int) map[string]any { return map[string]any{"additions": add, "deletions": del} }
+		f.exit(r, map[string]any{"code": lines(1100, 40), "tests": lines(100, 5), "mocks": lines(0, 0), "generated": lines(0, 0)})
+	})
+	tip := prRow(t, a).Rich
+	if tip == nil || tip.Title != "Teach the parser about tabs" || tip.Number != 12 || tip.State != "open" || tip.StateLabel != "Open" ||
+		tip.Branches != "main ← parser-tabs" || tip.Checks != "1 of 2 running" || tip.ChecksState != "pending" ||
+		tip.Files != 3 || tip.Insertions != 1200 || tip.Deletions != 45 || tip.Conflicts != "" || tip.Kinds != nil {
+		t.Fatalf("tip %+v", tip)
+	}
+	th := ui.NewTheme()
+	a.handle(th, ui.Action{ID: "card.pr:0", Kind: "tip"})
+	a.handle(th, ui.Action{ID: "card.pr:0", Kind: "tip"})
+	if b := f.wait("pullRequests.changeBreakdown", 1).Payload; b["number"] != float64(12) || b["repository"] != "acme/widgets" || b["projectId"] != "p1" {
+		t.Fatalf("breakdown read %v", b)
+	}
+	eventually(t, "the lines by kind", func() bool {
+		k := built(a, time.Now()).Card.PRs.Rows[0].Rich.Kinds
+		return len(k) == 2 && k[0] == (ui.LineKind{Label: "Code", Insertions: 1100, Deletions: 40}) && k[1] == (ui.LineKind{Label: "Tests", Insertions: 100, Deletions: 5})
+	})
+	if n := len(f.requests("pullRequests.changeBreakdown")); n != 1 {
+		t.Errorf("%d breakdown reads, want one", n)
+	}
+}
+
 // prApp is liveApp with the open thread's pull request linked and its
 // project checked out from its repository, on a server that reads checks
 // alone; detail answers pullRequests.detail.

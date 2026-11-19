@@ -48,9 +48,31 @@ type PullRequestDetail struct {
 	State             string             `json:"state"` // open, closed, merged
 	IsDraft           bool               `json:"isDraft"`
 	Mergeability      string             `json:"mergeability"` // mergeable, conflicting, unknown
+	Additions         int                `json:"additions"`
+	Deletions         int                `json:"deletions"`
+	ChangedFiles      int                `json:"changedFiles"`
+	HeadBranch        string             `json:"headBranch"`
+	BaseBranch        string             `json:"baseBranch"`
 	Checks            []PullRequestCheck `json:"checks"`
 	MergeCapabilities map[string]bool    `json:"mergeCapabilities"`
 	ObservedAt        *float64           `json:"observedAt"`
+}
+
+// PullRequestBreakdown is pullRequests.changeBreakdown: a change's lines
+// split by what its files are, judged from their paths. Null when the host
+// can't split all of them.
+type PullRequestBreakdown struct {
+	Code      PullRequestLines `json:"code"`
+	Tests     PullRequestLines `json:"tests"`
+	Mocks     PullRequestLines `json:"mocks"`
+	Generated PullRequestLines `json:"generated"`
+	Docs      PullRequestLines `json:"docs"`
+}
+
+// PullRequestLines is a count of lines added and deleted.
+type PullRequestLines struct {
+	Additions int `json:"additions"`
+	Deletions int `json:"deletions"`
 }
 
 // PullRequestChecks is pullRequests.checks: the checks alone, read again

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,6 +34,9 @@ type prLoad struct {
 	loadedAt    time.Time
 	checkedAt   time.Time
 	acting      string // merge or ready
+	// Its lines by what its files are, which its tooltip asks for once.
+	breakdown  *t3.PullRequestBreakdown
+	kindsAsked bool
 }
 
 // prAlert is the merge waiting on its dialog.
@@ -535,6 +539,94 @@ func (a *App) detailRow(key string, l *prLoad, number int, watching bool) *ui.Pu
 		return nil
 	}
 	return row
+}
+
+// prTip is a loaded pull request's tooltip (ThreadDetailsPrRow.tsx): its
+// title and number, its state (the row's, where an open draft is Draft),
+// its branches, its checks while it's open, a draft's conflicts with its
+// base, its files and lines, and the lines by what the files are once
+// they're read.
+func prTip(d *t3.PullRequestDetail, state string, b *t3.PullRequestBreakdown) *ui.PullRequestTip {
+	tip := &ui.PullRequestTip{Title: d.Title, Number: d.Number, State: state, StateLabel: prStateLabels[state],
+		Branches: d.BaseBranch + " ← " + d.HeadBranch, Files: d.ChangedFiles, Insertions: d.Additions, Deletions: d.Deletions}
+	if c := classifyChecks(d.Checks); d.State == "open" && c != "none" {
+		tip.Checks, tip.ChecksState = describeChecks(d.Checks), map[string]string{"failing": "failure", "pending": "pending", "passing": "success"}[c]
+	}
+	if d.IsDraft && d.State == "open" && d.Mergeability == "conflicting" {
+		tip.Conflicts = "Merge conflicts with " + d.BaseBranch
+	}
+	if b != nil && (d.Additions > 0 || d.Deletions > 0) {
+		for _, k := range []struct {
+			label string
+			n     t3.PullRequestLines
+		}{{"Code", b.Code}, {"Tests", b.Tests}, {"Mocks", b.Mocks}, {"Generated", b.Generated}, {"Docs", b.Docs}} {
+			if k.n.Additions > 0 || k.n.Deletions > 0 {
+				tip.Kinds = append(tip.Kinds, ui.LineKind{Label: k.label, Insertions: k.n.Additions, Deletions: k.n.Deletions})
+			}
+		}
+	}
+	return tip
+}
+
+// describeChecks is the tooltip's line for a pull request's checks
+// (describePullRequestChecks): how many run, wait on someone or failed,
+// else how many passed.
+func describeChecks(checks []t3.PullRequestCheck) string {
+	n := len(checks)
+	if n == 0 {
+		return "No checks reported"
+	}
+	count := func(statuses ...string) int {
+		return countChecks(checks, func(c t3.PullRequestCheck) bool { return slices.Contains(statuses, c.Status) })
+	}
+	failed, running, waiting, passed := count("failure", "cancelled"), count("pending"), count("action-required"), count("success")
+	var parts []string
+	if running > 0 {
+		parts = append(parts, fmt.Sprintf("%d of %d running", running, n))
+	}
+	if waiting > 0 {
+		parts = append(parts, fmt.Sprintf("%d of %d awaiting action", waiting, n))
+	}
+	switch {
+	case failed > 0 && len(parts) > 0:
+		parts = append(parts, fmt.Sprintf("%d failed", failed))
+	case failed > 0:
+		parts = append(parts, fmt.Sprintf("%d of %d failing", failed, n))
+	case len(parts) == 0 && passed == n:
+		return "All checks passed"
+	case len(parts) == 0:
+		return fmt.Sprintf("%d of %d passing", passed, n)
+	}
+	return strings.Join(parts, " · ")
+}
+
+// readPRKinds reads how pull request row i's lines split by what its files
+// are (pullRequests.changeBreakdown) when its tooltip first shows, as T3
+// reads them when they mount: once, and only with lines to split.
+func (a *App) readPRKinds(i int) {
+	a.mu.Lock()
+	e, _, ref, l := a.shownPR(i)
+	var d *t3.PullRequestDetail
+	if l != nil {
+		d = withNewerChecks(l)
+	}
+	if ref == nil || d == nil || l.kindsAsked || e.conn == nil || d.Additions == 0 && d.Deletions == 0 {
+		a.mu.Unlock()
+		return
+	}
+	l.kindsAsked = true
+	conn, r := e.conn, *ref
+	a.mu.Unlock()
+	go func() {
+		var b *t3.PullRequestBreakdown
+		if conn.Call("pullRequests.changeBreakdown", refInput(r, nil), &b) != nil {
+			return
+		}
+		a.mu.Lock()
+		l.breakdown = b
+		a.mu.Unlock()
+		a.changed()
+	}()
 }
 
 // shownPR is the card's pull request row i with its reference and read:

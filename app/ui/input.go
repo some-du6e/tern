@@ -77,6 +77,11 @@ type input struct {
 	cardScrollG gesture.Scroll
 	measuring   bool
 	density     densityMemo
+	// The card's top in the window and the top of the row it's laying out,
+	// which put a pull request's tooltip above or below its row; and the
+	// tooltips that have asked for what they show while they're up.
+	cardTop, rowTop int
+	tipAsked        map[string]bool
 	// The branch picker's search and highlight last frame: a new search
 	// scrolls its list to the top, a new highlight into view.
 	pickQuery string
@@ -453,9 +458,28 @@ func (th *Theme) tipPlaced(gtx C, id, tip string, size image.Point, up bool, lef
 
 // tipShown draws target id's tooltip while it's hovered or focused.
 func (th *Theme) tipShown(gtx C, id, tip string, size image.Point, up, hovered, focused bool, left func(w int) int) {
-	if !(hovered || focused) || tip == "" {
+	if tip == "" {
 		delete(th.in.tipSince, id)
 		return
+	}
+	th.popupTip(gtx, id, hovered, focused, func(gtx C) D { return th.tooltip(gtx, tip) }, func(box image.Point) (image.Point, bool) {
+		gap := dp(gtx, 4)
+		if up {
+			return image.Pt(left(box.X), -box.Y-gap), true
+		}
+		return image.Pt(left(box.X), size.Y+gap), false
+	})
+}
+
+// popupTip shows box, at most 320dp wide, as target id's tooltip once the
+// pointer has rested on it for 600ms, or at once while it has the
+// keyboard's focus: fading in and growing from 98% over 150ms out of the
+// side facing the target, where place puts it given its size (relative to
+// the target, and whether that's above it). It reports whether it shows.
+func (th *Theme) popupTip(gtx C, id string, hovered, focused bool, box W, place func(size image.Point) (image.Point, bool)) bool {
+	if !(hovered || focused) {
+		delete(th.in.tipSince, id)
+		return false
 	}
 	if th.in.tipSince == nil {
 		th.in.tipSince = map[string]time.Time{}
@@ -471,7 +495,7 @@ func (th *Theme) tipShown(gtx C, id, tip string, size image.Point, up, hovered, 
 	}
 	if shown < 0 {
 		gtx.Execute(op.InvalidateCmd{At: since.Add(600 * time.Millisecond)})
-		return
+		return false
 	}
 	t := easeOut(clamp01(float32(shown) / float32(150*time.Millisecond)))
 	if t < 1 {
@@ -479,14 +503,10 @@ func (th *Theme) tipShown(gtx C, id, tip string, size image.Point, up, hovered, 
 	}
 	m := op.Record(gtx.Ops)
 	g := gtx
-	g.Constraints = layout.Constraints{Max: image.Pt(dp(gtx, 320), dp(gtx, 200))}
-	td := th.tooltip(g, tip)
+	g.Constraints = layout.Constraints{Max: image.Pt(dp(gtx, 320), 1<<20)}
+	td := box(g)
 	call := m.Stop()
-	gap := dp(gtx, 4)
-	at := image.Pt(left(td.Size.X), size.Y+gap)
-	if up {
-		at.Y = -td.Size.Y - gap
-	}
+	at, up := place(td.Size)
 	m2 := op.Record(gtx.Ops)
 	op.Offset(at).Add(gtx.Ops)
 	// Gio's renderer needs every opacity layer closed in the frame.
@@ -501,6 +521,7 @@ func (th *Theme) tipShown(gtx C, id, tip string, size image.Point, up, hovered, 
 	call.Add(gtx.Ops)
 	fade.Pop()
 	op.Defer(gtx.Ops, m2.Stop())
+	return true
 }
 
 // tooltip is T3's tooltip popup (TooltipPopup): popover surface, 1dp

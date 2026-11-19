@@ -587,6 +587,7 @@ func (th *Theme) chatColumn(gtx C, s *Scene, x int, panelOpen, narrow bool) {
 					return D{}
 				}
 				gtx.Constraints = layout.Constraints{Max: image.Pt(w, max(0, size.Y-dp(gtx, 104)))}
+				th.in.cardTop = top + dp(gtx, 8)
 				return th.details(gtx, s, size.Y-top-drawer-dp(gtx, 52))
 			})
 		})
@@ -682,6 +683,7 @@ func (th *Theme) canvas(gtx C, s *Scene) {
 		defer op.Offset(image.Pt(cardX, dp(gtx, cardInset))).Push(gtx.Ops).Pop()
 		g := gtx
 		g.Constraints = layout.Constraints{Max: image.Pt(dp(gtx, cardW), slot)}
+		th.in.cardTop = dp(gtx, topBarH+cardInset)
 		th.details(g, s, slot)
 	}
 }

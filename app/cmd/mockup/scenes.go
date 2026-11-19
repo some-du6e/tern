@@ -398,6 +398,17 @@ func hintScene() *ui.Scene {
 	return s
 }
 
+// prTipScene is the thread's pull request read in full, for the pointer
+// to rest on: T3's rich tooltip, its lines by kind read too.
+func prTipScene() *ui.Scene {
+	s := runningScene()
+	s.Card.PRs = &ui.PullRequests{Rows: []ui.PullRequestRow{{State: "open", Label: "#214: Retry relay reads on a dropped socket",
+		Rich: &ui.PullRequestTip{Title: "Retry relay reads on a dropped socket", Number: 214, State: "open", StateLabel: "Open",
+			Branches: "main ← t3/go-client", Checks: "All checks passed", ChecksState: "success", Files: 6, Insertions: 255, Deletions: 12,
+			Kinds: []ui.LineKind{{Label: "Code", Insertions: 182, Deletions: 9}, {Label: "Tests", Insertions: 64, Deletions: 3}, {Label: "Docs", Insertions: 9}}}}}}
+	return s
+}
+
 // commitScene is the Git menu's Commit reviewing first on the default
 // branch: the working tree's files, every one in.
 func commitScene() *ui.Scene {

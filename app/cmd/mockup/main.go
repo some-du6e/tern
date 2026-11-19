@@ -87,6 +87,8 @@ func main() {
 			return th.Desktop(gtx, commitScene())
 		}, none},
 		{"29-git-commit-editing", 1440, 900, desktop(commitEditScene), none},
+		// The pointer on the pull request: T3's rich tooltip under it.
+		{"30-details-pr-tooltip", 1440, 900, desktop(prTipScene), image.Pt(1300, 236)},
 	}
 	if *anim != "" {
 		if err := renderAnims(ui.NewTheme(), float32(*scale), *anim); err != nil {
@@ -124,6 +126,7 @@ func darkShots() []shot {
 		{"d25-details-hint-reason-dark", 1440, 900, desktop(hintScene), image.Pt(1257, 236)},
 		{"d27-delete-confirm-dark", 1440, 900, desktop(deleteScene), none},
 		{"d29-git-commit-editing-dark", 1440, 900, desktop(commitEditScene), none},
+		{"d30-details-pr-tooltip-dark", 1440, 900, desktop(prTipScene), image.Pt(1300, 236)},
 	}
 }
 

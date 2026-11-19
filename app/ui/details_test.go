@@ -104,6 +104,52 @@ func TestPRRows(t *testing.T) {
 	}
 }
 
+// A loaded pull request's tooltip is T3's rich glass one (§3.8), 600ms
+// after the pointer comes to rest on its row (y 220..252): lined up with
+// the row's end at 1419, the card being at the window's right, and above
+// the row while it fits under the title bar band and 5dp, below once the
+// lines by kind make it too tall. Its first showing asks for those lines
+// once; with them there's nothing to ask.
+func TestPRTipDrawn(t *testing.T) {
+	s := cardScene()
+	tip := &PullRequestTip{Title: "Teach the parser about tabs", Number: 12, State: "open", StateLabel: "Open", Branches: "main ← parser-tabs",
+		Files: 3, Insertions: 1200, Deletions: 45}
+	s.Card.PRs = &PullRequests{Rows: []PullRequestRow{{State: "open", Label: "#12: Teach the parser about tabs", Tip: "PR #12 - Open", Rich: tip}}}
+	l := newLive(image.Pt(1440, 900), nil)
+	l.draw = func(gtx C) { l.th.Desktop(gtx, s) }
+	show := func() (asked int, top, bottom int) {
+		t.Helper()
+		l.move(700, 450)
+		l.frame(time.Second)
+		l.move(1300, 236)
+		l.frame(0)
+		for _, a := range l.frame(800 * time.Millisecond) {
+			if a == (Action{ID: "card.pr:0", Kind: "tip"}) {
+				asked++
+			}
+		}
+		// The tooltip's right border, down the row's last column.
+		top, bottom = run(l.pixels(t), 1418, 0, 900, over(alpha(P.ContrastForeground, 0x1a), cardFill()))
+		return asked, top, bottom
+	}
+	l.frame(0)
+	asked, top, bottom := show()
+	if asked != 1 {
+		t.Errorf("the first showing asked %d times for the lines by kind, want once", asked)
+	}
+	if top < 52+5 || bottom > 220-4 || bottom < 220-4-8 {
+		t.Errorf("the tooltip's border spans y %d..%d, want it above the row, 4dp off, under the title bar", top, bottom)
+	}
+	tip.Kinds = []LineKind{{"Code", 1100, 40}, {"Tests", 90, 5}, {"Docs", 10, 0}}
+	asked, top, bottom = show()
+	if asked != 0 {
+		t.Errorf("with the lines by kind it asked %d times", asked)
+	}
+	if top < 252+4 || top > 252+4+8 || bottom-top < 150 {
+		t.Errorf("the taller tooltip's border spans y %d..%d, want it below the row, 4dp off", top, bottom)
+	}
+}
+
 // detailedScene is cardScene with its pull request read: a long title,
 // passing checks and Merge.
 func detailedScene() *Scene {

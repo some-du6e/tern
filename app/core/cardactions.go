@@ -98,6 +98,10 @@ func (a *App) handleHeader(th *ui.Theme, act ui.Action) bool {
 		// A pull request row opens it, as a middle click does.
 		a.openPR(atoi(strings.TrimPrefix(id, "card.pr:")))
 		return true
+	case strings.HasPrefix(id, "card.pr:") && act.Kind == "tip":
+		// Its tooltip showed: the lines by kind it lists.
+		a.readPRKinds(atoi(strings.TrimPrefix(id, "card.pr:")))
+		return true
 	case id == "commit.message":
 		// The Commit dialog reads its message when it commits; Escape in
 		// it closes the dialog, as anywhere else in it.
