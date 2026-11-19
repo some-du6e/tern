@@ -232,6 +232,21 @@ type Pairing struct {
 	Error      string // the error Alert under the field
 }
 
+// Home is what the main column shows when there's no thread to (§2.1):
+// nothing while the computers' threads load, T3's NoProjectsHero, its
+// hosted home with no computer on the account, NoActiveThreadState, or
+// the error from starting a new thread ("home.retry").
+type Home int
+
+const (
+	HomeNone Home = iota
+	HomeBlank
+	HomeNoProjects
+	HomeNoComputer
+	HomeNoThread
+	HomeDraftError
+)
+
 // Browser is the preview surface. An empty URL is the new-tab page.
 type Browser struct {
 	Title   string
@@ -270,7 +285,7 @@ type Scene struct {
 	Live                     bool
 	Error                    string       // shown as a dismissable banner
 	Notice                   string       // a quiet status line over the composer, like "Sending…"
-	Empty                    string       // shown instead of messages when no thread is open
+	Empty                    string       // shown instead of the open thread's messages, like "No messages yet."
 	Access                   *Traits      // the access-mode menu, open over the lock
 	Account                  *Traits      // the account menu, open over the sidebar footer
 	Projects                 *Traits      // the new-thread project menu, one group per machine
@@ -318,12 +333,14 @@ type Scene struct {
 	Traits *Traits
 	Diff   *DiffView
 
-	// Gate is what the window shows; at GateApp, the app. Failure, Login
-	// and Pair belong to their gates.
+	// Gate is what the window shows; at GateApp, the app, whose main
+	// column shows Home when there's no thread. Failure, Login and Pair
+	// belong to their gates.
 	Gate    Gate
 	Failure *Failure
 	Login   *SignIn
 	Pair    *Pairing
+	Home    Home
 
 	Phase float64 // spinner angle, so a frame can show motion
 

@@ -306,9 +306,8 @@ func (a *App) build(now time.Time) *ui.Scene {
 	if len(s.Tabs) == 0 {
 		s.TabSel = -1
 	}
-	running, total, online := 0, 0, false
+	running, total := 0, 0
 	for _, e := range a.envs {
-		online = online || e.conn != nil
 		total += len(e.threads)
 		for _, t := range e.threads {
 			if !isSubagent(t) && threadState(t) == ui.ThreadRunning {
@@ -332,7 +331,10 @@ func (a *App) build(now time.Time) *ui.Scene {
 	}
 
 	// With nothing open the composer starts a new thread, the way T3 opens
-	// on one, rather than asking you to press + first.
+	// on one, rather than asking you to press + first. With no project to
+	// start it in, the main column is T3's empty state for why: no
+	// computer on the account, the threads not all in yet (T3 shows
+	// nothing then), or no project anywhere.
 	if a.draft == "" && a.openID == "" {
 		a.newDraftLocked()
 	}
@@ -341,14 +343,25 @@ func (a *App) build(now time.Time) *ui.Scene {
 		a.draftScene(s)
 	case a.openID != "":
 		a.threadScene(s)
+	case len(a.envs) == 0:
+		s.Home = ui.HomeNoComputer
+	case !a.loadedLocked():
+		s.Home = ui.HomeBlank
 	default:
-		s.Title = ""
-		s.Empty = "Pick a thread, or press + to start one."
-		if !online {
-			s.Empty = "Connecting…"
-		}
+		s.Home = ui.HomeNoProjects
 	}
 	return s
+}
+
+// loadedLocked reports whether every computer's live threads are in.
+// Call with the lock held.
+func (a *App) loadedLocked() bool {
+	for _, e := range a.envs {
+		if !e.loaded {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *App) draftScene(s *ui.Scene) {
@@ -435,7 +448,18 @@ func (a *App) projectChoices() []projectGroup {
 func (a *App) threadScene(s *ui.Scene) {
 	e, t := a.thread(a.openID)
 	if t == nil {
-		s.Empty = "Loading…"
+		// Not among its computer's threads. Until they're in, T3 shows
+		// nothing; once they are, it goes home to a new thread if that
+		// computer has others (ThreadRouteView.tsx:143-155), and says
+		// there's no active thread if not.
+		switch {
+		case e != nil && !e.loaded:
+			s.Home = ui.HomeBlank
+		case e != nil && len(e.threads) > 0 && a.newDraftLocked():
+			a.draftScene(s)
+		default:
+			s.Home = ui.HomeNoThread
+		}
 		return
 	}
 	s.Title = t.Title

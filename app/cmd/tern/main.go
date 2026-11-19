@@ -57,6 +57,7 @@ func run(w *app.Window) error {
 			failedAt = now
 			return
 		}
+		c.OpenURL = shell.Open
 		c.Start()
 	}
 	start()

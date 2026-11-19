@@ -81,9 +81,12 @@ func (th *Theme) Desktop(gtx C, s *Scene) D {
 	if sw > 0 {
 		at(0, sw, func(gtx C) { th.sidebarFrame(gtx, s) })
 	}
-	// The fixed title bar controls go over everything else in the shell.
+	// The fixed title bar controls go over everything else in the shell;
+	// the panel toggles are the thread's, so the empty states have none.
 	th.sidebarTrigger(gtx, s, sw > 0)
-	th.titlebarControls(gtx, s, size, rp > 0)
+	if s.Home == HomeNone {
+		th.titlebarControls(gtx, s, size, rp > 0)
+	}
 
 	if s.Diff != nil {
 		th.diffWindow(gtx, s.Diff)
@@ -385,8 +388,12 @@ func (th *Theme) detailsShown(s *Scene) bool {
 // ---------- the chat column ----------
 
 // chatColumn is the header, the canvas below it and the terminal drawer at
-// the bottom.
+// the bottom; with no thread to show, the empty state (home).
 func (th *Theme) chatColumn(gtx C, s *Scene, collapsed, panelOpen bool) {
+	if s.Home != HomeNone {
+		th.home(gtx, s, collapsed)
+		return
+	}
 	size := gtx.Constraints.Max
 	top := dp(gtx, topBarH)
 	drawer := 0

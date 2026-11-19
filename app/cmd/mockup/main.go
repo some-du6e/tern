@@ -53,10 +53,15 @@ func main() {
 		{"6g-boot", 1440, 900, gateShot(bootScene)},
 		{"6h-boot-failed", 1440, 900, gateShot(bootFailedScene)},
 		{"6i-session-error", 1440, 900, gateShot(sessionErrorScene)},
+		{"6j-no-projects", 1440, 900, homeShot(ui.HomeNoProjects)},
+		{"6k-no-computer", 1440, 900, homeShot(ui.HomeNoComputer)},
+		{"6l-no-thread", 1440, 900, homeShot(ui.HomeNoThread)},
+		{"6m-draft-error", 1440, 900, homeShot(ui.HomeDraftError)},
 		{"6q-sign-in-dark", 1440, 900, inDark(gateShot(signInScene, "signin.email", "you@example.com"))},
 		{"6r-pair-error-dark", 1440, 900, inDark(gateShot(pairErrorScene, "pair.link", "https://studio.example.com/pair#token=spent"))},
 		{"6s-session-error-dark", 1440, 900, inDark(gateShot(sessionErrorScene))},
 		{"6t-boot-failed-dark", 1440, 900, inDark(gateShot(bootFailedScene))},
+		{"6u-no-computer-dark", 1440, 900, inDark(homeShot(ui.HomeNoComputer))},
 		{"7-phone", 390, 844, func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Phone(gtx, phoneScene()) }},
 	}
 	if *anim != "" {
@@ -83,6 +88,11 @@ func gateShot(scene func() *ui.Scene, fields ...string) func(th *ui.Theme, gtx l
 		}
 		return th.Gate(gtx, scene())
 	}
+}
+
+// homeShot draws the window with the main column's empty state h.
+func homeShot(h ui.Home) func(th *ui.Theme, gtx layout.Context) layout.Dimensions {
+	return func(th *ui.Theme, gtx layout.Context) layout.Dimensions { return th.Desktop(gtx, homeScene(h)) }
 }
 
 // inDark draws draw in the dark theme.

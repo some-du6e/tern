@@ -34,6 +34,7 @@ type envState struct {
 	projects  map[string]t3.Project
 	threads   map[string]*t3.Thread
 	shellSave time.Time // last time the shell cache was written
+	loaded    bool      // the live shell's snapshot is in
 }
 
 func newEnv(e t3.Environment, paired bool) *envState {
@@ -57,6 +58,8 @@ type App struct {
 	relay *t3.Relay
 
 	redraw func()
+	// OpenURL opens a web page in this computer's browser.
+	OpenURL func(string) error
 
 	mu       sync.Mutex
 	booted   bool // boot has decided between sign-in and the inbox
@@ -209,7 +212,8 @@ func (a *App) Start() {
 // boot reads the saved session and decides what the window shows: the app
 // on the account's computers and the paired ones, T3 Connect's sign-in
 // when there are neither, or the root error view when the first request
-// for the account's computers fails.
+// for the account's computers fails. Signed in with no computer, it's the
+// app with T3's hosted home, which looks again every 5s.
 func (a *App) boot() {
 	defer func() {
 		a.mu.Lock()
@@ -218,9 +222,10 @@ func (a *App) boot() {
 		a.changed()
 	}()
 	paired := t3.Paired(a.store)
+	connected := a.clerk.HasClient()
 	var envs []*envState
 	var cachedList []t3.Environment
-	if a.clerk.HasClient() {
+	if connected {
 		_, _ = a.store.Get("envs.json", &cachedList)
 	}
 	if len(cachedList) > 0 {
@@ -229,13 +234,15 @@ func (a *App) boot() {
 			envs = append(envs, newEnv(e, false))
 		}
 		go a.refreshEnvs()
-	} else if a.clerk.HasClient() {
+	} else if connected {
 		a.setNet("loading environments…")
 		list, err := a.relay.ListEnvironments()
 		switch {
 		case err == nil:
 			_ = a.store.Put("envs.json", list)
-		case !errors.Is(err, t3.ErrSignedOut) && len(paired) == 0:
+		case errors.Is(err, t3.ErrSignedOut):
+			connected = false
+		case len(paired) == 0:
 			a.mu.Lock()
 			a.signedIn, a.failure = false, &ui.Failure{Message: sentence(err.Error()), Report: sessionReport(err, time.Now())}
 			a.mu.Unlock()
@@ -250,7 +257,7 @@ func (a *App) boot() {
 	}
 	a.mu.Lock()
 	a.failure = nil
-	if len(envs) == 0 {
+	if len(envs) == 0 && !connected {
 		a.signedIn = false
 		a.mu.Unlock()
 		return
@@ -260,6 +267,9 @@ func (a *App) boot() {
 	a.mu.Unlock()
 	a.changed()
 	go a.refreshStatuses()
+	if len(envs) == 0 {
+		go a.waitForComputer()
+	}
 	for _, e := range envs {
 		a.loadShellCache(e)
 		a.connect(e)
@@ -274,6 +284,21 @@ func (a *App) retryBoot() {
 	a.mu.Unlock()
 	a.changed()
 	go a.boot()
+}
+
+// waitForComputer looks for a computer on the account every 5s while it
+// has none (CloudEnvironmentConnectList.tsx, refreshing while empty).
+func (a *App) waitForComputer() {
+	for {
+		time.Sleep(5 * time.Second)
+		a.mu.Lock()
+		waiting := a.signedIn && len(a.envs) == 0
+		a.mu.Unlock()
+		if !waiting {
+			return
+		}
+		a.refreshEnvs()
+	}
 }
 
 // refreshEnvs reloads the Connect environment list. A signed-out Clerk
@@ -608,6 +633,7 @@ func (a *App) subscribeShell(e *envState, conn *t3.Conn, gen int, started time.T
 				t := it.Snapshot.Threads[i]
 				e.threads[t.ID] = &t
 			}
+			e.loaded = true
 			a.net = e.env.Label + " · " + len3(len(e.threads)) + " threads in " + time.Since(started).Round(time.Millisecond).String()
 		case "project.updated":
 			if it.Project != nil {

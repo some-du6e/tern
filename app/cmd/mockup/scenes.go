@@ -274,8 +274,8 @@ func draftScene() *ui.Scene {
 	return s
 }
 
-// The gates (docs/ui/11-empty-auth.md). Their fields are editors, so
-// their shots type into them first.
+// The gates and the empty states (docs/ui/11-empty-auth.md). Their fields
+// are editors, so their shots type into them first.
 
 func signInScene() *ui.Scene {
 	return &ui.Scene{Gate: ui.GateSignIn, Login: &ui.SignIn{}}
@@ -310,6 +310,12 @@ func sessionErrorScene() *ui.Scene {
 		Message: "List environments failed (500) RelayInternalError.",
 		Report:  "tern 0.1.0\nTime: 2026-11-18T17:27:22.221Z\n\nList environments failed (500) RelayInternalError",
 	}}
+}
+
+// homeScene is the main column with nothing in it: an empty sidebar and
+// the empty state for why.
+func homeScene(h ui.Home) *ui.Scene {
+	return &ui.Scene{Filter: "All projects", Home: h}
 }
 
 func phoneScene() *ui.Scene {
