@@ -212,8 +212,10 @@ func (th *Theme) codeText(gtx C, code, lang string, col color.NRGBA, size, lineH
 	if w <= 0 {
 		w = 1 << 24
 	}
-	th.Shaper.LayoutString(text.Parameters{Font: Mono(), PxPerEm: fixed.I(px), MaxWidth: w, WrapPolicy: text.WrapHeuristically}, code)
+	// The metrics first: measuring them shapes text of their own, which
+	// would replace the code's.
 	m := th.metrics(Mono(), px)
+	th.Shaper.LayoutString(text.Parameters{Font: Mono(), PxPerEm: fixed.I(px), MaxWidth: w, WrapPolicy: text.WrapHeuristically}, code)
 	lh := lineH * gtx.Metric.PxPerDp
 	half := (lh - (m.ascent + m.descent)) / 2
 	ops := new(op.Ops)
