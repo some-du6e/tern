@@ -50,6 +50,18 @@ func TestEmptyStates(t *testing.T) {
 	}
 }
 
+// A text link is as wide as its text, its underline with it, in a row
+// that would stretch it.
+func TestTextLinkWidth(t *testing.T) {
+	th := NewTheme()
+	var ops op.Ops
+	gtx := layout.Context{Ops: &ops, Metric: unit.Metric{PxPerDp: 1, PxPerSp: 1}, Constraints: layout.Exact(image.Pt(384, 16))}
+	tx := Txt{Size: 12, LineH: 16.0 / 12, Color: P.MutedForeground}
+	if w := th.textLink("home.download", "Or download the desktop app", tx, P.Foreground, P.Background, 2, 100)(gtx).Size.X; w >= 300 {
+		t.Errorf("the link is %d wide in a 384 row", w)
+	}
+}
+
 // The hosted home's CommandBlock (§3.9) is 46 tall, rounded 8, its
 // --border edge round --muted at 50%, the text 12 in.
 func TestCommandBlock(t *testing.T) {

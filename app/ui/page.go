@@ -231,6 +231,8 @@ func (th *Theme) bootFailed(gtx C, f *Failure) {
 // zero.
 func (th *Theme) textLink(id, label string, t Txt, hover, on color.NRGBA, offset float32, decoration int) W {
 	return func(gtx C) D {
+		// As wide as its text, whatever the row it's in would make it.
+		gtx.Constraints.Min = image.Point{}
 		c, _ := th.events(gtx, id)
 		col := over(pct(t.Color, decoration), on)
 		if c.Hovered() {

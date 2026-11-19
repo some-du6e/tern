@@ -193,5 +193,40 @@ func TestSignInCard(t *testing.T) {
 		button := field + 32 + 32
 		wantPixel(t, img, image.Pt(570, button+2), P.Primary, "Continue's top")
 		wantPixel(t, img, image.Pt(570, button+29), P.Primary, "Continue's foot")
+		// Its label, and the link 32 under it, are centred on the card.
+		if inked(img, image.Rect(565, button+8, 680, button+24), P.Primary) || !inked(img, image.Rect(695, button+8, 745, button+24), P.Primary) {
+			t.Errorf("dark %v: Continue isn't centred", d)
+		}
+		link := button + 32 + 32
+		if inked(img, image.Rect(562, link, 620, link+18), P.Background) || !inked(img, image.Rect(700, link+2, 740, link+16), P.Background) {
+			t.Errorf("dark %v: the pairing link isn't centred", d)
+		}
+	}
+}
+
+// Clerk's code step: the digits typed so far each in the middle of their
+// 40dp box, six of them 8 apart across the 320 of content, and the resend
+// line centred under them.
+func TestSignInCode(t *testing.T) {
+	th := NewTheme()
+	th.SetEditorText("signin.code", "4821")
+	s := &Scene{Gate: GateSignIn, Login: &SignIn{Step: SignInEmailCode, Email: "you@example.com", ResendIn: 24}}
+	img := drawn(t, image.Pt(1440, 900), 1, func(gtx C) D { return th.Gate(gtx, s) })
+	// 64 + 1 + 32, then the header's 28 + 4 + 20 + 8 + 24 and 32.
+	boxes := 64 + 33 + 84 + 32
+	box := over(P.Secondary, P.Background)
+	wantPixel(t, img, image.Pt(583, boxes+20), box, "first box")
+	if !inked(img, image.Rect(592, boxes+9, 608, boxes+31), box) {
+		t.Error("no digit in the first box")
+	}
+	if inked(img, image.Rect(780, boxes+9, 804, boxes+31), box) {
+		t.Error("a digit in the fifth box, with four typed")
+	}
+	if inked(img, image.Rect(380, boxes, 500, boxes+40), P.Background) {
+		t.Error("digits outside the card")
+	}
+	resend := boxes + 40 + 16
+	if inked(img, image.Rect(562, resend, 590, resend+18), P.Background) || !inked(img, image.Rect(700, resend+2, 740, resend+16), P.Background) {
+		t.Error("the resend line isn't centred")
 	}
 }

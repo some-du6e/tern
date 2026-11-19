@@ -260,7 +260,9 @@ func (th *Theme) otpField(gtx C, id string, n int, disabled bool, bg color.NRGBA
 		fill(gtx, fg, r, rad)
 		if i < len(code) {
 			m := op.Record(gtx.Ops)
-			d := th.Text(gtx, Txt{Size: 16, LineH: 24.0 / 16, Font: UI(font.Medium), Color: P.ContrastForeground, MaxLines: 1}, string(code[i]))
+			dg := gtx
+			dg.Constraints.Min = image.Point{}
+			d := th.Text(dg, Txt{Size: 16, LineH: 24.0 / 16, Font: UI(font.Medium), Color: P.ContrastForeground, MaxLines: 1}, string(code[i]))
 			call := m.Stop()
 			off := op.Offset(image.Pt(r.Min.X+(box-d.Size.X)/2, (box-d.Size.Y)/2)).Push(gtx.Ops)
 			call.Add(gtx.Ops)
@@ -273,14 +275,14 @@ func (th *Theme) otpField(gtx C, id string, n int, disabled bool, bg color.NRGBA
 	return D{Size: image.Pt(w, box)}
 }
 
-// clerkResend is "Didn't receive a code? Resend", muted with the seconds
-// left while it waits, then in colorPrimary ("signin.resend").
+// clerkResend is "Didn't receive a code? Resend", centred, muted with the
+// seconds left while it waits, then in colorPrimary ("signin.resend").
 func (th *Theme) clerkResend(left int) W {
 	return func(gtx C) D {
-		gtx.Constraints.Min.X = gtx.Constraints.Max.X
 		label := "Didn't receive a code? Resend"
 		if left > 0 {
-			return layout.N.Layout(gtx, func(gtx C) D {
+			gtx.Constraints.Min.X = gtx.Constraints.Max.X
+			return layout.Center.Layout(gtx, func(gtx C) D {
 				return th.cssText(gtx, Txt{Size: 13, LineH: 18.0 / 13, Color: P.MutedForeground, MaxLines: 1}, label+" ("+strconv.Itoa(left)+")")
 			})
 		}
@@ -293,7 +295,7 @@ func (th *Theme) clerkResend(left int) W {
 func (th *Theme) clerkLink(id, label string) W {
 	return func(gtx C) D {
 		gtx.Constraints.Min.X = gtx.Constraints.Max.X
-		return layout.N.Layout(gtx, func(gtx C) D {
+		return layout.Center.Layout(gtx, func(gtx C) D {
 			c, _ := th.events(gtx, id)
 			td := th.cssText(gtx, Txt{Size: 13, LineH: 18.0 / 13, Font: UI(font.Medium), Color: P.UpdateForeground, MaxLines: 1}, label)
 			if c.Hovered() {
@@ -329,11 +331,13 @@ func (th *Theme) clerkPrimary(sending bool, bg color.NRGBA) W {
 		fill(gtx, fillCol, r, rad)
 		var content D
 		m := op.Record(gtx.Ops)
+		cg := gtx
+		cg.Constraints.Min = image.Point{}
 		if sending {
-			content = T3Spinner(P.PrimaryForeground, 16, float64(gtx.Now.UnixMilli()%60000)/1000)(gtx)
+			content = T3Spinner(P.PrimaryForeground, 16, float64(gtx.Now.UnixMilli()%60000)/1000)(cg)
 			gtx.Execute(op.InvalidateCmd{At: gtx.Now.Add(33 * time.Millisecond)})
 		} else {
-			content = th.Text(gtx, Txt{Size: 13, LineH: 18.0 / 13, Font: UI(font.Medium), Color: P.PrimaryForeground, MaxLines: 1}, "Continue")
+			content = th.Text(cg, Txt{Size: 13, LineH: 18.0 / 13, Font: UI(font.Medium), Color: P.PrimaryForeground, MaxLines: 1}, "Continue")
 		}
 		call := m.Stop()
 		off := op.Offset(image.Pt((w-content.Size.X)/2, (h-content.Size.Y)/2)).Push(gtx.Ops)
